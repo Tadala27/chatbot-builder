@@ -1,0 +1,285 @@
+html {
+  .bg-success,
+  .bg-info,
+  .bg-darkinfo,
+  .bg-warning {
+    color: white !important;
+  }
+}
+
+.pc-icon {
+  width: 22px;
+  height: 22px;
+  vertical-align: middle;
+}
+
+.v-row + .v-row {
+  margin-top: 0px;
+}
+
+.v-divider {
+  opacity: 1;
+  border-color: rgb(var(--v-theme-borderLight));
+}
+
+.v-table > .v-table__wrapper > table > thead > tr > th {
+  color: inherit;
+}
+
+.link-hover {
+  text-decoration: unset;
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.v-selection-control {
+  flex: unset;
+}
+
+.switchRight {
+  .v-input__control {
+    justify-content: flex-end;
+  }
+}
+
+.no-spacer {
+  .v-list-item__spacer {
+    display: none !important;
+  }
+}
+
+.payment-method {
+  --v-border-opacity: 1;
+}
+
+.price-radio-btns {
+  .v-selection-control label.v-label {
+    flex: 1;
+  }
+}
+
+header {
+  &.v-toolbar--border {
+    border-color: rgb(var(--v-theme-borderLight));
+  }
+}
+
+.v-toolbar {
+  &.v-app-bar {
+    background-color: rgba(var(--v-theme-containerBg), 0.8);
+    backdrop-filter: blur(8px);
+  }
+}
+
+.v-sheet--border {
+  border: 1px solid rgba(var(--v-theme-borderLight), 0.8);
+}
+
+.bg-transparent {
+  background-color: transparent;
+}
+
+.timeline-icon-circle {
+  &.custom-timeline {
+    .v-timeline-divider__inner-dot {
+      border-radius: 100%;
+    }
+  }
+}
+
+// table css
+.bordered-table {
+  .v-table__wrapper {
+    > table {
+      > thead {
+        > tr {
+          > th {
+            border-bottom: 1px solid rgb(var(--v-theme-borderLight));
+          }
+        }
+      }
+      > tbody {
+        > tr {
+          &:not(:last-child) {
+            > td {
+              border-bottom: 1px solid rgb(var(--v-theme-borderLight));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+.v-table--fixed-header {
+  &.bordered-table {
+    .v-table__wrapper {
+      > table {
+        > thead {
+          > tr {
+            > th {
+              border-bottom: 1px solid rgb(var(--v-theme-borderLight)) !important;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+.v-table {
+  &.v-table--hover {
+    > .v-table__wrapper {
+      > table {
+        > tbody {
+          > tr {
+            &:hover {
+              td {
+                background: rgb(var(--v-theme-containerBg));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// accordion page css
+.v-expansion-panel {
+  border: 1px solid rgb(var(--v-theme-borderLight));
+  &:not(:first-child) {
+    margin-top: -1px;
+  }
+  .v-expansion-panel-text__wrapper {
+    border-top: 1px solid rgb(var(--v-theme-borderLight));
+    padding: 16px 24px;
+  }
+  &.v-expansion-panel--active {
+    .v-expansion-panel-title--active {
+      .v-expansion-panel-title__overlay {
+        background-color: rgb(var(--v-theme-containerBg));
+      }
+    }
+  }
+}
+.v-expansion-panel--active {
+  > .v-expansion-panel-title {
+    min-height: unset;
+  }
+}
+.v-expansion-panel--disabled .v-expansion-panel-title {
+  color: rgba(var(--v-theme-on-surface), 0.15);
+}
+
+// tooltip css
+.v-tooltip {
+  > .v-overlay__content.smallTooltip {
+    padding: 2px 10px;
+  }
+}
+
+// apexchart css
+.apexcharts-canvas {
+  .apexcharts-tooltip-rangebar {
+    padding: 0px 8px 5px;
+  }
+  .apexcharts-tooltip-title {
+    margin-bottom: 0;
+  }
+  .apexcharts-tooltip-series-group {
+    &.apexcharts-active,
+    &:last-child {
+      padding-bottom: 0;
+    }
+  }
+  .apexcharts-menu {
+    .apexcharts-menu-item {
+      &:hover {
+        background: rgb(var(--v-theme-gray100));
+      }
+    }
+  }
+}
+
+// contrast
+.contrast {
+  .v-card.v-card--variant-outlined {
+    box-shadow: var(--v-card-shadow) !important;
+  }
+  .customizer-btn {
+    box-shadow: var(--v-card-shadow);
+  }
+}
+
+.contrast:not(.v-theme--dark) {
+  .page-wrapper,
+  .leftSidebar {
+    --v-theme-containerBg: var(--v-theme-surface);
+  }
+  .v-toolbar.v-app-bar {
+    --v-theme-containerBg: var(--v-theme-surface);
+  }
+  .v-sheet.bg-containerBg {
+    --v-theme-containerBg: var(--v-theme-surface);
+    box-shadow: var(--v-card-shadow);
+  }
+  .v-tab {
+    .v-card.v-card--variant-outlined {
+      box-shadow: none !important;
+    }
+  }
+}
+
+// snackbar css
+.v-snackbar__wrapper {
+  &.v-snackbar--variant-tonal {
+    background: rgb(var(--v-theme-surface));
+  }
+}
+
+// scrollbar css
+@supports (-webkit-appearance: none) {
+  .custom-scroll::-webkit-scrollbar-track {
+    background: transparent; /* track color */
+  }
+
+  /* target the scrollbar track (background) */
+  .custom-scroll::-webkit-scrollbar {
+    width: 6px; /* Adjust for desired thinness */
+    background: transparent;
+  }
+
+  /* target the scrollbar thumb for light mode */
+  .custom-scroll::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+  }
+
+  .custom-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.4);
+  }
+
+  /* target the scrollbar thumb for dark mode */
+  [data-theme-mode="dark"] .custom-scroll::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+  /* target the hover state of the thumb in dark mode */
+  [data-theme-mode="dark"] .custom-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.35);
+  }
+
+  /* remove buttons */
+  .custom-scroll::-webkit-scrollbar-button {
+    display: none;
+  }
+}
+
+@supports (-moz-appearance: none) {
+  /* firefox specific styles */
+
+  /* adjust scrollbar width */
+  .custom-scroll {
+    scrollbar-width: thin; /* "auto" or "thin" for Firefox */
+  }
+}

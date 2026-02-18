@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "isolatedModules": true,
+    "strict": true,
+    "jsx": "preserve",
+    "jsxFactory": "h",
+    "jsxFragmentFactory": "Fragment",
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "lib": ["esnext", "dom", "dom.iterable", "scripthost"],
+    "skipLibCheck": true,
+    "types": ["vite/client", "vite-plugin-vue-layouts/client"],
+    "paths": {
+      "@/*": ["resources/ts/*"],
+      "@layouts/*": ["resources/ts/@layouts/*"],
+      "@config": ["./config.ts"],
+      "@images/*": ["resources/images/*"],
+      "@styles/*": ["resources/styles/*"],
+      "@core/*": ["resources/ts/@core/*"],
+    }
+  },
+  "include": [
+    "vite.config.*",
+    "auto-imports.d.ts",
+    "./typed-router.d.ts",
+    "env.d.ts",
+    "shims.d.ts",
+    "resources/ts/**/*",
+    "resources/ts/**/*.vue",
+    "components.d.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}
