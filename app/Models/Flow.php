@@ -177,7 +177,15 @@ class Flow extends Model
     {
         return $this->conversations()->where('status', 'active')->count();
     }
+    public function getCompletedConversations(): int
+    {
+        return $this->conversations()->where('status', 'completed')->count();
+    }
 
+    public function getAbandonedConversations(): int
+    {
+        return $this->conversations()->where('status', 'abandoned')->count();
+    }
     public function getCompletionRate(): float
     {
         $total = $this->conversations()->count();

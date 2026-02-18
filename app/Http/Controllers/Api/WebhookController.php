@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Services\WhatsAppWebhookService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 
 class WebhookController extends Controller
 {
@@ -21,10 +22,11 @@ class WebhookController extends Controller
      */
     public function verifyWhatsApp(Request $request)
     {
+        Log::debug($request);
         $params = [
-            'hub_mode' => $request->query('hub.mode'),
-            'hub_verify_token' => $request->query('hub.verify_token'),
-            'hub_challenge' => $request->query('hub.challenge'),
+            'hub_mode' => $request->query('hub_mode'),
+            'hub_verify_token' => $request->query('hub_verify_token'),
+            'hub_challenge' => $request->query('hub_challenge'),
         ];
 
         $result = $this->webhookService->verifyWebhook($params);

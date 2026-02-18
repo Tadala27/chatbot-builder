@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\AnalyticsEvent;
 use App\Models\Conversation;
-use App\Models\ConversationContext;
 use App\Models\FlowNode;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
@@ -31,32 +30,50 @@ class ChatbotFlowExecutor
     public function processMessage(Conversation $conversation, Message $message): void
     {
         $flow = $conversation->flow;
+        $version = $conversation->flowVersion; // ✅ NOW USING VERSION
 
-        if (!$flow || $flow->status !== 'published') {
-            Log::warning('Chatbot not available');
+        if (!$flow || $flow->status !== 'published' || !$version) {
+            Log::warning('Flow not available', [
+                'flow_id' => $flow?->id,
+                'flow_status' => $flow?->status,
+                'version_id' => $version?->id,
+            ]);
             return;
         }
 
         try {
-            $context = $this->getOrCreateContext($conversation);
-            $currentNode = $this->getCurrentNode($flow, $context);
+            // Get or create conversation variables
+            $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
+            // Get current node from conversation or start from entry point
+            $currentNode = $this->getCurrentNode($version, $conversation);
 
             if (!$currentNode) {
-                $currentNode = $this->getStartNode($flow);
-                if (!$currentNode) return;
+                $currentNode = $this->getStartNode($version);
+                if (!$currentNode) {
+                    Log::warning('No start node found', ['version_id' => $version->id]);
+                    return;
+                }
             }
 
-            if ($message->direction === 'inbound' && $currentNode->node_type === 'question') {
-                $this->processUserInput($context, $currentNode, $message);
+            // Process user input if this is an input node
+            if ($message->direction === 'inbound' && $currentNode->requiresUserInput()) {
+                $this->processUserInput($conversation, $currentNode, $message);
             }
 
-            $nextNode = $this->getNextNode($flow, $currentNode, $context);
+            // Execute next node
+            $nextNode = $this->getNextNode($version, $currentNode, $variables);
             if ($nextNode) {
-                $this->executeNode($conversation, $context, $nextNode);
+                $this->executeNode($conversation, $nextNode);
             }
         } catch (\Exception $e) {
-            Log::error('Flow execution error', ['error' => $e->getMessage()]);
-            if ($chatbflowot->fallback_message) {
+            Log::error('Flow execution error', [
+                'conversation_id' => $conversation->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            if ($flow->fallback_message) {
                 $this->messageService->sendTextMessage(
                     $conversation->whatsappAccount,
                     $conversation->whatsapp_user_phone,
@@ -66,244 +83,507 @@ class ChatbotFlowExecutor
         }
     }
 
-    private function executeNode(Conversation $conversation, ConversationContext $context, FlowNode $node): void
+    /**
+     * Execute a flow node
+     */
+    public function executeNode(Conversation $conversation, FlowNode $node): void
     {
+        $startTime = microtime(true);
+
+        // Log node entry
+        \App\Models\FlowExecutionLog::logNodeEnter($conversation, $node);
+        $node->incrementEntered();
         $this->logAnalytics($conversation, $node, 'node_entered');
 
         try {
-            match ($node->node_type) {
-                'message' => $this->executeMessageNode($conversation->whatsappAccount, $conversation, $context, $node),
-                'question' => $this->executeQuestionNode($conversation->whatsappAccount, $conversation, $context, $node),
-                'condition' => $this->executeConditionNode($conversation, $context, $node),
-                'function' => $this->executeFunctionNode($conversation, $context, $node),
-                'api_call' => $this->executeApiCallNode($conversation, $context, $node),
-                'variable_set' => $this->executeVariableSetNode($context, $node),
-                'delay' => $this->executeDelayNode($conversation, $context, $node),
-                'handoff' => $this->executeHandoffNode($conversation, $context, $node),
-                'webhook' => $this->executeWebhookNode($conversation, $context, $node),
-                'end' => $this->executeEndNode($conversation, $context, $node),
-                default => null,
+            // Execute on_enter actions
+            $this->executeActions($conversation, $node, 'on_enter');
+
+            // Execute node based on type
+            $result = match ($node->type) {
+                'trigger' => $this->executeTriggerNode($conversation, $node),
+                'message' => $this->executeMessageNode($conversation, $node),
+                'input' => $this->executeInputNode($conversation, $node),
+                'buttons' => $this->executeButtonsNode($conversation, $node),
+                'list' => $this->executeListNode($conversation, $node),
+                'condition' => $this->executeConditionNode($conversation, $node),
+                'function' => $this->executeFunctionNode($conversation, $node),
+                'api_call' => $this->executeApiCallNode($conversation, $node),
+                'delay' => $this->executeDelayNode($conversation, $node),
+                'webhook' => $this->executeWebhookNode($conversation, $node),
+                'handoff' => $this->executeHandoffNode($conversation, $node),
+                'end' => $this->executeEndNode($conversation, $node),
+                default => ['success' => true, 'stop' => false],
             };
 
-            if (in_array($node->node_type, ['delay', 'handoff', 'end'])) return;
+            // Stop execution if needed (delay, handoff, end, or waiting for input)
+            if ($result['stop'] ?? false) {
+                return;
+            }
 
-            $context->update(['last_node_id' => $node->node_id]);
+            // Execute on_success actions
+            $this->executeActions($conversation, $node, 'on_success');
+
+            // Mark as completed
+            $node->incrementCompleted();
             $this->logAnalytics($conversation, $node, 'node_completed');
 
-            if (!in_array($node->node_type, ['question'])) {
-                $nextNode = $this->getNextNode($conversation->flow, $node, $context);
-                if ($nextNode) $this->executeNode($conversation, $context, $nextNode);
+            // Log execution time
+            $executionTime = (int)((microtime(true) - $startTime) * 1000);
+            \App\Models\FlowExecutionLog::logNodeExit($conversation, $node, true, null, $executionTime);
+
+            // Continue to next node
+            $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+            $nextNode = $this->getNextNode($conversation->flowVersion, $node, $variables);
+
+            if ($nextNode) {
+                $this->executeNode($conversation, $nextNode);
             }
         } catch (\Exception $e) {
+            $node->incrementFailed();
             $this->logAnalytics($conversation, $node, 'error_occurred', ['error' => $e->getMessage()]);
+
+            $executionTime = (int)((microtime(true) - $startTime) * 1000);
+            \App\Models\FlowExecutionLog::logNodeExit($conversation, $node, false, $e->getMessage(), $executionTime);
+
+            // Execute on_failure actions
+            $this->executeActions($conversation, $node, 'on_failure');
+
             throw $e;
         }
     }
 
-    private function executeMessageNode($account, $conversation, $context, $node): void
+    /**
+     * Execute node actions for a specific trigger event
+     */
+    private function executeActions(Conversation $conversation, FlowNode $node, string $triggerEvent): void
     {
-        $config = $node->config;
-        $text = $this->variableResolver->resolve($config['content'] ?? '', $context->variables);
+        $actions = $node->actions()
+            ->where('trigger_event', $triggerEvent)
+            ->orderBy('execution_order')
+            ->get();
 
-        match ($config['message_type'] ?? 'text') {
-            'text' => $this->messageService->sendTextMessage($account, $conversation->whatsapp_user_phone, $text),
-            'image', 'video', 'audio', 'document' => $this->messageService->sendMediaMessage(
-                $account,
-                $conversation->whatsapp_user_phone,
-                $config['message_type'],
-                $this->variableResolver->resolve($config['media_url'] ?? '', $context->variables),
-                $text
-            ),
-            default => null,
-        };
-    }
+        foreach ($actions as $action) {
+            try {
+                $this->executeAction($conversation, $node, $action);
+            } catch (\Exception $e) {
+                Log::error('Action execution failed', [
+                    'action_id' => $action->id,
+                    'action_type' => $action->action_type,
+                    'error' => $e->getMessage(),
+                ]);
 
-    private function executeQuestionNode($account, $conversation, $context, $node): void
-    {
-        $config = $node->config;
-        $text = $this->variableResolver->resolve($config['question_text'] ?? '', $context->variables);
-
-        match ($config['input_type'] ?? 'text') {
-            'text' => $this->messageService->sendTextMessage($account, $conversation->whatsapp_user_phone, $text),
-            'buttons' => $this->messageService->sendButtonMessage($account, $conversation->whatsapp_user_phone, $text, $config['options'] ?? []),
-            'list' => $this->messageService->sendListMessage($account, $conversation->whatsapp_user_phone, $text, 'Select', $config['options'] ?? []),
-            default => null,
-        };
-    }
-
-    private function executeConditionNode($conversation, $context, $node): void
-    {
-        $config = $node->config;
-        $result = $this->evaluateCondition($config['conditions'] ?? [], $context->variables, $config['operator'] ?? 'AND');
-        $this->logAnalytics($conversation, $node, 'condition_evaluated', ['result' => $result]);
-        $context->setVariable('_last_condition_result', $result);
-    }
-
-    private function executeFunctionNode($conversation, $context, $node): void
-    {
-        try {
-            $config = $node->config;
-            $params = array_map(fn($v) => $this->variableResolver->resolveValue($v, $context->variables), $config['parameters'] ?? []);
-            $result = $this->functionExecutor->execute($config['function_id'], $params);
-            if ($config['output_variable'] ?? null) $context->setVariable($config['output_variable'], $result);
-            $this->logAnalytics($conversation, $node, 'function_executed', ['success' => true]);
-        } catch (\Exception $e) {
-            Log::error('Function failed', ['error' => $e->getMessage()]);
-            if (($config['error_handling'] ?? 'continue') === 'stop') throw $e;
+                if (!$action->continue_on_failure) {
+                    throw $e;
+                }
+            }
         }
     }
 
-    private function executeApiCallNode($conversation, $context, $node): void
+    /**
+     * Execute a single action
+     */
+    private function executeAction(Conversation $conversation, FlowNode $node, $action): void
     {
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+        $config = $action->config;
+
+        $startTime = microtime(true);
+
+        match ($action->action_type) {
+            'save_variable' => $this->executeSaveVariableAction($conversation, $config, $variables),
+            'update_variable' => $this->executeSaveVariableAction($conversation, $config, $variables),
+            'delete_variable' => $this->executeDeleteVariableAction($conversation, $config),
+            'api_call' => $this->executeApiCallAction($conversation, $config, $variables),
+            'execute_function' => $this->executeFunctionAction($conversation, $config, $variables),
+            'delay' => $this->executeDelayAction($conversation, $node, $config),
+            'webhook_call' => $this->executeWebhookAction($conversation, $config, $variables),
+            'emit_event' => null, // Navigation events are handled via edges
+            default => null,
+        };
+
+        $executionTime = (int)((microtime(true) - $startTime) * 1000);
+        \App\Models\FlowExecutionLog::logActionExecution($conversation, $node, $action->action_type, true, null, $executionTime);
+    }
+
+    // ─── Node Type Executors ──────────────────────────────────────────────────
+
+    private function executeTriggerNode(Conversation $conversation, FlowNode $node): array
+    {
+        // Trigger nodes just pass through - matching happens elsewhere
+        return ['success' => true, 'stop' => false];
+    }
+
+    private function executeMessageNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+        $text = $this->variableResolver->resolve($config['text'] ?? '', $variables);
+
+        $this->messageService->sendTextMessage(
+            $conversation->whatsappAccount,
+            $conversation->whatsapp_user_phone,
+            $text
+        );
+
+        return ['success' => true, 'stop' => false];
+    }
+
+    private function executeInputNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+        $text = $this->variableResolver->resolve($config['text'] ?? '', $variables);
+
+        $this->messageService->sendTextMessage(
+            $conversation->whatsappAccount,
+            $conversation->whatsapp_user_phone,
+            $text
+        );
+
+        // Wait for user input - stop execution
+        return ['success' => true, 'stop' => true];
+    }
+
+    private function executeButtonsNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+        $text = $this->variableResolver->resolve($config['btnText'] ?? '', $variables);
+
+        $buttons = array_map(function ($btn) {
+            return [
+                'id' => $btn['id'],
+                'title' => $btn['label'],
+            ];
+        }, $config['buttons'] ?? []);
+
+        $this->messageService->sendButtonMessage(
+            $conversation->whatsappAccount,
+            $conversation->whatsapp_user_phone,
+            $text,
+            $buttons
+        );
+
+        // Wait for user selection - stop execution
+        return ['success' => true, 'stop' => true];
+    }
+
+    private function executeListNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
+        $header = $this->variableResolver->resolve($config['listHeader'] ?? '', $variables);
+        $body = $this->variableResolver->resolve($config['listBody'] ?? '', $variables);
+
+        $sections = $config['sections'] ?? [];
+
+        $this->messageService->sendListMessage(
+            $conversation->whatsappAccount,
+            $conversation->whatsapp_user_phone,
+            $header,
+            $body,
+            $sections
+        );
+
+        // Wait for user selection - stop execution
+        return ['success' => true, 'stop' => true];
+    }
+
+    private function executeConditionNode(Conversation $conversation, FlowNode $node): array
+    {
+        // Conditions are evaluated in getNextNode() via edges
+        return ['success' => true, 'stop' => false];
+    }
+
+    private function executeFunctionNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
         try {
-            $config = $node->config;
-            $integration = \App\Models\ApiIntegration::find($config['integration_id'] ?? null);
-            if (!$integration) throw new \Exception('Integration not found');
+            $params = array_map(
+                fn($v) => $this->variableResolver->resolveValue($v, $variables),
+                json_decode($config['paramsRaw'] ?? '{}', true)
+            );
 
-            $client = new \GuzzleHttp\Client(['timeout' => $integration->timeout_seconds]);
+            $result = $this->functionExecutor->execute($config['fnId'], $params);
+
+            if ($config['resultVar'] ?? null) {
+                $this->saveVariable($conversation, $config['resultVar'], $result);
+            }
+
+            $this->logAnalytics($conversation, $node, 'function_executed', ['success' => true]);
+
+            return ['success' => true, 'stop' => false];
+        } catch (\Exception $e) {
+            Log::error('Function execution failed', ['error' => $e->getMessage()]);
+            $this->logAnalytics($conversation, $node, 'function_executed', ['success' => false, 'error' => $e->getMessage()]);
+            throw $e;
+        }
+    }
+
+    private function executeApiCallNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
+        try {
+            $client = new \GuzzleHttp\Client(['timeout' => 30]);
             $method = $config['method'] ?? 'GET';
-            $url = $integration->buildUrl($this->variableResolver->resolve($config['endpoint'] ?? '', $context->variables));
-            $body = $this->variableResolver->resolveArray($config['body'] ?? [], $context->variables);
+            $url = $this->variableResolver->resolve($config['endpoint'] ?? '', $variables);
 
-            $options = ['headers' => array_merge($integration->headers ?? [], $integration->getAuthHeaders())];
-            if (in_array($method, ['POST', 'PUT', 'PATCH'])) $options['json'] = $body;
-            else $options['query'] = $body;
+            $options = [];
+            if (in_array($method, ['POST', 'PUT', 'PATCH']) && !empty($config['bodyRaw'])) {
+                $options['json'] = json_decode($this->variableResolver->resolve($config['bodyRaw'], $variables), true);
+            }
 
             $response = $client->request($method, $url, $options);
             $data = json_decode($response->getBody()->getContents(), true);
 
-            if ($config['response_variable'] ?? null) $context->setVariable($config['response_variable'], $data);
+            if ($config['apiResultVar'] ?? null) {
+                $this->saveVariable($conversation, $config['apiResultVar'], $data);
+            }
+
             $this->logAnalytics($conversation, $node, 'api_called', ['success' => true]);
+
+            return ['success' => true, 'stop' => false];
         } catch (\Exception $e) {
             Log::error('API call failed', ['error' => $e->getMessage()]);
-            if (($config['error_handling'] ?? 'continue') === 'stop') throw $e;
+            $this->logAnalytics($conversation, $node, 'api_called', ['success' => false, 'error' => $e->getMessage()]);
+            throw $e;
         }
     }
 
-    private function executeVariableSetNode($context, $node): void
+    private function executeDelayNode(Conversation $conversation, FlowNode $node): array
     {
         $config = $node->config;
-        $value = $this->variableResolver->resolve($config['value'] ?? '', $context->variables);
-        $value = $this->castValue($value, $config['data_type'] ?? 'string');
-        $context->setVariable($config['variable_name'] ?? '', $value);
-    }
+        $seconds = $config['seconds'] ?? 3;
 
-    private function executeDelayNode($conversation, $context, $node): void
-    {
-        $config = $node->config;
-        $nextNode = $this->getNextNode($conversation->flow, $node, $context);
+        // Get next node
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+        $nextNode = $this->getNextNode($conversation->flowVersion, $node, $variables);
+
         if ($nextNode) {
-            \App\Jobs\ContinueChatbotFlow::dispatch($conversation, $context, $nextNode)
-                ->delay(now()->addSeconds($config['duration_seconds'] ?? 1));
+            \App\Jobs\ContinueChatbotFlow::dispatch($conversation, $nextNode)
+                ->delay(now()->addSeconds($seconds));
         }
+
+        // Stop execution - will resume after delay
+        return ['success' => true, 'stop' => true];
     }
 
-    private function executeHandoffNode($conversation, $context, $node): void
+    private function executeHandoffNode(Conversation $conversation, FlowNode $node): array
     {
         $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
         $conversation->update(['status' => 'handed_off']);
-        $this->messageService->sendTextMessage(
-            $conversation->whatsappAccount,
-            $conversation->whatsapp_user_phone,
-            $this->variableResolver->resolve($config['message'] ?? 'Transferring...', $context->variables)
-        );
-        $this->logAnalytics($conversation, $node, 'handoff_initiated');
-    }
 
-    private function executeWebhookNode($conversation, $context, $node): void
-    {
-        try {
-            $config = $node->config;
-            $client = new \GuzzleHttp\Client(['timeout' => 30]);
-            $client->request($config['method'] ?? 'POST', $this->variableResolver->resolve($config['url'] ?? '', $context->variables), [
-                'json' => array_merge($this->variableResolver->resolveArray($config['body'] ?? [], $context->variables), [
-                    'conversation_id' => $conversation->id,
-                    'variables' => $context->variables,
-                ]),
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Webhook failed', ['error' => $e->getMessage()]);
-        }
-    }
-
-    private function executeEndNode($conversation, $context, $node): void
-    {
-        $config = $node->config;
-        if ($config['message'] ?? null) {
+        if (!empty($config['text'])) {
+            $message = $this->variableResolver->resolve($config['text'], $variables);
             $this->messageService->sendTextMessage(
                 $conversation->whatsappAccount,
                 $conversation->whatsapp_user_phone,
-                $this->variableResolver->resolve($config['message'], $context->variables)
+                $message
             );
         }
-        $conversation->complete();
-        $this->logAnalytics($conversation, $node, 'conversation_completed');
+
+        $this->logAnalytics($conversation, $node, 'handoff_initiated');
+
+        // Stop execution - agent will handle from here
+        return ['success' => true, 'stop' => true];
     }
 
-    private function processUserInput($context, $node, $message): void
+    private function executeWebhookNode(Conversation $conversation, FlowNode $node): array
     {
         $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
+        try {
+            $client = new \GuzzleHttp\Client(['timeout' => 30]);
+            $url = $this->variableResolver->resolve($config['url'] ?? '', $variables);
+
+            $body = array_merge(
+                json_decode($this->variableResolver->resolve($config['bodyRaw'] ?? '{}', $variables), true),
+                [
+                    'conversation_id' => $conversation->id,
+                    'variables' => $variables,
+                ]
+            );
+
+            $client->request($config['method'] ?? 'POST', $url, ['json' => $body]);
+
+            return ['success' => true, 'stop' => false];
+        } catch (\Exception $e) {
+            Log::error('Webhook failed', ['error' => $e->getMessage()]);
+            throw $e;
+        }
+    }
+
+    private function executeEndNode(Conversation $conversation, FlowNode $node): array
+    {
+        $config = $node->config;
+        $variables = $conversation->variables()->pluck('value', 'key')->toArray();
+
+        if (!empty($config['text'])) {
+            $message = $this->variableResolver->resolve($config['text'], $variables);
+            $this->messageService->sendTextMessage(
+                $conversation->whatsappAccount,
+                $conversation->whatsapp_user_phone,
+                $message
+            );
+        }
+
+        $conversation->complete();
+        $this->logAnalytics($conversation, $node, 'conversation_completed');
+
+        // Stop execution - conversation is done
+        return ['success' => true, 'stop' => true];
+    }
+
+    // ─── Action Executors ─────────────────────────────────────────────────────
+
+    private function executeSaveVariableAction(Conversation $conversation, array $config, array $variables): void
+    {
+        $key = $config['varName'] ?? null;
+        $value = $this->variableResolver->resolve($config['varValue'] ?? '', $variables);
+
+        if ($key) {
+            $this->saveVariable($conversation, $key, $value);
+        }
+    }
+
+    private function executeDeleteVariableAction(Conversation $conversation, array $config): void
+    {
+        $key = $config['varName'] ?? null;
+        if ($key) {
+            $conversation->variables()->where('key', $key)->delete();
+        }
+    }
+
+    private function executeApiCallAction(Conversation $conversation, array $config, array $variables): void
+    {
+        // Same as executeApiCallNode but for actions
+        $this->executeApiCallNode($conversation, (object)['config' => $config]);
+    }
+
+    private function executeFunctionAction(Conversation $conversation, array $config, array $variables): void
+    {
+        // Same as executeFunctionNode but for actions
+        $this->executeFunctionNode($conversation, (object)['config' => $config]);
+    }
+
+    private function executeDelayAction(Conversation $conversation, FlowNode $node, array $config): void
+    {
+        // Delay actions work same as delay nodes
+        $this->executeDelayNode($conversation, (object)['config' => $config]);
+    }
+
+    private function executeWebhookAction(Conversation $conversation, array $config, array $variables): void
+    {
+        // Same as executeWebhookNode but for actions
+        $this->executeWebhookNode($conversation, (object)['config' => $config]);
+    }
+
+    // ─── Helper Methods ───────────────────────────────────────────────────────
+
+    private function processUserInput(Conversation $conversation, FlowNode $node, Message $message): void
+    {
+        $config = $node->config;
+
         $input = match ($message->message_type) {
             'text' => $message->content['text'] ?? '',
             'interactive' => $message->content['response']['title'] ?? $message->content['response']['id'] ?? '',
             default => null,
         };
 
-        if (!$input) return;
-        if (($config['validation'] ?? null) && !$this->validateInput($input, $config['validation'])) return;
-        if ($config['variable_name'] ?? null) $context->setVariable($config['variable_name'], $input);
-    }
-
-    private function getOrCreateContext($conversation): ConversationContext
-    {
-        $context = $conversation->context ?: ConversationContext::create([
-            'conversation_id' => $conversation->id,
-            'variables' => [],
-            'expires_at' => now()->addHours(24),
-        ]);
-
-        $globalVars = $conversation->tenant->globalVariables()->get()->mapWithKeys(fn($v) => [$v->key => $v->getCastedValue()])->toArray();
-        $botVars = $conversation->flow->variables()->get()->mapWithKeys(fn($v) => [$v->key => $v->getCastedValue()])->toArray();
-        $context->variables = array_merge($globalVars, $botVars, $context->variables ?? []);
-
-        return $context;
-    }
-
-    private function getCurrentNode($flow, $context): ?FlowNode
-    {
-        return $context->last_node_id ? $flow->dialogNodes()->where('node_id', $context->last_node_id)->first() : null;
-    }
-
-    private function getStartNode($flow): ?FlowNode
-    {
-        return $flow->dialogNodes()->where('node_type', 'trigger')->first();
-    }
-
-    private function getNextNode($flow, $currentNode, $context): ?FlowNode
-    {
-        foreach ($currentNode->outgoingEdges()->orderBy('priority', 'desc')->get() as $edge) {
-            if ($edge->hasCondition() && !$edge->evaluateCondition($context->variables)) continue;
-            return $flow->dialogNodes()->where('node_id', $edge->target_node_id)->first();
+        if (!$input) {
+            return;
         }
+
+        // Save input variable if configured
+        if (!empty($config['inputVariable'])) {
+            $this->saveVariable($conversation, $config['inputVariable'], $input);
+        }
+
+        // Save button/list selection variable if configured
+        if ($node->type === 'buttons' && !empty($config['buttons'])) {
+            foreach ($config['buttons'] as $btn) {
+                if (($btn['id'] ?? '') === $input && !empty($btn['saveVariable'])) {
+                    $this->saveVariable($conversation, $btn['saveVariable'], $btn['label']);
+                }
+            }
+        }
+
+        if ($node->type === 'list' && !empty($config['sections'])) {
+            foreach ($config['sections'] as $section) {
+                foreach ($section['rows'] ?? [] as $row) {
+                    if (($row['id'] ?? '') === $input && !empty($row['saveVariable'])) {
+                        $this->saveVariable($conversation, $row['saveVariable'], $row['title']);
+                    }
+                }
+            }
+        }
+    }
+
+    private function saveVariable(Conversation $conversation, string $key, $value): void
+    {
+        $conversation->setVariable($key, $value);
+    }
+
+    private function getCurrentNode($version, Conversation $conversation): ?FlowNode
+    {
+        // Get last message sent by bot
+        $lastMessage = $conversation->messages()
+            ->where('direction', 'outbound')
+            ->whereNotNull('flow_node_id')
+            ->latest()
+            ->first();
+
+        return $lastMessage ? $version->nodes()->find($lastMessage->flow_node_id) : null;
+    }
+
+    private function getStartNode($version): ?FlowNode
+    {
+        return $version->nodes()->where('is_entry_point', true)->first();
+    }
+
+    private function getNextNode($version, FlowNode $currentNode, array $variables): ?FlowNode
+    {
+        // Get edges ordered by priority
+        $edges = $currentNode->outgoingEdges()->orderBy('priority', 'desc')->get();
+
+        foreach ($edges as $edge) {
+            // Check if edge has condition
+            if (!empty($edge->condition)) {
+                if (!$this->evaluateEdgeCondition($edge->condition, $variables)) {
+                    continue;
+                }
+            }
+
+            return $edge->targetNode;
+        }
+
         return null;
     }
 
-    private function evaluateCondition($conditions, $variables, $operator): bool
+    private function evaluateEdgeCondition(array $condition, array $variables): bool
     {
-        if (empty($conditions)) return true;
-        $results = array_map(fn($c) => $this->compareValues(
-            $this->variableResolver->resolveValue($c['left'] ?? '', $variables),
-            $this->variableResolver->resolveValue($c['right'] ?? '', $variables),
-            $c['operator'] ?? '=='
-        ), $conditions);
-        return $operator === 'AND' ? !in_array(false, $results, true) : in_array(true, $results, true);
+        // Simple condition evaluation
+        $left = $this->variableResolver->resolveValue($condition['left'] ?? '', $variables);
+        $right = $this->variableResolver->resolveValue($condition['right'] ?? '', $variables);
+        $operator = $condition['operator'] ?? '==';
+
+        return $this->compareValues($left, $right, $operator);
     }
 
     private function compareValues($left, $right, $op): bool
     {
         return match ($op) {
-            '==' => $left == $right,
-            '!=' => $left != $right,
+            '==', 'equals' => $left == $right,
+            '!=', 'not_equals' => $left != $right,
             '>' => $left > $right,
             '<' => $left < $right,
             '>=' => $left >= $right,
@@ -312,48 +592,19 @@ class ChatbotFlowExecutor
             'starts_with' => is_string($left) && str_starts_with($left, (string)$right),
             'ends_with' => is_string($left) && str_ends_with($left, (string)$right),
             'is_empty' => empty($left),
-            'is_not_empty' => !empty($left),
+            'is_not_empty', 'not_empty' => !empty($left),
             default => false,
         };
     }
 
-    private function validateInput($input, $rules): bool
-    {
-        foreach ($rules as $rule) {
-            $valid = match ($rule['type'] ?? '') {
-                'required' => !empty($input),
-                'email' => filter_var($input, FILTER_VALIDATE_EMAIL) !== false,
-                'phone' => preg_match('/^\+?[1-9]\d{1,14}$/', $input),
-                'number' => is_numeric($input),
-                'min_length' => strlen($input) >= ($rule['value'] ?? 0),
-                'max_length' => strlen($input) <= ($rule['value'] ?? PHP_INT_MAX),
-                default => true,
-            };
-            if (!$valid) return false;
-        }
-        return true;
-    }
-
-    private function castValue($value, $type)
-    {
-        return match ($type) {
-            'string' => (string)$value,
-            'number' => is_numeric($value) ? +$value : 0,
-            'boolean' => filter_var($value, FILTER_VALIDATE_BOOLEAN),
-            'json' => is_string($value) ? json_decode($value, true) : $value,
-            'date' => \Carbon\Carbon::parse($value),
-            default => $value,
-        };
-    }
-
-    private function logAnalytics($conversation, $node, $eventType, $metadata = []): void
+    private function logAnalytics(Conversation $conversation, FlowNode $node, string $eventType, array $metadata = []): void
     {
         AnalyticsEvent::create([
             'tenant_id' => $conversation->tenant_id,
             'flow_id' => $conversation->flow_id,
             'conversation_id' => $conversation->id,
             'event_type' => $eventType,
-            'node_id' => $node->node_id,
+            'node_id' => $node->id, // ✅ NOW USING BIGINT ID
             'metadata' => $metadata,
         ]);
     }

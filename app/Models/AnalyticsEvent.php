@@ -13,7 +13,7 @@ class AnalyticsEvent extends Model
 
     protected $fillable = [
         'tenant_id',
-        'chatbot_id',
+        'flow_id',
         'conversation_id',
         'event_type',
         'node_id',
@@ -37,21 +37,20 @@ class AnalyticsEvent extends Model
         return $this->belongsTo(FlowNode::class, 'node_id');
     }
 
-    // CHANGE: Update relationship names
-    public function flow()  // instead of chatbot
+    public function flow()
     {
         return $this->belongsTo(Flow::class);
     }
-    
+
     public function conversation()
     {
         return $this->belongsTo(Conversation::class);
     }
 
     // Scopes
-    public function scopeForChatbot($query, int $chatbotId)
+    public function scopeForFlow($query, int $flowId)
     {
-        return $query->where('chatbot_id', $chatbotId);
+        return $query->where('flow_id', $flowId);
     }
 
     public function scopeForConversation($query, int $conversationId)

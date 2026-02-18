@@ -72,8 +72,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
             // Publish flow
             Route::post('/publish', [Api\FlowController::class, 'publish']);
-            Route::post('/flows/{flow}/unpublish', [Api\FlowController::class, 'unpublish']);
-            Route::post('/flows/{flow}/duplicate', [Api\FlowController::class, 'duplicate']);
+            Route::post('/unpublish', [Api\FlowController::class, 'unpublish']);
+            Route::post('/duplicate', [Api\FlowController::class, 'duplicate']);
 
             // Get variables
             Route::get('/variables', [Api\FlowController::class, 'getVariables']);

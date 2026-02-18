@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Models\Conversation;
-use App\Models\ConversationContext;
 use App\Models\FlowNode;
 use App\Services\ChatbotFlowExecutor;
 use Illuminate\Bus\Queueable;
@@ -19,15 +18,17 @@ class ContinueChatbotFlow implements ShouldQueue
 
     public $tries = 2;
     public $timeout = 60;
+    public int $tenantId;
 
     /**
      * Create a new job instance.
      */
     public function __construct(
         public Conversation $conversation,
-        public ConversationContext $context,
-        public FlowNode $nextNode
+        public FlowNode $nextNode // ✅ Changed from DialogNode
     ) {
+        // Set the tenant ID for the multitenancy package
+        $this->tenantId = $conversation->tenant_id;
         $this->onQueue('chatbot');
     }
 
@@ -38,8 +39,9 @@ class ContinueChatbotFlow implements ShouldQueue
     {
         try {
             Log::info('Continuing chatbot flow after delay', [
+                'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
-                'next_node_id' => $this->nextNode->node_id,
+                'next_node_id' => $this->nextNode->id,
                 'flow_id' => $this->conversation->flow_id,
             ]);
 
@@ -52,21 +54,19 @@ class ContinueChatbotFlow implements ShouldQueue
                 return;
             }
 
-            // Execute next node using reflection to access private method
-            $reflection = new \ReflectionClass($executor);
-            $method = $reflection->getMethod('executeNode');
-            $method->setAccessible(true);
-            $method->invoke($executor, $this->conversation, $this->context, $this->nextNode);
+            // Execute next node (public method)
+            $executor->executeNode($this->conversation, $this->nextNode);
 
             Log::info('Chatbot flow continued successfully', [
                 'conversation_id' => $this->conversation->id,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to continue chatbot flow', [
+                'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
+                'next_node_id' => $this->nextNode->id,
                 'error' => $e->getMessage(),
             ]);
-
             throw $e;
         }
     }
@@ -77,8 +77,9 @@ class ContinueChatbotFlow implements ShouldQueue
     public function failed(\Throwable $exception): void
     {
         Log::error('Continue flow job failed permanently', [
+            'tenant_id' => $this->tenantId,
             'conversation_id' => $this->conversation->id,
-            'next_node_id' => $this->nextNode->node_id,
+            'next_node_id' => $this->nextNode->id,
             'error' => $exception->getMessage(),
         ]);
     }

@@ -302,6 +302,7 @@ import {
   mdiNavigationVariantOutline,
   mdiXml,
   mdiHumanGreetingProximity,
+  mdiPublish,
 } from "@mdi/js";
 
 export const icons = {
@@ -608,4 +609,5 @@ export const icons = {
   navigationVariant: mdiNavigationVariant,
   navigationVariantOutline: mdiNavigationVariantOutline,
   humanGreetingProximity: mdiHumanGreetingProximity,
+  publish: mdiPublish,
 };

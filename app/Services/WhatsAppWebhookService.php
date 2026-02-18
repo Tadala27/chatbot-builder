@@ -68,7 +68,6 @@ class WhatsAppWebhookService
             }
         }
     }
-
     /**
      * Handle incoming message
      */
@@ -81,7 +80,6 @@ class WhatsAppWebhookService
 
             // Find WhatsApp account
             $account = WhatsappAccount::where('phone_number_id', $metadata['phone_number_id'])->first();
-
             if (!$account) {
                 Log::warning("WhatsApp account not found", [
                     'phone_number_id' => $metadata['phone_number_id'],
@@ -96,8 +94,26 @@ class WhatsAppWebhookService
                 return;
             }
 
-            // Get active chatbot for this account
+            // Get active flow for this account
             $flow = $account->flows()->published()->first();
+            if (!$flow) {
+                Log::warning("No published flow found for account", [
+                    'account_id' => $account->id,
+                    'phone_number' => $account->phone_number,
+                ]);
+                // Optionally send a default message or just return
+                return;
+            }
+
+            // Get the published version
+            $publishedVersion = $flow->currentPublishedVersion;
+            if (!$publishedVersion) {
+                Log::warning("Flow has no published version", [
+                    'flow_id' => $flow->id,
+                    'flow_name' => $flow->name,
+                ]);
+                return;
+            }
 
             // Find or create conversation
             $conversation = Conversation::firstOrCreate(
@@ -106,60 +122,63 @@ class WhatsAppWebhookService
                     'whatsapp_user_phone' => $message['from'],
                 ],
                 [
-                    'tenant_id' => $account->tenant_id,
-                    '_id' => $flow?->id,
-                    'whatsapp_user_name' => $contact['profile']['name'] ?? null,
-                    'status' => 'active',
-                    'started_at' => now(),
-                    'last_message_at' => now(),
+                    'tenant_id'           => $account->tenant_id,
+                    'flow_id'             => $flow->id,
+                    'flow_version_id'     => $publishedVersion->id,
+                    'whatsapp_user_name'  => $contact['profile']['name'] ?? null,
+                    'status'              => 'active',
+                    'started_at'          => now(),
+                    'last_message_at'     => now(),
                 ]
             );
 
-            // If conversation was previously ended, reopen it
+            // If conversation was previously ended, reopen it with current flow
             if (in_array($conversation->status, ['completed', 'abandoned'])) {
                 $conversation->update([
-                    'status' => 'active',
-                    'flow_id' => $flow?->id,
-                    'started_at' => now(),
+                    'status'          => 'active',
+                    'flow_id'         => $flow->id,
+                    'flow_version_id' => $publishedVersion->id,
+                    'started_at'      => now(),
+                    'last_message_at' => now(),
                 ]);
             }
 
-            // Store message
-            $storedMessage = Message::create([
-                'conversation_id' => $conversation->id,
-                'whatsapp_message_id' => $message['id'],
-                'direction' => 'inbound',
-                'message_type' => $message['type'],
-                'content' => $this->extractMessageContent($message),
-                'status' => 'delivered',
-                'sent_at' => now(),
-                'delivered_at' => now(),
-            ]);
+            // Store message (prevent duplicates)
+            $storedMessage = Message::firstOrCreate(
+                ['whatsapp_message_id' => $message['id']],
+                [
+                    'conversation_id'  => $conversation->id,
+                    'direction'        => 'inbound',
+                    'message_type'     => $message['type'],
+                    'content'          => $this->extractMessageContent($message),
+                    'status'           => 'delivered',
+                    'sent_at'          => now(),
+                    'delivered_at'     => now(),
+                ]
+            );
 
-            // Update conversation
-            $conversation->increment('message_count');
-            $conversation->update(['last_message_at' => now()]);
+            // Only process new messages
+            if ($storedMessage->wasRecentlyCreated) {
+                $conversation->increment('message_count');
+                $conversation->update(['last_message_at' => now()]);
 
-            Log::info('Message received', [
-                'conversation_id' => $conversation->id,
-                'message_id' => $storedMessage->id,
-                'from' => $message['from'],
-                'type' => $message['type'],
-            ]);
+                if ($conversation->status === 'active' && $conversation->flow_id) {
 
-            // Process message with chatbot (if conversation is active and has chatbot)
-            if ($conversation->status === 'active' && $conversation->_id) {
-                dispatch(new \App\Jobs\ProcessChatbotMessage($conversation, $storedMessage));
+                    dispatch(new \App\Jobs\ProcessChatbotMessage($conversation, $storedMessage));
+                }
+            } else {
+                Log::info('Duplicate webhook message received – already processed', [
+                    'whatsapp_message_id' => $message['id'],
+                ]);
             }
         } catch (\Exception $e) {
             Log::error('Error handling incoming message', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-                'data' => $data,
+                'data'  => $data,
             ]);
         }
     }
-
     /**
      * Handle message status update
      */

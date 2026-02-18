@@ -142,37 +142,37 @@ const KINDS: Record<
   trigger: {
     label: "Trigger",
     color: "#10b981",
-    icon: "mdi-lightning-bolt-outline",
+    icon: "$lightningBoltOutline",
     desc: "Entry point",
   },
   message: {
     label: "Message",
     color: "#3b82f6",
-    icon: "mdi-message-text",
+    icon: "$messageText",
     desc: "Send a text",
   },
   buttons: {
     label: "Buttons",
     color: "#8b5cf6",
-    icon: "mdi-radiobox-marked",
+    icon: "$radioboxMarked",
     desc: "Quick reply",
   },
   list: {
     label: "List",
     color: "#06b6d4",
-    icon: "mdi-format-list-bulleted",
+    icon: "$formatListBulleted",
     desc: "Scrollable menu",
   },
   media: {
     label: "Media",
     color: "#f59e0b",
-    icon: "mdi-image-outline",
+    icon: "$imageOutline",
     desc: "Image/video",
   },
   end: {
     label: "End",
     color: "#ef4444",
-    icon: "mdi-flag-checkered",
+    icon: "$flagCheckered",
     desc: "Close flow",
   },
 };
@@ -394,7 +394,7 @@ function closeOffCanvas() {
 function openAddMenu(afterIndex: number, event: MouseEvent) {
   event.stopPropagation();
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  
+
   addMenuState.value = {
     show: true,
     afterIndex,
@@ -636,15 +636,13 @@ onMounted(() => {
     <!-- LIGHT MODE APP BAR -->
     <v-app-bar color="white" elevation="1" density="compact">
       <v-btn
-        icon="mdi-arrow-left"
+        icon="$arrowLeft"
         @click="router.push('/flows')"
         size="small"
         class="ml-2"
       />
       <v-toolbar-title>
-        <span class="font-weight-bold">{{
-          flow?.name || "Flow Builder"
-        }}</span>
+        <span class="font-weight-bold">{{ flow?.name || "Flow Builder" }}</span>
         <v-chip
           :color="flow?.status === 'published' ? 'success' : 'default'"
           size="x-small"
@@ -667,7 +665,7 @@ onMounted(() => {
         v-if="flow?.status === 'draft'"
         color="success"
         @click="publish"
-        prepend-icon="mdi-publish"
+        prepend-icon="$publish"
         variant="outlined"
         class="mr-2"
         size="small"
@@ -679,7 +677,7 @@ onMounted(() => {
         color="primary"
         :loading="isSaving"
         @click="save"
-        prepend-icon="mdi-content-save"
+        prepend-icon="$contentSave"
         variant="flat"
         class="mr-2"
       >
@@ -710,7 +708,7 @@ onMounted(() => {
               <v-btn
                 variant="outlined"
                 color="primary"
-                prepend-icon="mdi-plus"
+                prepend-icon="$plus"
                 @click="openAddMenu(-1, $event)"
                 size="small"
               >
@@ -748,7 +746,7 @@ onMounted(() => {
                     variant="flat"
                     class="mr-2"
                   >
-                    <v-icon icon="mdi-play" size="x-small" class="mr-1" />
+                    <v-icon icon="$play" size="x-small" class="mr-1" />
                     START
                   </v-chip>
                   <v-chip
@@ -758,11 +756,7 @@ onMounted(() => {
                     variant="flat"
                     class="mr-2"
                   >
-                    <v-icon
-                      icon="mdi-flag-checkered"
-                      size="x-small"
-                      class="mr-1"
-                    />
+                    <v-icon icon="$flagCheckered" size="x-small" class="mr-1" />
                     END
                   </v-chip>
 
@@ -787,7 +781,7 @@ onMounted(() => {
                   <v-menu>
                     <template v-slot:activator="{ props }">
                       <v-btn
-                        icon="mdi-dots-vertical"
+                        icon="$dotsVertical"
                         size="x-small"
                         variant="text"
                         v-bind="props"
@@ -797,7 +791,7 @@ onMounted(() => {
                     <v-list density="compact">
                       <v-list-item @click="setFirstNode(n.id)">
                         <template #prepend>
-                          <v-icon icon="mdi-play" size="small" />
+                          <v-icon icon="$play" size="small" />
                         </template>
                         <v-list-item-title
                           >Set as Entry Point</v-list-item-title
@@ -805,16 +799,13 @@ onMounted(() => {
                       </v-list-item>
                       <v-list-item @click="setLastNode(n.id)">
                         <template #prepend>
-                          <v-icon icon="mdi-flag-checkered" size="small" />
+                          <v-icon icon="$flagCheckered" size="small" />
                         </template>
                         <v-list-item-title>Set as Exit Point</v-list-item-title>
                       </v-list-item>
                       <v-list-item @click="toggleHandoff(n)">
                         <template #prepend>
-                          <v-icon
-                            icon="mdi-human-greeting-proximity"
-                            size="small"
-                          />
+                          <v-icon icon="$humanGreetingProximity" size="small" />
                         </template>
                         <v-list-item-title>
                           {{ n.triggersHandoff ? "Disable" : "Enable" }} Handoff
@@ -823,7 +814,7 @@ onMounted(() => {
                       <v-divider />
                       <v-list-item @click="deleteNode(n.id)" class="text-error">
                         <template #prepend>
-                          <v-icon icon="mdi-delete" size="small" color="error" />
+                          <v-icon icon="$trashCan" size="small" color="error" />
                         </template>
                         <v-list-item-title>Delete Node</v-list-item-title>
                       </v-list-item>
@@ -832,14 +823,14 @@ onMounted(() => {
 
                   <!-- Move buttons -->
                   <v-btn
-                    icon="mdi-arrow-up"
+                    icon="$arrowUp"
                     size="x-small"
                     variant="text"
                     :disabled="idx === 0"
                     @click.stop="moveNode(idx, -1)"
                   />
                   <v-btn
-                    icon="mdi-arrow-down"
+                    icon="$arrowDown"
                     size="x-small"
                     variant="text"
                     :disabled="idx === nodes.length - 1"
@@ -847,11 +838,7 @@ onMounted(() => {
                   />
 
                   <v-icon
-                    :icon="
-                      expandedNodes[n.id]
-                        ? 'mdi-chevron-up'
-                        : 'mdi-chevron-down'
-                    "
+                    :icon="expandedNodes[n.id] ? '$chevronUp' : '$chevronDown'"
                   />
                 </v-card-title>
 
@@ -902,7 +889,7 @@ onMounted(() => {
                           class="mt-4"
                         >
                           <template #prepend-inner>
-                            <v-icon icon="mdi-variable" size="small" />
+                            <v-icon icon="$variable" size="small" />
                           </template>
                         </v-combobox>
 
@@ -917,20 +904,22 @@ onMounted(() => {
                           persistent-hint
                         >
                           <template #prepend-inner>
-                            <v-icon icon="mdi-navigation-variant" size="small" />
+                            <v-icon icon="$navigationVariant" size="small" />
                           </template>
                         </v-select>
 
                         <!-- Trigger Node Actions -->
                         <v-divider class="my-4" />
-                        <div class="d-flex align-center justify-space-between mb-3">
+                        <div
+                          class="d-flex align-center justify-space-between mb-3"
+                        >
                           <div class="text-subtitle-2 font-weight-bold">
                             Node Actions
                           </div>
                           <v-btn
                             size="x-small"
                             variant="outlined"
-                            prepend-icon="mdi-cog"
+                            prepend-icon="$cog"
                             @click="openActionOffCanvas(n)"
                           >
                             Configure {{ n.actions?.length || 0 }} action{{
@@ -944,7 +933,8 @@ onMounted(() => {
                           variant="tonal"
                           density="compact"
                         >
-                          No actions configured. Actions run when this trigger fires.
+                          No actions configured. Actions run when this trigger
+                          fires.
                         </v-alert>
                       </template>
 
@@ -972,7 +962,7 @@ onMounted(() => {
                           class="mt-3"
                         >
                           <template #prepend-inner>
-                            <v-icon icon="mdi-variable" size="small" />
+                            <v-icon icon="$variable" size="small" />
                           </template>
                         </v-combobox>
 
@@ -987,14 +977,16 @@ onMounted(() => {
 
                         <!-- Message Node Actions -->
                         <v-divider class="my-4" />
-                        <div class="d-flex align-center justify-space-between mb-3">
+                        <div
+                          class="d-flex align-center justify-space-between mb-3"
+                        >
                           <div class="text-subtitle-2 font-weight-bold">
                             Node Actions
                           </div>
                           <v-btn
                             size="x-small"
                             variant="outlined"
-                            prepend-icon="mdi-cog"
+                            prepend-icon="$cog"
                             @click="openActionOffCanvas(n)"
                           >
                             Configure {{ n.actions?.length || 0 }} action{{
@@ -1026,7 +1018,7 @@ onMounted(() => {
                           <v-btn
                             size="x-small"
                             variant="outlined"
-                            prepend-icon="mdi-plus"
+                            prepend-icon="$plus"
                             @click="addBtn(n)"
                             :disabled="(n.buttons?.length || 0) >= 3"
                           >
@@ -1042,9 +1034,9 @@ onMounted(() => {
                         >
                           <v-card-text>
                             <div class="d-flex gap-2 align-center mb-3">
-                              <v-chip size="small" color="primary"
-                                >{{ bIdx + 1 }}</v-chip
-                              >
+                              <v-chip size="small" color="primary">{{
+                                bIdx + 1
+                              }}</v-chip>
                               <v-text-field
                                 v-model="btn.label"
                                 label="Button text"
@@ -1053,7 +1045,7 @@ onMounted(() => {
                                 hide-details
                               />
                               <v-btn
-                                icon="mdi-delete"
+                                icon="$trashCan"
                                 size="x-small"
                                 variant="text"
                                 color="error"
@@ -1073,14 +1065,14 @@ onMounted(() => {
                               class="mb-3"
                             >
                               <template #prepend-inner>
-                                <v-icon icon="mdi-variable" size="small" />
+                                <v-icon icon="$variable" size="small" />
                               </template>
                             </v-combobox>
 
                             <v-btn
                               size="small"
                               variant="outlined"
-                              prepend-icon="mdi-cog"
+                              prepend-icon="$cog"
                               @click="openActionOffCanvas(n, btn)"
                               block
                             >
@@ -1123,7 +1115,7 @@ onMounted(() => {
                           <v-btn
                             size="x-small"
                             variant="outlined"
-                            prepend-icon="mdi-plus"
+                            prepend-icon="$plus"
                             @click="addSection(n)"
                           >
                             Add Section
@@ -1136,7 +1128,9 @@ onMounted(() => {
                           variant="outlined"
                           class="mb-3"
                         >
-                          <v-card-title class="d-flex align-center bg-grey-lighten-5">
+                          <v-card-title
+                            class="d-flex align-center bg-grey-lighten-5"
+                          >
                             <v-chip size="small">{{ sIdx + 1 }}</v-chip>
                             <v-text-field
                               v-model="sec.title"
@@ -1147,7 +1141,7 @@ onMounted(() => {
                               class="ml-2"
                             />
                             <v-btn
-                              icon="mdi-delete"
+                              icon="$trashCan"
                               size="x-small"
                               variant="text"
                               color="error"
@@ -1173,7 +1167,7 @@ onMounted(() => {
                                     hide-details
                                   />
                                   <v-btn
-                                    icon="mdi-delete"
+                                    icon="$trashCan"
                                     size="x-small"
                                     variant="text"
                                     color="error"
@@ -1202,18 +1196,21 @@ onMounted(() => {
                                   class="mb-2"
                                 >
                                   <template #prepend-inner>
-                                    <v-icon icon="mdi-variable" size="small" />
+                                    <v-icon icon="$variable" size="small" />
                                   </template>
                                 </v-combobox>
 
                                 <v-btn
                                   size="small"
                                   variant="outlined"
-                                  prepend-icon="mdi-cog"
-                                  @click="openActionOffCanvas(n, undefined, row)"
+                                  prepend-icon="$cog"
+                                  @click="
+                                    openActionOffCanvas(n, undefined, row)
+                                  "
                                   block
                                 >
-                                  Configure {{ row.actions?.length || 0 }} action{{
+                                  Configure
+                                  {{ row.actions?.length || 0 }} action{{
                                     row.actions?.length !== 1 ? "s" : ""
                                   }}
                                 </v-btn>
@@ -1223,7 +1220,7 @@ onMounted(() => {
                             <v-btn
                               size="small"
                               variant="text"
-                              prepend-icon="mdi-plus"
+                              prepend-icon="$plus"
                               @click="addRow(sec)"
                               block
                             >
@@ -1288,7 +1285,12 @@ onMounted(() => {
                           rows="2"
                         />
 
-                        <v-alert type="success" variant="tonal" density="compact" class="mt-4">
+                        <v-alert
+                          type="success"
+                          variant="tonal"
+                          density="compact"
+                          class="mt-4"
+                        >
                           This node ends the conversation flow.
                         </v-alert>
                       </template>
@@ -1296,13 +1298,22 @@ onMounted(() => {
                       <!-- Handoff Settings (for all nodes) -->
                       <template v-if="n.triggersHandoff">
                         <v-divider class="my-4" />
-                        <v-alert type="warning" variant="tonal" density="compact" class="mb-3">
+                        <v-alert
+                          type="warning"
+                          variant="tonal"
+                          density="compact"
+                          class="mb-3"
+                        >
                           <div class="text-subtitle-2 mb-2">
-                            <v-icon icon="mdi-human-greeting-proximity" size="small" />
+                            <v-icon
+                              icon="$humanGreetingProximity"
+                              size="small"
+                            />
                             Agent Handoff Enabled
                           </div>
                           <div class="text-caption">
-                            After this node, conversation will be handed off to an agent.
+                            After this node, conversation will be handed off to
+                            an agent.
                           </div>
                         </v-alert>
                         <v-select
@@ -1326,7 +1337,7 @@ onMounted(() => {
                 <v-btn
                   variant="outlined"
                   size="x-small"
-                  icon="mdi-plus"
+                  icon="$plus"
                   @click="openAddMenu(idx, $event)"
                 />
               </div>
@@ -1344,7 +1355,7 @@ onMounted(() => {
         left: `${addMenuState.x}px`,
         top: `${addMenuState.y}px`,
       }"
-      location="bottom center"
+      location="right"
       :close-on-content-click="false"
     >
       <v-card min-width="260">
@@ -1357,7 +1368,7 @@ onMounted(() => {
             <v-list density="compact">
               <v-list-item
                 @click="spawnNode('trigger', addMenuState.afterIndex)"
-                prepend-icon="mdi-lightning-bolt-outline"
+                prepend-icon="$lightningBoltOutline"
               >
                 <v-list-item-title>Trigger</v-list-item-title>
                 <v-list-item-subtitle
@@ -1366,27 +1377,27 @@ onMounted(() => {
               </v-list-item>
               <v-list-item
                 @click="menuStep = 'message'"
-                prepend-icon="mdi-message-text"
+                prepend-icon="$messageText"
               >
                 <v-list-item-title>Message</v-list-item-title>
                 <v-list-item-subtitle>Text or media</v-list-item-subtitle>
                 <template #append>
-                  <v-icon icon="mdi-chevron-right" size="small" />
+                  <v-icon icon="$chevronRight" size="small" />
                 </template>
               </v-list-item>
               <v-list-item
                 @click="menuStep = 'interactive'"
-                prepend-icon="mdi-radiobox-marked"
+                prepend-icon="$radioboxMarked"
               >
                 <v-list-item-title>Interactive</v-list-item-title>
                 <v-list-item-subtitle>Buttons or lists</v-list-item-subtitle>
                 <template #append>
-                  <v-icon icon="mdi-chevron-right" size="small" />
+                  <v-icon icon="$chevronRight" size="small" />
                 </template>
               </v-list-item>
               <v-list-item
                 @click="spawnNode('end', addMenuState.afterIndex)"
-                prepend-icon="mdi-flag-checkered"
+                prepend-icon="$flagCheckered"
               >
                 <v-list-item-title>End Flow</v-list-item-title>
                 <v-list-item-subtitle>Close conversation</v-list-item-subtitle>
@@ -1399,7 +1410,7 @@ onMounted(() => {
             <v-btn
               size="x-small"
               variant="text"
-              prepend-icon="mdi-arrow-left"
+              prepend-icon="$arrowLeft"
               @click="menuStep = 'root'"
               class="mb-2"
             >
@@ -1411,14 +1422,14 @@ onMounted(() => {
             <v-list density="compact">
               <v-list-item
                 @click="spawnNode('message', addMenuState.afterIndex)"
-                prepend-icon="mdi-message-text"
+                prepend-icon="$messageText"
               >
                 <v-list-item-title>Text</v-list-item-title>
                 <v-list-item-subtitle>Plain text message</v-list-item-subtitle>
               </v-list-item>
               <v-list-item
                 @click="spawnNode('media', addMenuState.afterIndex)"
-                prepend-icon="mdi-image-outline"
+                prepend-icon="$imageOutline"
               >
                 <v-list-item-title>Media</v-list-item-title>
                 <v-list-item-subtitle
@@ -1433,7 +1444,7 @@ onMounted(() => {
             <v-btn
               size="x-small"
               variant="text"
-              prepend-icon="mdi-arrow-left"
+              prepend-icon="$arrowLeft"
               @click="menuStep = 'root'"
               class="mb-2"
             >
@@ -1445,14 +1456,14 @@ onMounted(() => {
             <v-list density="compact">
               <v-list-item
                 @click="spawnNode('buttons', addMenuState.afterIndex)"
-                prepend-icon="mdi-radiobox-marked"
+                prepend-icon="$radioboxMarked"
               >
                 <v-list-item-title>Quick Replies</v-list-item-title>
                 <v-list-item-subtitle>Up to 3 buttons</v-list-item-subtitle>
               </v-list-item>
               <v-list-item
                 @click="spawnNode('list', addMenuState.afterIndex)"
-                prepend-icon="mdi-format-list-bulleted"
+                prepend-icon="$formatListBulleted"
               >
                 <v-list-item-title>List Message</v-list-item-title>
                 <v-list-item-subtitle>Scrollable menu</v-list-item-subtitle>

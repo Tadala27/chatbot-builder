@@ -163,35 +163,69 @@ class FlowNode extends Model
             ->toArray();
     }
 
+    // ─── FIXED: Metric Increment Methods ─────────────────────────────────────
+
     public function incrementEntered(?string $date = null): void
     {
         $date = $date ?? now()->toDateString();
 
-        NodeMetric::updateOrCreate(
-            ['flow_node_id' => $this->id, 'metric_date' => $date],
-            ['entered_count' => DB::raw('entered_count + 1')]
-        );
+        DB::table('node_metrics')
+            ->updateOrInsert(
+                [
+                    'flow_node_id' => $this->id,
+                    'metric_date' => $date
+                ],
+                [
+                    'entered_count' => DB::raw('COALESCE(entered_count, 0) + 1'),
+                    'completed_count' => DB::raw('COALESCE(completed_count, 0)'),
+                    'failed_count' => DB::raw('COALESCE(failed_count, 0)'),
+                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
+                    'updated_at' => now(),
+                ]
+            );
     }
 
     public function incrementCompleted(?string $date = null): void
     {
         $date = $date ?? now()->toDateString();
 
-        NodeMetric::updateOrCreate(
-            ['flow_node_id' => $this->id, 'metric_date' => $date],
-            ['completed_count' => DB::raw('completed_count + 1')]
-        );
+        DB::table('node_metrics')
+            ->updateOrInsert(
+                [
+                    'flow_node_id' => $this->id,
+                    'metric_date' => $date
+                ],
+                [
+                    'entered_count' => DB::raw('COALESCE(entered_count, 0)'),
+                    'completed_count' => DB::raw('COALESCE(completed_count, 0) + 1'),
+                    'failed_count' => DB::raw('COALESCE(failed_count, 0)'),
+                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
+                    'updated_at' => now(),
+                ]
+            );
     }
 
     public function incrementFailed(?string $date = null): void
     {
         $date = $date ?? now()->toDateString();
 
-        NodeMetric::updateOrCreate(
-            ['flow_node_id' => $this->id, 'metric_date' => $date],
-            ['failed_count' => DB::raw('failed_count + 1')]
-        );
+        DB::table('node_metrics')
+            ->updateOrInsert(
+                [
+                    'flow_node_id' => $this->id,
+                    'metric_date' => $date
+                ],
+                [
+                    'entered_count' => DB::raw('COALESCE(entered_count, 0)'),
+                    'completed_count' => DB::raw('COALESCE(completed_count, 0)'),
+                    'failed_count' => DB::raw('COALESCE(failed_count, 0) + 1'),
+                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
+                    'updated_at' => now(),
+                ]
+            );
     }
+
+    // ─── Metric Getters ───────────────────────────────────────────────────────
 
     public function getCompletionRate(): float
     {

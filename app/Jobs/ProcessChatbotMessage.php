@@ -20,6 +20,8 @@ class ProcessChatbotMessage implements ShouldQueue
     public $timeout = 60;
     public $backoff = [10, 30, 60];
 
+    public int $tenantId;
+
     /**
      * Create a new job instance.
      */
@@ -27,6 +29,9 @@ class ProcessChatbotMessage implements ShouldQueue
         public Conversation $conversation,
         public Message $message
     ) {
+        // Set the tenant ID for the multitenancy package
+        $this->tenantId = $conversation->tenant_id;
+
         $this->onQueue('chatbot');
     }
 
@@ -37,20 +42,23 @@ class ProcessChatbotMessage implements ShouldQueue
     {
         try {
             Log::info('Processing chatbot message', [
+                'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
                 'message_id' => $this->message->id,
-                'flow_id' => $this->conversation->_id,
+                'flow_id' => $this->conversation->flow_id,
             ]);
 
             // Execute the flow
             $executor->processMessage($this->conversation, $this->message);
 
             Log::info('Chatbot message processed successfully', [
+                'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
                 'message_id' => $this->message->id,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to process chatbot message', [
+                'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
                 'message_id' => $this->message->id,
                 'error' => $e->getMessage(),
@@ -68,6 +76,7 @@ class ProcessChatbotMessage implements ShouldQueue
     public function failed(\Throwable $exception): void
     {
         Log::error('Chatbot message processing failed permanently', [
+            'tenant_id' => $this->tenantId,
             'conversation_id' => $this->conversation->id,
             'message_id' => $this->message->id,
             'error' => $exception->getMessage(),

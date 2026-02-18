@@ -61,11 +61,25 @@ class Tenant extends SpatieTenant
         return $this->hasMany(Flow::class);
     }
 
-    public function conversations(): HasMany
+    public function globalVariables()
+    {
+        return $this->hasMany(GlobalVariable::class);
+    }
+
+    public function customFunctions()
+    {
+        return $this->hasMany(CustomFunction::class);
+    }
+
+    public function conversations()
     {
         return $this->hasMany(Conversation::class);
     }
 
+    public function apiIntegrations()
+    {
+        return $this->hasMany(ApiIntegration::class);
+    }
     // ─── Scopes ───────────────────────────────────────────────────────────────
 
     public function scopeActive($query)
