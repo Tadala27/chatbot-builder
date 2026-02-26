@@ -6,23 +6,30 @@ class VariableResolver
 {
     /**
      * Resolve variables in a string
-     * Supports: $variable, ${variable}, $function(params)
+     * Supports: $variable, ${variable}, {{variable}}, $function(params)
      */
     public function resolve(string $text, array $variables): string
     {
-        // Replace simple variables ($variable)
+        // PRIORITY 1: Replace {{variable}} format (from RichTextEditor)
+        // This is the most common format from the frontend
+        $text = preg_replace_callback('/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/', function ($matches) use ($variables) {
+            $varName = $matches[1];
+            return $variables[$varName] ?? $matches[0];
+        }, $text);
+
+        // PRIORITY 2: Replace simple variables ($variable)
         $text = preg_replace_callback('/\$([a-zA-Z_][a-zA-Z0-9_]*)/', function ($matches) use ($variables) {
             $varName = $matches[1];
             return $variables[$varName] ?? $matches[0];
         }, $text);
 
-        // Replace braced variables (${variable})
+        // PRIORITY 3: Replace braced variables (${variable})
         $text = preg_replace_callback('/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/', function ($matches) use ($variables) {
             $varName = $matches[1];
             return $variables[$varName] ?? $matches[0];
         }, $text);
 
-        // Replace function calls ($function(param1, param2))
+        // PRIORITY 4: Replace function calls ($function(param1, param2))
         $text = preg_replace_callback(
             '/\$([a-zA-Z_][a-zA-Z0-9_]*)\((.*?)\)/',
             function ($matches) use ($variables) {
@@ -106,6 +113,10 @@ class VariableResolver
             if (str_starts_with($param, '$')) {
                 $varName = substr($param, 1);
                 return $variables[$varName] ?? $param;
+            }
+            // Check for {{variable}} format
+            if (preg_match('/^\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}$/', $param, $matches)) {
+                return $variables[$matches[1]] ?? $param;
             }
             return $param;
         }, $params);
@@ -240,9 +251,16 @@ class VariableResolver
      */
     public function resolveValue($value, array $variables)
     {
-        if (is_string($value) && str_starts_with($value, '$')) {
-            $varName = substr($value, 1);
-            return $variables[$varName] ?? null;
+        if (is_string($value)) {
+            // Check for {{variable}} format
+            if (preg_match('/^\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}$/', $value, $matches)) {
+                return $variables[$matches[1]] ?? null;
+            }
+            // Check for $variable format
+            if (str_starts_with($value, '$')) {
+                $varName = substr($value, 1);
+                return $variables[$varName] ?? null;
+            }
         }
 
         return $value;

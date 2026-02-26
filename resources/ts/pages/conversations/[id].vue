@@ -1,609 +1,423 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import Swal from 'sweetalert2'
-import ScorecardPerspectiveCards from '@/components/scorecard/ScorecardPerspectiveCards.vue'
-import UnifiedGoalObjectiveDialog from '@/components/scorecard/UnifiedGoalObjectiveDialog.vue'
-import PerspectiveWeightsDialog from '@/components/scorecard/PerspectiveWeightsDialog.vue'
-import FullScorecardUploadDialog from '@/components/scorecard/FullScorecardUploadDialog.vue'
-import ChangeComparisonDialog from '@/components/scorecard/ChangeComparisonDialog.vue'
-import { useScorecardState } from '@/composables/useScorecardState'
-import { useScorecardValidation } from '@/composables/useScorecardValidation'
+import { ref, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
+import axios from "axios";
+import moment from "moment";
 
-const router = useRouter()
-const route = useRoute()
-const scorecardId = computed(() => route.params.id as string)
+const router = useRouter();
 
-// ========================================================================
-// COMPOSABLES
-// ========================================================================
-const {
-    // State
-    isLoading,
-    isSaving,
-    scorecard,
-    perspectives,
-    tenantConfig,
-    permissions,
-    snackbar,
-    // Computed
-    hasScorecard,
-    canEdit,
-    canSignAsEmployee,
-    canSignAsManager,
-    canViewChanges,
-    canAcceptChanges,
-    canRejectChanges,
-    isReadOnly,
-    isOwner,
-    isSupervisor,
-    isDraft,
-    isSubmitted,
-    isManagerReview,
-    isPendingEmployeeAcceptance,
-    isApproved,
-    hasPendingChanges,
-    signatureAction,
-    // Methods
-    initialize,
-    reloadScorecard,
-    saveGoalsObjectives,
-    deleteGoal,
-    deleteObjective,
-    handleEmployeeInitialSign,
-    handleManagerSign,
-    handleEmployeeFinalSign,
-    getChangeComparison,
-    handleRejectChanges
-} = useScorecardState(scorecardId.value)
+const conversations = ref([]);
+const isLoading = ref(true);
+const searchQuery = ref("");
+const statusFilter = ref("all");
+const chatbotFilter = ref("all");
+const chatbots = ref([]);
+const snackbar = ref({ show: false, message: "", color: "success" });
 
-const {
-    // Validation
-    allWeightsValid,
-    validationErrors,
-    getPerspectiveValidationState,
-    getGoalValidationState,
-    getAvailableGoalWeight,
-    getAvailableObjectiveWeight,
-    distributeGoalWeightsEqually,
-    findGoalById,
-    initializeWeightTracking
-} = useScorecardValidation(perspectives, scorecard)
+// Pagination
+const page = ref(1);
+const perPage = ref(20);
+const total = ref(0);
 
-// ========================================================================
-// DIALOG STATE
-// ========================================================================
-const dialogs = ref({
-    unifiedGoalObjective: false,
-    perspectiveWeights: false,
-    fullScorecardUpload: false,
-    changeComparison: false
-})
+const statusOptions = [
+  { title: "All", value: "all" },
+  { title: "Active", value: "active" },
+  { title: "Completed", value: "completed" },
+  { title: "Handed Off", value: "handed_off" },
+  { title: "Abandoned", value: "abandoned" },
+];
 
-// Initial dialog state factory
-const createInitialDialogState = () => ({
-    mode: 'add' as 'add' | 'edit',
-    selectedPerspective: null as any,
-    selectedGoal: null as any,
-    selectedObjective: null as any
-})
+const filteredConversations = computed(() => {
+  let filtered = conversations.value;
 
-const dialogState = ref(createInitialDialogState())
+  if (statusFilter.value !== "all") {
+    filtered = filtered.filter(
+      (conv: any) => conv.status === statusFilter.value,
+    );
+  }
 
-const openPanels = ref<number[]>([])
+  if (chatbotFilter.value !== "all") {
+    filtered = filtered.filter(
+      (conv: any) => conv.chatbot_id === chatbotFilter.value,
+    );
+  }
 
-// Track if manager has started editing
-const hasStartedEditing = ref(false)
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase();
+    filtered = filtered.filter(
+      (conv: any) =>
+        conv.whatsapp_user_phone?.toLowerCase().includes(query) ||
+        conv.whatsapp_user_name?.toLowerCase().includes(query) ||
+        conv.chatbot?.name?.toLowerCase().includes(query),
+    );
+  }
 
-// ========================================================================
-// WATCH DIALOG STATE - RESET ON CLOSE
-// ========================================================================
-watch(() => dialogs.value.unifiedGoalObjective, (isOpen) => {
-    if (!isOpen) {
-        // Reset dialog state when closed
-        setTimeout(() => {
-            dialogState.value = createInitialDialogState()
-        }, 300) // Small delay to allow dialog to close smoothly
-    }
-})
+  return filtered;
+});
 
-// ========================================================================
-// COMPUTED
-// ========================================================================
-const employee = computed(() => scorecard.value?.position?.current_holder?.user || null)
-const position = computed(() => scorecard.value?.position || null)
+const fetchConversations = async () => {
+  isLoading.value = true;
+  try {
+    const response = await axios.get("/api/conversations", {
+      params: {
+        page: page.value,
+        per_page: perPage.value,
+        status: statusFilter.value !== "all" ? statusFilter.value : undefined,
+        chatbot_id:
+          chatbotFilter.value !== "all" ? chatbotFilter.value : undefined,
+      },
+    });
 
-const goalsCount = computed(() => {
-    return perspectives.value.reduce(
-        (total, perspective) => total + (perspective.goals?.length || 0),
-        0
-    )
-})
+    conversations.value = response.data.data;
+    total.value = response.data.total;
+  } catch (error: any) {
+    snackbar.value = {
+      show: true,
+      message: error.response?.data?.message || "Failed to load conversations",
+      color: "error",
+    };
+  } finally {
+    isLoading.value = false;
+  }
+};
 
-const objectivesCount = computed(() => {
-    return perspectives.value.reduce((total, perspective) => {
-        return total + (perspective.goals?.reduce(
-            (goalTotal: number, goal: any) => goalTotal + (goal.objectives?.length || 0),
-            0
-        ) || 0)
-    }, 0)
-})
+const fetchChatbots = async () => {
+  try {
+    const response = await axios.get("/api/chatbots");
+    chatbots.value = [
+      { id: "all", name: "All Chatbots" },
+      ...response.data.data,
+    ];
+  } catch (error) {
+    console.error("Failed to load chatbots", error);
+  }
+};
 
-const viewType = computed(() => {
-    if (isOwner.value) return 'self'
-    if (isSupervisor.value) return 'supervisor'
-    return 'viewer'
-})
+const getStatusColor = (status: string) => {
+  const colors: Record<string, string> = {
+    active: "success",
+    completed: "primary",
+    handed_off: "warning",
+    abandoned: "error",
+  };
+  return colors[status] || "grey";
+};
 
-const pageTitle = computed(() => {
-    if (viewType.value === 'supervisor') {
-        return `${employee.value?.firstname || 'Team Member'}'s Scorecard`
-    }
-    return 'My Scorecard'
-})
+const getStatusIcon = (status: string) => {
+  const icons: Record<string, string> = {
+    active: "$messageText",
+    completed: "$checkCircle",
+    handed_off: "$accountSwitch",
+    abandoned: "$closeCircle",
+  };
+  return icons[status] || "$message";
+};
 
-const pageSubtitle = computed(() => {
-    if (viewType.value === 'supervisor') {
-        if (isPendingEmployeeAcceptance.value) {
-            return 'Waiting for employee to review your changes'
-        }
-        return canEdit.value ? 'Review and manage performance objectives' : 'View performance objectives'
-    }
-    if (isPendingEmployeeAcceptance.value) {
-        return 'Your manager made changes - please review and respond'
-    }
-    return canEdit.value ? 'Edit your performance objectives' : 'View your performance objectives'
-})
+const formatDuration = (duration: number | null) => {
+  if (!duration) return "N/A";
 
-// Status badge configuration
-const statusConfig = computed(() => {
-    const status = scorecard.value?.status || 'draft'
-    const configs: Record<string, any> = {
-        draft: {
-            color: 'warning',
-            icon: '$pencil',
-            text: 'Draft',
-            description: 'Working on scorecard'
-        },
-        submitted: {
-            color: 'info',
-            icon: '$send',
-            text: 'Submitted',
-            description: 'Waiting for manager review'
-        },
-        manager_review: {
-            color: 'primary',
-            icon: '$accountSupervisor',
-            text: 'Under Manager Review',
-            description: 'Manager is reviewing'
-        },
-        pending_employee_acceptance: {
-            color: 'orange',
-            icon: '$alert',
-            text: 'Pending Your Review',
-            description: 'Manager made changes - please review'
-        },
-        approved: {
-            color: 'success',
-            icon: '$checkCircle',
-            text: 'Approved',
-            description: 'Fully signed by both parties'
-        }
-    }
-    return configs[status] || configs.draft
-})
+  const hours = Math.floor(duration / 3600);
+  const minutes = Math.floor((duration % 3600) / 60);
+  const seconds = duration % 60;
 
-// ========================================================================
-// DIALOG HANDLERS
-// ========================================================================
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  } else {
+    return `${seconds}s`;
+  }
+};
 
-const openAddGoalsObjectives = (perspective: any) => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
+const endConversation = async (conversation: any) => {
+  if (!confirm(`End conversation with ${conversation.whatsapp_user_phone}?`)) {
+    return;
+  }
 
-    // Reset and set new state
-    dialogState.value = {
-        mode: 'add',
-        selectedPerspective: perspective,
-        selectedGoal: null,
-        selectedObjective: null
-    }
-    dialogs.value.unifiedGoalObjective = true
-}
+  try {
+    await axios.post(`/api/conversations/${conversation.id}/end`);
+    snackbar.value = {
+      show: true,
+      message: "Conversation ended successfully",
+      color: "success",
+    };
+    fetchConversations();
+  } catch (error: any) {
+    snackbar.value = {
+      show: true,
+      message: error.response?.data?.message || "Failed to end conversation",
+      color: "error",
+    };
+  }
+};
 
-const openEditGoal = (goal: any) => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
+const exportConversations = async () => {
+  try {
+    const response = await axios.post("/api/conversations/export", {
+      format: "csv",
+      status: statusFilter.value !== "all" ? statusFilter.value : undefined,
+      chatbot_id:
+        chatbotFilter.value !== "all" ? chatbotFilter.value : undefined,
+    });
 
-    // Find the perspective for this goal
-    const perspective = perspectives.value.find(p =>
-        p.goals?.some(g => g.id === goal.id)
-    )
+    const blob = new Blob([atob(response.data.data)], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = response.data.filename;
+    a.click();
 
-    // Reset and set new state
-    dialogState.value = {
-        mode: 'edit',
-        selectedPerspective: perspective || null,
-        selectedGoal: goal,
-        selectedObjective: null
-    }
-    dialogs.value.unifiedGoalObjective = true
-}
+    snackbar.value = {
+      show: true,
+      message: "Conversations exported successfully",
+      color: "success",
+    };
+  } catch (error: any) {
+    snackbar.value = {
+      show: true,
+      message:
+        error.response?.data?.message || "Failed to export conversations",
+      color: "error",
+    };
+  }
+};
 
-const openEditWeights = () => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
-
-
-    dialogs.value.perspectiveWeights = true
-}
-
-const openFullScorecardUpload = () => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
-    dialogs.value.fullScorecardUpload = true
-}
-
-const openChangeComparison = async () => {
-    if (!canViewChanges.value) {
-        showSnackbar('No changes to view', 'info')
-        return
-    }
-    dialogs.value.changeComparison = true
-}
-
-// ========================================================================
-// DELETE HANDLERS
-// ========================================================================
-
-const handleDeleteGoal = async (goalId: number) => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
-
-    const { isConfirmed } = await Swal.fire({
-        title: 'Delete Goal',
-        text: 'This will remove the goal and all associated objectives. Continue?',
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonColor: '#ef4444',
-        confirmButtonText: 'Yes, delete!'
-    })
-
-    if (isConfirmed) {
-        await deleteGoal(goalId)
-    }
-}
-
-const handleDeleteObjective = async (objectiveId: number) => {
-    if (!canEdit.value) {
-        showSnackbar('You do not have permission to edit this scorecard', 'error')
-        return
-    }
-
-    const { isConfirmed } = await Swal.fire({
-        title: 'Delete Objective',
-        text: 'This will remove the objective. Continue?',
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonColor: '#ef4444',
-        confirmButtonText: 'Yes, delete!'
-    })
-
-    if (isConfirmed) {
-        await deleteObjective(objectiveId)
-    }
-}
-
-// ========================================================================
-// SIGNATURE HANDLERS - Called from ScorecardPerspectiveCards
-// ========================================================================
-
-const onEmployeeInitialSign = async () => {
-    const success = await handleEmployeeInitialSign()
-    if (success) {
-        await reloadScorecard()
-    }
-}
-
-const onManagerSign = async () => {
-    const success = await handleManagerSign()
-    if (success) {
-        await reloadScorecard()
-    }
-}
-
-const onEmployeeFinalSign = async () => {
-    const success = await handleEmployeeFinalSign()
-    if (success) {
-        await reloadScorecard()
-    }
-}
-
-const onRejectChanges = async () => {
-    const success = await handleRejectChanges()
-    if (success) {
-        await reloadScorecard()
-    }
-}
-
-// ========================================================================
-// HELPERS
-// ========================================================================
-
-const showSnackbar = (message: string, color = 'success') => {
-    snackbar.value = { show: true, message, color, timeout: 4000 }
-}
-
-const goBack = () => {
-    if (viewType.value === 'supervisor') {
-        router.push('/subordinates/scorecards')
-    } else {
-        router.push('/scorecards')
-    }
-}
-
-// ========================================================================
-// LIFECYCLE
-// ========================================================================
-
-onMounted(async () => {
-    await initialize()
-    initializeWeightTracking()
-    openPanels.value = perspectives.value.map((_, index) => index)
-
-    // Track if already in manager_review
-    if (isManagerReview.value) {
-        hasStartedEditing.value = true
-    }
-})
+onMounted(() => {
+  fetchConversations();
+  fetchChatbots();
+});
 </script>
 
 <template>
-    <div>
-        <!-- Loading -->
-        <v-container v-if="isLoading" class="d-flex justify-center py-8">
-            <v-progress-circular indeterminate color="primary" size="64" />
-        </v-container>
-
-        <!-- Main Content -->
-        <div v-else-if="scorecard">
-            <!-- Header with Back Button -->
-            <div class="d-flex align-center mb-4">
-                <v-btn icon variant="text" @click="goBack" class="mr-2">
-                    <v-icon>$arrowLeft</v-icon>
-                </v-btn>
-                <div class="flex-grow-1">
-                    <h1 class="text-h4 mb-1">{{ pageTitle }}</h1>
-                    <p class="text-subtitle-1 text-medium-emphasis mb-0">
-                        {{ pageSubtitle }}
-                    </p>
-                </div>
-                <div class="d-flex gap-2">
-                    <!-- Status Chip -->
-                    <v-chip :color="statusConfig.color" variant="flat" :prepend-icon="statusConfig.icon">
-                        {{ statusConfig.text }}
-                    </v-chip>
-
-                    <!-- Edit Actions - Available when canEdit -->
-                    <template v-if="canEdit && !isPendingEmployeeAcceptance">
-                        <v-btn color="secondary" variant="outlined" @click="openEditWeights"
-                            prepend-icon="$scaleUnbalanced">
-                            Edit Weights
-                        </v-btn>
-                        <v-btn color="success" variant="outlined" @click="openFullScorecardUpload"
-                            prepend-icon="$upload">
-                            Upload Scorecard
-                        </v-btn>
-                    </template>
-
-                    <!-- View Changes Button (for employees with pending changes) -->
-                    <v-btn v-if="canViewChanges && hasPendingChanges" color="info" variant="outlined"
-                        @click="openChangeComparison" prepend-icon="$compare">
-                        View Changes
-                    </v-btn>
-
-                    <!-- Reject Changes Button -->
-                    <v-btn v-if="canRejectChanges && hasPendingChanges" color="error" variant="outlined"
-                        @click="onRejectChanges" prepend-icon="$close">
-                        Reject Changes
-                    </v-btn>
-                </div>
-            </div>
-
-            <!-- Summary Cards -->
-            <v-row class="mb-4">
-                <!-- Profile Card -->
-                <v-col cols="12" md="4">
-                    <v-card variant="outlined" class="h-100">
-                        <v-card-text class="pa-6">
-                            <v-chip color="primary" size="small" class="mb-4">
-                                {{ isSupervisor ? 'Team Member' : 'Profile' }}
-                            </v-chip>
-
-                            <div class="d-flex align-center mb-4">
-                                <v-avatar size="56" color="grey-lighten-3" class="mr-4">
-                                    <v-icon size="32" color="grey-darken-1">$account</v-icon>
-                                </v-avatar>
-
-                                <div class="flex-grow-1">
-                                    <div class="text-h6 font-weight-medium">
-                                        {{ employee?.firstname }} {{ employee?.lastname }}
-                                    </div>
-                                    <div class="text-body-2 text-medium-emphasis mt-1">
-                                        <v-icon size="18" class="mr-1">$domain</v-icon>
-                                        {{ position?.name }}
-                                    </div>
-                                    <div class="text-body-2 text-medium-emphasis">
-                                        <v-icon size="18" class="mr-1">$siteMap</v-icon>
-                                        {{ position?.business_unit?.name }}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Supervisor indicator -->
-                            <v-chip v-if="isSupervisor && !isOwner" size="small" color="info" variant="tonal"
-                                class="mt-3">
-                                <v-icon start size="small">$accountSupervisor</v-icon>
-                                You are the supervisor
-                            </v-chip>
-                        </v-card-text>
-                    </v-card>
-                </v-col>
-
-                <!-- Goals Summary -->
-                <v-col cols="12" md="4">
-                    <v-card variant="outlined" class="h-100">
-                        <v-card-text class="pa-6">
-                            <div class="d-flex justify-space-between align-start">
-                                <div>
-                                    <div class="text-h2 font-weight-bold text-primary">{{ goalsCount }}</div>
-                                    <div class="text-subtitle-1 text-primary">Goals</div>
-                                </div>
-                                <v-icon size="24">$chartBox</v-icon>
-                            </div>
-                            <v-divider class="my-4" />
-                            <div class="d-flex justify-space-between align-center">
-                                <span class="text-body-1">{{ objectivesCount }} Objectives</span>
-                                <v-icon size="24">$dotsHorizontal</v-icon>
-                            </div>
-                        </v-card-text>
-                    </v-card>
-                </v-col>
-
-                <!-- Perspectives Summary -->
-                <v-col cols="12" md="4">
-                    <v-card variant="outlined" class="h-100">
-                        <v-card-text class="pa-6">
-                            <v-list density="compact" class="bg-transparent">
-                                <v-list-item v-for="(p, index) in perspectives" :key="p.id">
-                                    <template #prepend>
-                                        <v-avatar size="32" color="grey-darken-3" class="text-white">
-                                            {{ index + 1 }}
-                                        </v-avatar>
-                                    </template>
-                                    <v-list-item-title>{{ p.perspective_name }}</v-list-item-title>
-                                    <template #append>
-                                        <v-chip rounded="sm" :color="p.color" variant="flat">
-                                            {{ p.weight }}%
-                                        </v-chip>
-                                    </template>
-                                </v-list-item>
-                            </v-list>
-                        </v-card-text>
-                    </v-card>
-                </v-col>
-            </v-row>
-
-            <!-- Manager Changes Alert -->
-            <v-alert v-if="hasPendingChanges && isPendingEmployeeAcceptance && isOwner" type="warning" variant="tonal"
-                prominent class="mb-4">
-                <template #prepend>
-                    <v-icon size="large">$alert</v-icon>
-                </template>
-                <v-alert-title class="text-h6 mb-2">Manager Made Changes</v-alert-title>
-                <div class="text-body-2">
-                    <p class="mb-2">Your manager has reviewed and modified your scorecard.</p>
-                    <p class="mb-3">Please review the changes and decide whether to accept or reject them.</p>
-                    <div class="d-flex gap-2">
-                        <v-btn color="info" variant="flat" prepend-icon="$compare" @click="openChangeComparison">
-                            View Changes
-                        </v-btn>
-                        <v-btn color="success" variant="outlined" prepend-icon="$checkCircle"
-                            @click="onEmployeeFinalSign">
-                            Accept Changes
-                        </v-btn>
-                        <v-btn color="error" variant="outlined" prepend-icon="$close" @click="onRejectChanges">
-                            Reject Changes
-                        </v-btn>
-                    </div>
-                </div>
-            </v-alert>
-
-            <!-- Manager Waiting Alert -->
-            <v-alert v-if="isPendingEmployeeAcceptance && isSupervisor" type="info" variant="tonal" class="mb-4">
-                Waiting for employee to review and respond to your changes.
-            </v-alert>
-
-            <!-- Validation Banner - Only show to users who can edit -->
-            <v-alert v-if="!allWeightsValid && hasScorecard && canEdit" type="error" variant="tonal" prominent
-                class="mb-4">
-                <template #prepend>
-                    <v-icon size="large">$alertCircle</v-icon>
-                </template>
-                <v-alert-title class="text-h6 mb-2">Invalid Weight Distribution</v-alert-title>
-                <div class="text-body-2">
-                    <p class="mb-2">Weight validation errors must be fixed before signing:</p>
-                    <ul class="ml-4">
-                        <li v-for="(error, index) in validationErrors" :key="index">{{ error }}</li>
-                    </ul>
-                </div>
-            </v-alert>
-
-            <!-- Read-only info banner -->
-            <v-alert v-else-if="!canEdit && hasScorecard && !isApproved && !isPendingEmployeeAcceptance" type="info"
-                variant="tonal" density="compact" class="mb-4">
-                <v-icon start>$information</v-icon>
-                {{ isSupervisor ?
-                    'This scorecard is in read-only mode. Use the sign button to complete your review.' :
-                    'This scorecard is currently being reviewed by your manager.' }}
-            </v-alert>
-
-            <!-- Scorecard Content - UPDATED with signature handlers -->
-            <ScorecardPerspectiveCards :perspectives="perspectives" :scorecard="scorecard" :open-panels="openPanels"
-                :get-perspective-validation-state="getPerspectiveValidationState"
-                :get-goal-validation-state="getGoalValidationState" :get-available-goal-weight="getAvailableGoalWeight"
-                :distribute-goal-weights-equally="distributeGoalWeightsEqually" :read-only="isReadOnly"
-                :all-weights-valid="allWeightsValid" :can-sign-as-employee="canSignAsEmployee"
-                :can-sign-as-manager="canSignAsManager" :signature-action="signatureAction"
-                @open-add-goals="openAddGoalsObjectives" @open-edit-goal="openEditGoal" @delete-goal="handleDeleteGoal"
-                @delete-objective="handleDeleteObjective" @employee-initial-sign="onEmployeeInitialSign"
-                @manager-sign="onManagerSign" @employee-final-sign="onEmployeeFinalSign" />
-
-            <!-- Dialogs -->
-            <UnifiedGoalObjectiveDialog v-model="dialogs.unifiedGoalObjective" :mode="dialogState.mode"
-                :scorecard="scorecard" :selected-perspective="dialogState.selectedPerspective"
-                :selected-goal="dialogState.selectedGoal" :tenant-config="tenantConfig" :is-saving="isSaving"
-                :get-available-goal-weight="getAvailableGoalWeight"
-                :get-available-objective-weight="getAvailableObjectiveWeight" :find-goal-by-id="findGoalById"
-                @reload="reloadScorecard" />
-
-            <PerspectiveWeightsDialog v-model="dialogs.perspectiveWeights" :scorecard="scorecard"
-                :perspectives="perspectives" :is-saving="isSaving" @reload="reloadScorecard" />
-
-            <FullScorecardUploadDialog v-model="dialogs.fullScorecardUpload" :scorecard="scorecard"
-                :perspectives="perspectives" :tenant-config="tenantConfig" :is-saving="isSaving"
-                @reload="reloadScorecard" />
-
-            <ChangeComparisonDialog v-model="dialogs.changeComparison" :scorecard-id="scorecard.id"
-                :get-change-comparison="getChangeComparison" />
+  <div>
+    <VRow class="mb-4">
+      <VCol cols="12">
+        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+          <div>
+            <h2 class="text-h4 mb-2">Conversations</h2>
+            <p class="text-medium-emphasis">
+              View and manage all chatbot conversations
+            </p>
+          </div>
+          <VBtn
+            variant="outlined"
+            prepend-icon="$download"
+            @click="exportConversations"
+          >
+            Export
+          </VBtn>
         </div>
+      </VCol>
+    </VRow>
 
-        <!-- Snackbar -->
-        <v-snackbar v-model="snackbar.show" :color="snackbar.color" :timeout="snackbar.timeout" location="top right">
-            {{ snackbar.message }}
-            <template #actions>
-                <v-btn variant="text" @click="snackbar.show = false">Close</v-btn>
+    <VRow class="mb-4">
+      <VCol cols="12" md="4">
+        <VTextField
+          v-model="searchQuery"
+          placeholder="Search by phone, name, or chatbot..."
+          variant="outlined"
+          prepend-inner-icon="$magnify"
+          clearable
+          hide-details
+        />
+      </VCol>
+      <VCol cols="12" md="3">
+        <VSelect
+          v-model="statusFilter"
+          :items="statusOptions"
+          item-title="title"
+          item-value="value"
+          variant="outlined"
+          label="Status"
+          hide-details
+          @update:model-value="fetchConversations"
+        />
+      </VCol>
+      <VCol cols="12" md="3">
+        <VSelect
+          v-model="chatbotFilter"
+          :items="chatbots"
+          item-title="name"
+          item-value="id"
+          variant="outlined"
+          label="Chatbot"
+          hide-details
+          @update:model-value="fetchConversations"
+        />
+      </VCol>
+    </VRow>
+
+    <VRow v-if="isLoading" justify="center">
+      <VCol cols="auto">
+        <VProgressCircular indeterminate color="primary" size="64" />
+      </VCol>
+    </VRow>
+
+    <VRow v-else-if="filteredConversations.length === 0" justify="center">
+      <VCol cols="12" md="8" lg="6">
+        <VCard class="pa-8 text-center" variant="outlined">
+          <VIcon icon="$messageText" size="80" color="primary" class="mb-4" />
+          <h3 class="text-h5 mb-2">No Conversations Found</h3>
+          <p class="text-medium-emphasis">
+            {{
+              searchQuery
+                ? "Try adjusting your search or filters"
+                : "Conversations will appear here when users interact with your chatbots"
+            }}
+          </p>
+        </VCard>
+      </VCol>
+    </VRow>
+
+    <VCard v-else>
+      <VList>
+        <template
+          v-for="(conversation, index) in filteredConversations"
+          :key="conversation.id"
+        >
+          <VListItem
+            :to="`/conversations/${conversation.id}`"
+            class="conversation-item"
+          >
+            <template #prepend>
+              <VAvatar color="primary" size="48">
+                <VIcon icon="$account" />
+              </VAvatar>
             </template>
-        </v-snackbar>
-    </div>
+
+            <VListItemTitle class="d-flex align-center">
+              <span class="text-h6">
+                {{
+                  conversation.whatsapp_user_name ||
+                  conversation.whatsapp_user_phone
+                }}
+              </span>
+              <VChip
+                :color="getStatusColor(conversation.status)"
+                size="small"
+                class="ml-2"
+              >
+                <VIcon
+                  :icon="getStatusIcon(conversation.status)"
+                  size="14"
+                  class="mr-1"
+                />
+                {{ conversation.status }}
+              </VChip>
+            </VListItemTitle>
+
+            <VListItemSubtitle class="mt-1">
+              <div class="d-flex align-center gap-4 flex-wrap">
+                <div class="d-flex align-center">
+                  <VIcon icon="$robot" size="16" color="primary" class="mr-1" />
+                  <span>{{ conversation.chatbot?.name }}</span>
+                </div>
+                <div class="d-flex align-center">
+                  <VIcon
+                    icon="$whatsapp"
+                    size="16"
+                    color="success"
+                    class="mr-1"
+                  />
+                  <span>{{ conversation.whatsapp_user_phone }}</span>
+                </div>
+                <div class="d-flex align-center">
+                  <VIcon icon="$messageText" size="16" class="mr-1" />
+                  <span>{{ conversation.message_count }} messages</span>
+                </div>
+                <div class="d-flex align-center" v-if="conversation.duration">
+                  <VIcon icon="$clock" size="16" class="mr-1" />
+                  <span>{{ formatDuration(conversation.duration) }}</span>
+                </div>
+              </div>
+            </VListItemSubtitle>
+
+            <VListItemSubtitle class="mt-2 text-caption">
+              Started {{ moment(conversation.started_at).fromNow() }}
+              <span v-if="conversation.ended_at">
+                • Ended {{ moment(conversation.ended_at).fromNow() }}
+              </span>
+              <span v-else-if="conversation.last_message_at">
+                • Last message
+                {{ moment(conversation.last_message_at).fromNow() }}
+              </span>
+            </VListItemSubtitle>
+
+            <template #append>
+              <div class="d-flex align-center gap-2">
+                <VBtn
+                  icon
+                  variant="text"
+                  size="small"
+                  :to="`/conversations/${conversation.id}`"
+                >
+                  <VIcon icon="$eye" />
+                </VBtn>
+
+                <VMenu v-if="conversation.status === 'active'">
+                  <template #activator="{ props }">
+                    <VBtn v-bind="props" icon variant="text" size="small">
+                      <VIcon icon="$dotsVertical" />
+                    </VBtn>
+                  </template>
+                  <VList>
+                    <VListItem
+                      prepend-icon="$closeCircle"
+                      @click.prevent="endConversation(conversation)"
+                    >
+                      End Conversation
+                    </VListItem>
+                  </VList>
+                </VMenu>
+              </div>
+            </template>
+          </VListItem>
+
+          <VDivider v-if="index < filteredConversations.length - 1" />
+        </template>
+      </VList>
+
+      <VDivider />
+      <div class="d-flex justify-center pa-4">
+        <VPagination
+          v-model="page"
+          :length="Math.ceil(total / perPage)"
+          @update:model-value="fetchConversations"
+          total-visible="7"
+        />
+      </div>
+    </VCard>
+
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="4000"
+      location="top right"
+    >
+      {{ snackbar.message }}
+      <template #actions>
+        <VBtn variant="text" @click="snackbar.show = false">Close</VBtn>
+      </template>
+    </VSnackbar>
+  </div>
 </template>
 
 <style scoped>
-.gap-2 {
-    gap: 8px;
+.conversation-item {
+  transition: background-color 0.2s ease;
 }
 
-.h-100 {
-    height: 100%;
+.conversation-item:hover {
+  background-color: rgba(var(--v-theme-primary), 0.05);
+}
+
+.gap-2 {
+  gap: 8px;
+}
+.gap-3 {
+  gap: 12px;
+}
+.gap-4 {
+  gap: 16px;
 }
 </style>

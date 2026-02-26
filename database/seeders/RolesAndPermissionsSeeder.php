@@ -43,8 +43,6 @@ class RolesAndPermissionsSeeder extends Seeder
             'create nodes',
             'edit nodes',
             'delete nodes',
-            'create edges',
-            'delete edges',
             'validate flows',
 
             // Variables
@@ -139,8 +137,6 @@ class RolesAndPermissionsSeeder extends Seeder
             'create nodes',
             'edit nodes',
             'delete nodes',
-            'create edges',
-            'delete edges',
             'validate flows',
 
             // Variables
@@ -213,8 +209,6 @@ class RolesAndPermissionsSeeder extends Seeder
             'create nodes',
             'edit nodes',
             'delete nodes',
-            'create edges',
-            'delete edges',
             'validate flows',
             'view variables',
             'create variables',

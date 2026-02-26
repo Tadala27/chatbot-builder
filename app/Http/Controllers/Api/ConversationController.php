@@ -18,7 +18,7 @@ class ConversationController extends Controller
         $tenant = Tenant::current();
 
         $query = Conversation::where('tenant_id', $tenant->id)
-            ->with(['chatbot', 'whatsappAccount', 'assignedAgent']);
+            ->with(['flow', 'whatsappAccount', 'assignedAgent']);
 
         // Search by phone or name
         if ($request->has('search')) {
@@ -35,8 +35,8 @@ class ConversationController extends Controller
         }
 
         // Filter by chatbot
-        if ($request->has('chatbot_id')) {
-            $query->where('chatbot_id', $request->chatbot_id);
+        if ($request->has('flow_id')) {
+            $query->where('flow_id', $request->flow_id);
         }
 
         // Filter by WhatsApp account
@@ -90,7 +90,7 @@ class ConversationController extends Controller
         }
 
         $conversation->load([
-            'chatbot',
+            'flow',
             'whatsappAccount',
             'assignedAgent',
             'context',
@@ -151,7 +151,7 @@ class ConversationController extends Controller
         $conversation->handoff($validated['assigned_agent_id'] ?? null);
 
         // Send handoff message to user
-        if ($conversation->chatbot) {
+        if ($conversation->flow) {
             $messageService = app(\App\Services\WhatsAppMessageService::class);
             $messageService->sendTextMessage(
                 $conversation->whatsappAccount,
@@ -236,7 +236,7 @@ class ConversationController extends Controller
 
         $validated = $request->validate([
             'format' => 'required|in:csv,json',
-            'chatbot_id' => 'nullable|exists:chatbots,id',
+            'flow_id' => 'nullable|exists:flows,id',
             'status' => 'nullable|in:active,completed,abandoned,handed_off',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date',
@@ -244,8 +244,8 @@ class ConversationController extends Controller
 
         $query = Conversation::where('tenant_id', $tenant->id);
 
-        if (isset($validated['chatbot_id'])) {
-            $query->where('chatbot_id', $validated['chatbot_id']);
+        if (isset($validated['flow_id'])) {
+            $query->where('flow_id', $validated['flow_id']);
         }
 
         if (isset($validated['status'])) {
@@ -260,7 +260,7 @@ class ConversationController extends Controller
             $query->whereDate('started_at', '<=', $validated['end_date']);
         }
 
-        $conversations = $query->with(['chatbot', 'whatsappAccount'])->get();
+        $conversations = $query->with(['flow', 'whatsappAccount'])->get();
 
         if ($validated['format'] === 'csv') {
             $csv = $this->generateCSV($conversations);
@@ -289,7 +289,7 @@ class ConversationController extends Controller
                 $conversation->id,
                 $conversation->whatsapp_user_phone,
                 $conversation->whatsapp_user_name ?? 'N/A',
-                $conversation->chatbot->name ?? 'N/A',
+                $conversation->flow->name ?? 'N/A',
                 $conversation->status,
                 $conversation->started_at->format('Y-m-d H:i:s'),
                 $conversation->ended_at ? $conversation->ended_at->format('Y-m-d H:i:s') : 'N/A',
@@ -311,8 +311,8 @@ class ConversationController extends Controller
         $query = Conversation::where('tenant_id', $tenant->id);
 
         // Apply filters
-        if ($request->has('chatbot_id')) {
-            $query->where('chatbot_id', $request->chatbot_id);
+        if ($request->has('flow_id')) {
+            $query->where('flow_id', $request->flow_id);
         }
 
         if ($request->has('start_date')) {

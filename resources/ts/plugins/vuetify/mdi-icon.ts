@@ -131,6 +131,7 @@ import {
   mdiShield,
   mdiContentSave,
   mdiContentSaveOutline,
+  mdiContentCopy,
   mdiClockAlert,
   mdiClockAlertOutline,
   mdiAccountMultiple,
@@ -291,6 +292,7 @@ import {
   mdiArrowDown,
   mdiArrowUp,
   mdiMessageText,
+  mdiMessageTextOutline,
   mdiRadioboxMarked,
   mdiVariable,
   mdiCodeTags,
@@ -303,6 +305,11 @@ import {
   mdiXml,
   mdiHumanGreetingProximity,
   mdiPublish,
+  mdiMicrophone,
+  mdiVideoVintage,
+  mdiLongitude,
+  mdiLatitude,
+  mdiDrag,
 } from "@mdi/js";
 
 export const icons = {
@@ -440,6 +447,7 @@ export const icons = {
   shield: mdiShield,
   contentSave: mdiContentSave,
   contentSaveOutline: mdiContentSaveOutline,
+  contentCopy: mdiContentCopy,
   clockAlert: mdiClockAlert,
   clockAlertOutline: mdiClockAlertOutline,
   accountMultiple: mdiAccountMultiple,
@@ -598,6 +606,7 @@ export const icons = {
   chat: mdiChat,
   chatOutline: mdiChatOutline,
   messageText: mdiMessageText,
+  messageTextOutline: mdiMessageTextOutline,
   radioboxMarked: mdiRadioboxMarked,
   variable: mdiVariable,
   codeTags: mdiCodeTags,
@@ -610,4 +619,9 @@ export const icons = {
   navigationVariantOutline: mdiNavigationVariantOutline,
   humanGreetingProximity: mdiHumanGreetingProximity,
   publish: mdiPublish,
+  microphone: mdiMicrophone,
+  videoVintage: mdiVideoVintage,
+  longitude: mdiLongitude,
+  latitude: mdiLatitude,
+  drag: mdiDrag,
 };

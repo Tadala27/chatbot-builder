@@ -4,13 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+
 class FlowVersion extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory;
 
     protected $fillable = [
         'flow_id',
@@ -25,12 +25,14 @@ class FlowVersion extends Model
     ];
 
     protected $casts = [
-        'version_number' => 'integer',
+        'version_number'      => 'integer',
         'ai_fallback_enabled' => 'boolean',
-        'ai_fallback_config' => 'array',
+        'ai_fallback_config'  => 'array',
     ];
 
-    // ─── Relationships ────────────────────────────────────────────────────────
+    // =========================================================================
+    // RELATIONSHIPS
+    // =========================================================================
 
     public function flow(): BelongsTo
     {
@@ -52,11 +54,6 @@ class FlowVersion extends Model
         return $this->hasMany(FlowNode::class);
     }
 
-    public function edges(): HasMany
-    {
-        return $this->hasMany(FlowEdge::class);
-    }
-
     public function conditionGroups(): HasMany
     {
         return $this->hasMany(ConditionGroup::class);
@@ -72,7 +69,9 @@ class FlowVersion extends Model
         return $this->hasMany(Conversation::class);
     }
 
-    // ─── Scopes ───────────────────────────────────────────────────────────────
+    // =========================================================================
+    // SCOPES
+    // =========================================================================
 
     public function scopePublished($query)
     {
@@ -89,7 +88,9 @@ class FlowVersion extends Model
         return $query->where('status', 'locked');
     }
 
-    // ─── Business Logic ───────────────────────────────────────────────────────
+    // =========================================================================
+    // BUSINESS LOGIC
+    // =========================================================================
 
     public function lock(): bool
     {
@@ -105,64 +106,158 @@ class FlowVersion extends Model
         return $this->status === 'draft';
     }
 
+    public function getNodeCount(): int
+    {
+        return $this->nodes()->count();
+    }
+
+    /**
+     * Validate the flow before publishing.
+     *
+    */
     public function validate(): array
     {
         $errors = [];
 
-        // Check if start node exists
+        // Eager-load actions so we don't N+1 inside the loops below
+        $nodes = $this->nodes()->with('actions')->get();
+
+        // ── 1. Start node ─────────────────────────────────────────────────────
         if (!$this->start_node_id) {
             $errors[] = 'No start node defined';
-        } elseif (!$this->nodes()->where('id', $this->start_node_id)->exists()) {
+        } elseif (!$nodes->contains('id', $this->start_node_id)) {
             $errors[] = 'Start node does not exist';
         }
 
-        // Check for orphaned nodes (no incoming edges)
-        $nodesWithIncoming = $this->edges()->pluck('target_node_id')->unique();
-        $orphans = $this->nodes()
-            ->whereNotIn('id', $nodesWithIncoming)
-            ->where('id', '!=', $this->start_node_id)
-            ->count();
-        
-        if ($orphans > 0) {
-            $errors[] = "$orphans orphaned node(s) found";
+        if ($nodes->isEmpty()) {
+            $errors[] = 'Flow has no nodes';
+            return $errors;
         }
 
-        // Check for terminal nodes (nodes with no outgoing edges that aren't marked as terminal)
-        $nodesWithOutgoing = $this->edges()->pluck('source_node_id')->unique();
-        $deadEnds = $this->nodes()
-            ->whereNotIn('id', $nodesWithOutgoing)
-            ->where('is_terminal', false)
-            ->count();
-        
-        if ($deadEnds > 0) {
-            $errors[] = "$deadEnds dead-end node(s) without terminal flag";
+        // ── 2. Collect every UUID that is reachable as a navigation target ────
+        // We read from DB actions — no JSON depth issues here.
+        $referencedIds = collect();
+
+        foreach ($nodes as $node) {
+            $config = $node->config ?? [];
+
+            // Config-level goTo (message / trigger nodes)
+            if (!empty($config['goTo'])) {
+                $referencedIds->push($config['goTo']);
+            }
+
+            // All DB actions (both on_enter and on_select)
+            foreach ($node->actions as $action) {
+                $this->collectTargetsFromActionConfig($action->config ?? [], $referencedIds);
+            }
+        }
+
+        $referencedIds = $referencedIds->unique()->filter()->values();
+
+        // ── 3. Orphaned nodes ─────────────────────────────────────────────────
+        $startNode = $nodes->firstWhere('id', $this->start_node_id);
+
+        $orphans = $nodes->filter(function ($node) use ($startNode, $referencedIds) {
+            if ($startNode && $node->id === $startNode->id) return false;
+
+            // A node is reachable if its uuid OR its config->id appears as a target
+            return !$referencedIds->contains($node->uuid)
+                && !$referencedIds->contains($node->config['id'] ?? null);
+        });
+
+        if ($orphans->count() > 0) {
+            $errors[] = "{$orphans->count()} orphaned node(s) found: "
+                . $orphans->pluck('id')->implode(', ');
+        }
+
+        // ── 4. Dead-end nodes ─────────────────────────────────────────────────
+        $deadEnds = $nodes->filter(function ($node) {
+            if ($node->is_terminal) return false;
+
+            $config   = $node->config ?? [];
+            $nodeKind = $config['kind'] ?? $node->type;
+
+            if ($nodeKind === 'end') return false;
+
+            // Buttons and list: check for on_select DB actions with a navigation target
+            if (in_array($nodeKind, ['buttons', 'list'])) {
+                $hasTarget = $node->actions
+                    ->where('trigger_event', 'on_select')
+                    ->contains(function ($action) {
+                        $cfg = $action->config ?? [];
+                        return !empty($cfg['goTo'])
+                            || !empty($cfg['trueGoTo'])
+                            || !empty($cfg['falseGoTo']);
+                    });
+                return !$hasTarget;
+            }
+
+            // All other nodes: dead-end if no config goTo AND no on_enter navigation action
+            if (!empty($config['goTo'])) return false;
+
+            return !$node->actions
+                ->where('trigger_event', 'on_enter')
+                ->contains(function ($action) {
+                    $cfg = $action->config ?? [];
+                    return !empty($cfg['goTo'])
+                        || !empty($cfg['trueGoTo'])
+                        || !empty($cfg['falseGoTo']);
+                });
+        });
+
+        if ($deadEnds->count() > 0) {
+            $errors[] = "{$deadEnds->count()} dead-end node(s) without a destination: "
+                . $deadEnds->pluck('id')->implode(', ');
         }
 
         return $errors;
     }
 
+    /**
+     * Recursively collect all navigation UUIDs from a single action config.
+     * Handles condition branches that contain nested navigation actions.
+     */
+    private function collectTargetsFromActionConfig(
+        array $actionConfig,
+        \Illuminate\Support\Collection &$uuids
+    ): void {
+        if (!empty($actionConfig['goTo']))      $uuids->push($actionConfig['goTo']);
+        if (!empty($actionConfig['trueGoTo']))  $uuids->push($actionConfig['trueGoTo']);
+        if (!empty($actionConfig['falseGoTo'])) $uuids->push($actionConfig['falseGoTo']);
+
+        // Condition action branches
+        foreach ($actionConfig['branches'] ?? [] as $branch) {
+            foreach ($branch['actions'] ?? [] as $branchAction) {
+                if (is_array($branchAction)) {
+                    $this->collectTargetsFromActionConfig($branchAction, $uuids);
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // DUPLICATION
+    // =========================================================================
+
     public function duplicateToFlow(Flow $targetFlow): self
     {
-        // Create new version
         $newVersion = $targetFlow->versions()->create([
-            'version_number' => 1,
-            'status' => 'draft',
+            'version_number'      => 1,
+            'status'              => 'draft',
             'ai_fallback_enabled' => $this->ai_fallback_enabled,
-            'ai_fallback_config' => $this->ai_fallback_config,
-            'created_by' => auth()->id(),
+            'ai_fallback_config'  => $this->ai_fallback_config,
+            'created_by'          => auth()->id(),
         ]);
 
-        // Map old node IDs to new node IDs
         $nodeMap = [];
 
-        // Duplicate nodes
-        foreach ($this->nodes as $node) {
-            $newNode = $node->replicate();
+        foreach ($this->nodes()->with('actions')->get() as $node) {
+            $newNode                  = $node->replicate(['actions']);
             $newNode->flow_version_id = $newVersion->id;
             $newNode->save();
-            $nodeMap[$node->id] = $newNode->id;
+            $nodeMap[$node->id]       = $newNode->id;
 
-            // Duplicate node actions
+            // Copy all actions including the new source_item_id / source_item_type fields
             foreach ($node->actions as $action) {
                 $newAction = $action->replicate();
                 $newAction->flow_node_id = $newNode->id;
@@ -170,34 +265,16 @@ class FlowVersion extends Model
             }
         }
 
-        // Duplicate edges with remapped node IDs
-        foreach ($this->edges as $edge) {
-            $newEdge = $edge->replicate();
-            $newEdge->flow_version_id = $newVersion->id;
-            $newEdge->source_node_id = $nodeMap[$edge->source_node_id] ?? null;
-            $newEdge->target_node_id = $nodeMap[$edge->target_node_id] ?? null;
-            $newEdge->save();
-        }
-
-        // Update start/fallback node references
         if ($this->start_node_id && isset($nodeMap[$this->start_node_id])) {
             $newVersion->start_node_id = $nodeMap[$this->start_node_id];
         }
+
         if ($this->fallback_node_id && isset($nodeMap[$this->fallback_node_id])) {
             $newVersion->fallback_node_id = $nodeMap[$this->fallback_node_id];
         }
+
         $newVersion->save();
 
         return $newVersion;
-    }
-
-    public function getNodeCount(): int
-    {
-        return $this->nodes()->count();
-    }
-
-    public function getEdgeCount(): int
-    {
-        return $this->edges()->count();
     }
 }

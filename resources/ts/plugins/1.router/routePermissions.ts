@@ -62,8 +62,6 @@ export const routePermissionsMap: Record<string, RoutePermissions> = {
       "create nodes",
       "edit nodes",
       "delete nodes",
-      "create edges",
-      "delete edges",
       "validate flows",
     ],
     logic: "OR",

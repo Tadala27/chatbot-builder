@@ -4,9 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class Flow extends Model
@@ -99,17 +100,33 @@ class Flow extends Model
 
     public function publish(FlowVersion $version): bool
     {
-        // Lock the version
-        $version->update(['status' => 'published']);
+        // Start a database transaction to ensure data consistency
+        return DB::transaction(function () use ($version) {
+            // Check if there's a currently published version
+            $currentlyPublished = $this->getPublishedVersion();
 
-        // Update flow
-        $this->update([
-            'status' => 'published',
-            'current_published_version_id' => $version->id,
-            'published_at' => now(),
-        ]);
+            if ($currentlyPublished) {
+                // Unpublish the current version (lock it)
+                $currentlyPublished->update(['status' => 'locked']); // or 'draft'
+            }
 
-        return true;
+            // Lock/update the new version
+            $version->update(['status' => 'published']);
+
+            // Update flow with new published version
+            $this->update([
+                'status' => 'published',
+                'current_published_version_id' => $version->id,
+                'published_at' => now(),
+            ]);
+
+            return true;
+        });
+    }
+    // In FlowVersion model
+    public function lock(): bool
+    {
+        return $this->update(['status' => 'locked']); // or 'locked'
     }
 
     public function unpublish(): bool

@@ -169,8 +169,8 @@ return new class extends Migration
                 'subflow',
                 'loop',
                 'end',
-                'media', // ✅ ADDED for completeness
-                'trigger', // ✅ ADDED for completeness
+                'media', 
+                'trigger', 
             ]);
             $table->string('label')->nullable();
             $table->json('content')->nullable();
@@ -186,24 +186,6 @@ return new class extends Migration
             $table->string('ab_group')->nullable();
             $table->integer('ab_weight')->default(100);
             $table->timestamps();
-            $table->softDeletes();
-        });
-
-        /*
-        |--------------------------------------------------------------------------
-        | FLOW EDGES
-        |--------------------------------------------------------------------------
-        */
-        Schema::create('flow_edges', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('flow_version_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('source_node_id')->constrained('flow_nodes')->cascadeOnDelete();
-            $table->foreignId('target_node_id')->constrained('flow_nodes')->cascadeOnDelete();
-            $table->string('source_handle')->nullable();
-            $table->string('label')->nullable();
-            $table->integer('priority')->default(0);
-            $table->timestamps();
-            $table->softDeletes();
         });
 
         /*
@@ -214,31 +196,16 @@ return new class extends Migration
         Schema::create('flow_node_actions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('flow_node_id')->constrained()->cascadeOnDelete();
-            $table->enum('trigger_event', [
-                'on_enter',
-                'on_exit',
-                'on_success',
-                'on_failure',
-                'on_timeout',
-                'on_retry'
-            ]);
-            $table->enum('action_type', [
-                'save_variable',
-                'update_variable',
-                'delete_variable',
-                'api_call',
-                'execute_function',
-                'delay',
-                'tag_user',
-                'assign_agent',
-                'emit_event',
-                'webhook_call'
-            ]);
+            $table->string('source_item_id')->nullable();
+            $table->string('source_item_type')->nullable()->default('node');
+            $table->enum('trigger_event', ['on_enter', 'on_exit', 'on_success', 'on_failure', 'on_timeout', 'on_retry']);
+            $table->enum('action_type', ['save_variable', 'update_variable', 'delete_variable', 'api_call', 'execute_function', 'delay', 'tag_user', 'assign_agent', 'emit_event', 'webhook_call']);
             $table->integer('execution_order')->default(0);
             $table->json('config')->nullable();
             $table->boolean('continue_on_failure')->default(true);
             $table->timestamps();
-            $table->softDeletes();
+
+            $table->index(['flow_node_id', 'source_item_id']);
         });
 
         /*
@@ -261,13 +228,13 @@ return new class extends Migration
                 'equals',
                 'not_equals',
                 'contains',
-                'not_contains', // ✅ ADDED
+                'not_contains',
                 'greater_than',
                 'less_than',
-                'greater_than_or_equal', // ✅ ADDED
-                'less_than_or_equal', // ✅ ADDED
+                'greater_than_or_equal',
+                'less_than_or_equal',
                 'exists',
-                'not_exists', // ✅ ADDED
+                'not_exists',
             ]);
             $table->string('value')->nullable();
             $table->timestamps();
@@ -358,6 +325,18 @@ return new class extends Migration
             $table->index('whatsapp_message_id'); // ✅ RESTORED
         });
 
+        Schema::create('custom_variables', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('flow_id');
+            $table->string('name');
+            $table->enum('save_in', ['bot_variables', 'user_properties']);
+            $table->boolean('use_in_js')->default(false);
+            $table->boolean('is_sensitive')->default(false);
+            $table->timestamps();
+
+            $table->foreign('flow_id')->references('id')->on('flows')->onDelete('cascade');
+        });
+
         /*
         |--------------------------------------------------------------------------
         | CONVERSATION VARIABLES
@@ -366,12 +345,18 @@ return new class extends Migration
         Schema::create('conversation_variables', function (Blueprint $table) {
             $table->id();
             $table->foreignId('conversation_id')->constrained()->cascadeOnDelete();
+
+            $table->foreignId('custom_variable_id')
+                ->nullable()
+                ->constrained()
+                ->nullOnDelete();
+
             $table->string('key');
             $table->text('value')->nullable();
             $table->timestamps();
+
             $table->unique(['conversation_id', 'key']);
         });
-
         /*
         |--------------------------------------------------------------------------
         | VARIABLE LOGS
@@ -413,7 +398,7 @@ return new class extends Migration
             $table->foreignId('assigned_agent_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('started_at')->useCurrent();
             $table->timestamp('ended_at')->nullable();
-            $table->timestamps(); // ✅ ADDED
+            $table->timestamps();
         });
 
         /*
@@ -430,7 +415,7 @@ return new class extends Migration
             $table->text('error_message')->nullable();
             $table->integer('execution_time_ms')->nullable();
             $table->timestamp('created_at')->useCurrent();
-            $table->index(['conversation_id', 'created_at']); // ✅ ADDED for performance
+            $table->index(['conversation_id', 'created_at']);
         });
 
         /*
@@ -581,7 +566,6 @@ return new class extends Migration
         Schema::dropIfExists('conditions');
         Schema::dropIfExists('condition_groups');
         Schema::dropIfExists('flow_node_actions');
-        Schema::dropIfExists('flow_edges');
         Schema::dropIfExists('flow_nodes');
         Schema::dropIfExists('flow_versions');
         Schema::dropIfExists('flows');

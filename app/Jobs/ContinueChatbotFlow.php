@@ -55,7 +55,7 @@ class ContinueChatbotFlow implements ShouldQueue
             }
 
             // Execute next node (public method)
-            $executor->executeNode($this->conversation, $this->nextNode);
+            $executor->executeNodeFlow($this->nextNode, $this->conversation, );
 
             Log::info('Chatbot flow continued successfully', [
                 'conversation_id' => $this->conversation->id,

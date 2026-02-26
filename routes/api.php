@@ -67,16 +67,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::apiResource('flows', Api\FlowController::class);
         Route::prefix('flows/{flow}')->group(function () {
 
-            // Save flow (nodes + edges)
-            Route::post('/save', [Api\FlowController::class, 'saveFlow']);
+            Route::get('/versions', [Api\FlowBuilderController::class, 'getVersions']);
+            Route::get('/versions/{version}', [Api\FlowBuilderController::class, 'getVersion']);
+            Route::post('/versions/new', [Api\FlowBuilderController::class, 'createVersionFromExisting']);
+            Route::post('/auto-save', [Api\FlowBuilderController::class, 'autoSave']);
 
             // Publish flow
-            Route::post('/publish', [Api\FlowController::class, 'publish']);
+            Route::post('/publish', [Api\FlowBuilderController::class, 'publish']);
             Route::post('/unpublish', [Api\FlowController::class, 'unpublish']);
             Route::post('/duplicate', [Api\FlowController::class, 'duplicate']);
 
             // Get variables
-            Route::get('/variables', [Api\FlowController::class, 'getVariables']);
+            Route::get('/variables', [Api\FlowBuilderController::class, 'getVariables']);
+            Route::post('/variables', [Api\VariableController::class, 'store']);
         });
 
         // Custom Functions
@@ -104,7 +107,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // Variables
         Route::prefix('chatbots/{chatbot}/variables')->group(function () {
             Route::get('/', [Api\VariableController::class, 'indexChatbotVariables']);
-            Route::post('/', [Api\VariableController::class, 'storeChatbotVariable']);
             Route::put('{variable}', [Api\VariableController::class, 'updateChatbotVariable']);
             Route::delete('{variable}', [Api\VariableController::class, 'destroyChatbotVariable']);
         });

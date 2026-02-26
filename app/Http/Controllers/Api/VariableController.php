@@ -3,115 +3,65 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Chatbot;
-use App\Models\ChatbotVariable;
-use App\Models\GlobalVariable;
-use App\Models\Tenant;
+use App\Models\CustomVariable;
+use App\Models\Flow;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
 
 class VariableController extends Controller
 {
-    // Chatbot Variables
-    public function indexChatbotVariables(Chatbot $chatbot): JsonResponse
+    /**
+     * Get all custom variables for a flow
+     */
+    public function index(Flow $flow): JsonResponse
     {
+        $variables = CustomVariable::where('flow_id', $flow->id)
+            ->orderBy('name')
+            ->get();
 
-        $variables = $chatbot->variables()->orderBy('key')->get();
-
-        return response()->json(['variables' => $variables]);
+        return response()->json([
+            'variables' => $variables,
+        ]);
     }
 
-    public function storeChatbotVariable(Request $request, Chatbot $chatbot): JsonResponse
+    /**
+     * Store a new custom variable
+     */
+    public function store(Request $request, Flow $flow): JsonResponse
     {
-
-        $validated = $request->validate([
-            'key' => 'required|string|max:255',
-            'default_value' => 'nullable',
-            'data_type' => 'required|in:string,number,boolean,json,date',
-            'scope' => 'required|in:session,user,global',
-            'description' => 'nullable|string',
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'save_in' => 'required|in:bot_variables,user_properties',
+            'use_in_js' => 'boolean',
+            'is_sensitive' => 'boolean',
         ]);
 
-        $exists = $chatbot->variables()->where('key', $validated['key'])->exists();
-        if ($exists) {
+        if ($validator->fails()) {
             return response()->json([
-                'message' => 'Variable key already exists',
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
             ], 422);
         }
 
-        $variable = $chatbot->variables()->create($validated);
-
-        return response()->json([
-            'message' => 'Variable created successfully',
-            'variable' => $variable,
-        ], 201);
-    }
-
-    public function updateChatbotVariable(Request $request, Chatbot $chatbot, ChatbotVariable $variable): JsonResponse
-    {
-
-        if ($variable->chatbot_id !== $chatbot->id) {
-            return response()->json(['message' => 'Variable not found'], 404);
-        }
-
-        $validated = $request->validate([
-            'default_value' => 'nullable',
-            'data_type' => 'sometimes|in:string,number,boolean,json,date',
-            'scope' => 'sometimes|in:session,user,global',
-            'description' => 'nullable|string',
-        ]);
-
-        $variable->update($validated);
-
-        return response()->json([
-            'message' => 'Variable updated successfully',
-            'variable' => $variable,
-        ]);
-    }
-
-    public function destroyChatbotVariable(Chatbot $chatbot, ChatbotVariable $variable): JsonResponse
-    {
-
-        if ($variable->chatbot_id !== $chatbot->id) {
-            return response()->json(['message' => 'Variable not found'], 404);
-        }
-
-        $variable->delete();
-
-        return response()->json(['message' => 'Variable deleted successfully']);
-    }
-
-    // Global Variables
-    public function indexGlobalVariables(): JsonResponse
-    {
-        $tenant = Tenant::current();
-        $variables = GlobalVariable::where('tenant_id', $tenant->id)->orderBy('key')->get();
-
-        return response()->json(['variables' => $variables]);
-    }
-
-    public function storeGlobalVariable(Request $request): JsonResponse
-    {
-        $tenant = Tenant::current();
-
-        $validated = $request->validate([
-            'key' => 'required|string|max:255',
-            'value' => 'nullable',
-            'data_type' => 'required|in:string,number,boolean,json,date',
-            'is_encrypted' => 'boolean',
-            'description' => 'nullable|string',
-        ]);
-
-        $exists = GlobalVariable::where('tenant_id', $tenant->id)
-            ->where('key', $validated['key'])
+        // Check if variable name already exists in this flow
+        $exists = CustomVariable::where('flow_id', $flow->id)
+            ->where('name', $request->name)
             ->exists();
 
         if ($exists) {
-            return response()->json(['message' => 'Variable key already exists'], 422);
+            return response()->json([
+                'message' => 'Variable name already exists in this flow',
+            ], 422);
         }
 
-        $validated['tenant_id'] = $tenant->id;
-        $variable = GlobalVariable::create($validated);
+        $variable = CustomVariable::create([
+            'flow_id' => $flow->id,
+            'name' => $request->name,
+            'save_in' => $request->save_in,
+            'use_in_js' => $request->use_in_js ?? false,
+            'is_sensitive' => $request->is_sensitive ?? false,
+        ]);
 
         return response()->json([
             'message' => 'Variable created successfully',
@@ -119,22 +69,50 @@ class VariableController extends Controller
         ], 201);
     }
 
-    public function updateGlobalVariable(Request $request, GlobalVariable $variable): JsonResponse
+    /**
+     * Update a custom variable
+     */
+    public function update(Request $request, Flow $flow, CustomVariable $variable): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($variable->tenant_id !== $tenant->id) {
+        // Verify variable belongs to this flow
+        if ($variable->flow_id !== $flow->id) {
             return response()->json(['message' => 'Variable not found'], 404);
         }
 
-        $validated = $request->validate([
-            'value' => 'nullable',
-            'data_type' => 'sometimes|in:string,number,boolean,json,date',
-            'is_encrypted' => 'sometimes|boolean',
-            'description' => 'nullable|string',
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|string|max:255',
+            'save_in' => 'sometimes|in:bot_variables,user_properties',
+            'use_in_js' => 'boolean',
+            'is_sensitive' => 'boolean',
         ]);
 
-        $variable->update($validated);
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        // If name is being changed, check for duplicates
+        if ($request->has('name') && $request->name !== $variable->name) {
+            $exists = CustomVariable::where('flow_id', $flow->id)
+                ->where('name', $request->name)
+                ->where('id', '!=', $variable->id)
+                ->exists();
+
+            if ($exists) {
+                return response()->json([
+                    'message' => 'Variable name already exists in this flow',
+                ], 422);
+            }
+        }
+
+        $variable->update($request->only([
+            'name',
+            'save_in',
+            'use_in_js',
+            'is_sensitive',
+        ]));
 
         return response()->json([
             'message' => 'Variable updated successfully',
@@ -142,16 +120,20 @@ class VariableController extends Controller
         ]);
     }
 
-    public function destroyGlobalVariable(GlobalVariable $variable): JsonResponse
+    /**
+     * Delete a custom variable
+     */
+    public function destroy(Flow $flow, CustomVariable $variable): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($variable->tenant_id !== $tenant->id) {
+        // Verify variable belongs to this flow
+        if ($variable->flow_id !== $flow->id) {
             return response()->json(['message' => 'Variable not found'], 404);
         }
 
         $variable->delete();
 
-        return response()->json(['message' => 'Variable deleted successfully']);
+        return response()->json([
+            'message' => 'Variable deleted successfully',
+        ]);
     }
 }

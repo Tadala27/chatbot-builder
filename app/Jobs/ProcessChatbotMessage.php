@@ -44,8 +44,7 @@ class ProcessChatbotMessage implements ShouldQueue
             Log::info('Processing chatbot message', [
                 'tenant_id' => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
-                'message_id' => $this->message->id,
-                'flow_id' => $this->conversation->flow_id,
+                'message' => $this->message,
             ]);
 
             // Execute the flow

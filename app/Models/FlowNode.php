@@ -6,13 +6,10 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class FlowNode extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory;
 
     protected $fillable = [
         'flow_version_id',
@@ -34,22 +31,29 @@ class FlowNode extends Model
     ];
 
     protected $casts = [
-        'content' => 'array',
-        'config' => 'array',
-        'position_x' => 'float',
-        'position_y' => 'float',
-        'retry_limit' => 'integer',
+        'content'        => 'array',
+        'config'         => 'array',
+        'position_x'     => 'float',
+        'position_y'     => 'float',
+        'retry_limit'    => 'integer',
         'timeout_seconds' => 'integer',
         'is_entry_point' => 'boolean',
-        'is_terminal' => 'boolean',
-        'ab_weight' => 'integer',
+        'is_terminal'    => 'boolean',
+        'ab_weight'      => 'integer',
     ];
 
-    // ─── Relationships ────────────────────────────────────────────────────────
+    // =========================================================================
+    // RELATIONSHIPS
+    // =========================================================================
 
     public function flowVersion(): BelongsTo
     {
         return $this->belongsTo(FlowVersion::class);
+    }
+
+    public function actions(): HasMany
+    {
+        return $this->hasMany(FlowNodeAction::class);
     }
 
     public function retryFallbackNode(): BelongsTo
@@ -62,39 +66,98 @@ class FlowNode extends Model
         return $this->belongsTo(FlowNode::class, 'timeout_next_node_id');
     }
 
-    public function outgoingEdges(): HasMany
+    // =========================================================================
+    // ACTION HELPERS
+    // =========================================================================
+
+    /**
+     * Get on_enter actions for this node (run when node is entered).
+     * Returns array of action config arrays.
+     */
+    public function getEnterActions(): array
     {
-        return $this->hasMany(FlowEdge::class, 'source_node_id');
+        return $this->actions()
+            ->where('trigger_event', 'on_enter')
+            ->where(function ($q) {
+                $q->whereNull('source_item_type')
+                    ->orWhere('source_item_type', 'node');
+            })
+            ->orderBy('execution_order')
+            ->get()
+            ->pluck('config')
+            ->filter(fn($c) => is_array($c))
+            ->values()
+            ->toArray();
     }
 
-    public function incomingEdges(): HasMany
+    /**
+     * Get on_select actions for a specific button or list row.
+     * Returns array of action config arrays.
+     *
+     * @param string $itemId The button id or row id
+     */
+    public function getSelectActionsForItem(string $itemId): array
     {
-        return $this->hasMany(FlowEdge::class, 'target_node_id');
+        return $this->actions()
+            ->where('trigger_event', 'on_select')
+            ->where('source_item_id', $itemId)
+            ->where('source_item_type', 'in', ['button', 'row'])
+            ->orderBy('execution_order')
+            ->get()
+            ->pluck('config')
+            ->filter(fn($c) => is_array($c))
+            ->values()
+            ->toArray();
+    }
+    /**
+     * Get on_success actions (run after successful execution).
+     */
+    public function getSuccessActions(): array
+    {
+        return $this->actions()
+            ->where('trigger_event', 'on_success')
+            ->where(function ($q) {
+                $q->whereNull('source_item_type')
+                    ->orWhere('source_item_type', 'node');
+            })
+            ->orderBy('execution_order')
+            ->get()
+            ->pluck('config')
+            ->filter(fn($c) => is_array($c))
+            ->values()
+            ->toArray();
     }
 
-    public function actions(): HasMany
+    // =========================================================================
+    // BUSINESS LOGIC
+    // =========================================================================
+
+    public function isInteractive(): bool
     {
-        return $this->hasMany(FlowNodeAction::class);
+        return in_array($this->type, ['buttons', 'list', 'input']);
     }
 
-    public function messages(): HasMany
+    public function requiresUserInput(): bool
     {
-        return $this->hasMany(Message::class);
+        $config = $this->config ?? [];
+        return !empty($config['inputVariable']) || $this->isInteractive();
     }
 
-    public function metrics(): HasMany
+    public function getNextNodeUuid(): ?string
     {
-        return $this->hasMany(NodeMetric::class);
+        return $this->config['goTo'] ?? null;
     }
 
-    public function executionLogs(): HasMany
+    public function hasActions(): bool
     {
-        return $this->hasMany(FlowExecutionLog::class);
+        return $this->actions()->exists();
     }
 
-    // ─── Scopes ───────────────────────────────────────────────────────────────
+    // =========================================================================
+    // SCOPES
+    // =========================================================================
 
-    public function scopeEntryPoints($query)
+    public function scopeEntryPoint($query)
     {
         return $query->where('is_entry_point', true);
     }
@@ -104,152 +167,8 @@ class FlowNode extends Model
         return $query->where('is_terminal', true);
     }
 
-    public function scopeOfType($query, string $type)
+    public function scopeByType($query, string $type)
     {
         return $query->where('type', $type);
-    }
-
-    // ─── Boot ─────────────────────────────────────────────────────────────────
-
-    public static function boot()
-    {
-        parent::boot();
-
-        static::creating(function ($node) {
-            if (empty($node->uuid)) {
-                $node->uuid = (string) Str::uuid();
-            }
-        });
-    }
-
-    // ─── Business Logic ───────────────────────────────────────────────────────
-
-    public function getNextNodes(): array
-    {
-        return $this->outgoingEdges()
-            ->with('targetNode')
-            ->orderBy('priority')
-            ->get()
-            ->pluck('targetNode')
-            ->toArray();
-    }
-
-    public function hasNextNode(): bool
-    {
-        return $this->outgoingEdges()->exists();
-    }
-
-    public function isHandoff(): bool
-    {
-        return $this->type === 'handoff';
-    }
-
-    public function isCondition(): bool
-    {
-        return $this->type === 'condition';
-    }
-
-    public function requiresUserInput(): bool
-    {
-        return in_array($this->type, ['input', 'buttons', 'list']);
-    }
-
-    public function getActionsForEvent(string $event): array
-    {
-        return $this->actions()
-            ->where('trigger_event', $event)
-            ->orderBy('execution_order')
-            ->get()
-            ->toArray();
-    }
-
-    // ─── FIXED: Metric Increment Methods ─────────────────────────────────────
-
-    public function incrementEntered(?string $date = null): void
-    {
-        $date = $date ?? now()->toDateString();
-
-        DB::table('node_metrics')
-            ->updateOrInsert(
-                [
-                    'flow_node_id' => $this->id,
-                    'metric_date' => $date
-                ],
-                [
-                    'entered_count' => DB::raw('COALESCE(entered_count, 0) + 1'),
-                    'completed_count' => DB::raw('COALESCE(completed_count, 0)'),
-                    'failed_count' => DB::raw('COALESCE(failed_count, 0)'),
-                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
-                    'updated_at' => now(),
-                ]
-            );
-    }
-
-    public function incrementCompleted(?string $date = null): void
-    {
-        $date = $date ?? now()->toDateString();
-
-        DB::table('node_metrics')
-            ->updateOrInsert(
-                [
-                    'flow_node_id' => $this->id,
-                    'metric_date' => $date
-                ],
-                [
-                    'entered_count' => DB::raw('COALESCE(entered_count, 0)'),
-                    'completed_count' => DB::raw('COALESCE(completed_count, 0) + 1'),
-                    'failed_count' => DB::raw('COALESCE(failed_count, 0)'),
-                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
-                    'updated_at' => now(),
-                ]
-            );
-    }
-
-    public function incrementFailed(?string $date = null): void
-    {
-        $date = $date ?? now()->toDateString();
-
-        DB::table('node_metrics')
-            ->updateOrInsert(
-                [
-                    'flow_node_id' => $this->id,
-                    'metric_date' => $date
-                ],
-                [
-                    'entered_count' => DB::raw('COALESCE(entered_count, 0)'),
-                    'completed_count' => DB::raw('COALESCE(completed_count, 0)'),
-                    'failed_count' => DB::raw('COALESCE(failed_count, 0) + 1'),
-                    'created_at' => DB::raw('COALESCE(created_at, NOW())'),
-                    'updated_at' => now(),
-                ]
-            );
-    }
-
-    // ─── Metric Getters ───────────────────────────────────────────────────────
-
-    public function getCompletionRate(): float
-    {
-        $metrics = $this->metrics()->selectRaw('
-            SUM(entered_count) as total_entered,
-            SUM(completed_count) as total_completed
-        ')->first();
-
-        if (!$metrics || $metrics->total_entered == 0) {
-            return 0;
-        }
-
-        return round(($metrics->total_completed / $metrics->total_entered) * 100, 2);
-    }
-
-    public function getDropOffRate(): float
-    {
-        return 100 - $this->getCompletionRate();
-    }
-
-    public function getAverageExecutionTime(): int
-    {
-        return $this->executionLogs()
-            ->where('success', true)
-            ->avg('execution_time_ms') ?? 0;
     }
 }
