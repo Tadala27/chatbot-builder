@@ -10,45 +10,32 @@ use Illuminate\Support\Facades\Log;
 
 class WebhookController extends Controller
 {
-    protected WhatsAppWebhookService $webhookService;
+    public function __construct(protected WhatsAppWebhookService $webhookService) {}
 
-    public function __construct(WhatsAppWebhookService $webhookService)
+    // GET /webhook/whatsapp  — Facebook verification handshake
+    public function verifyWhatsApp(Request $request): Response
     {
-        $this->webhookService = $webhookService;
-    }
+        Log::debug('WhatsApp webhook verification request', $request->query());
 
-    /**
-     * Verify WhatsApp webhook (GET request from Facebook)
-     */
-    public function verifyWhatsApp(Request $request)
-    {
-        Log::debug($request);
-        $params = [
-            'hub_mode' => $request->query('hub_mode'),
-            'hub_verify_token' => $request->query('hub_verify_token'),
-            'hub_challenge' => $request->query('hub_challenge'),
-        ];
+        $result = $this->webhookService->verifyWebhook([
+            'hub_mode'         => $request->query('hub.mode'),
+            'hub_verify_token' => $request->query('hub.verify_token'),
+            'hub_challenge'    => $request->query('hub.challenge'),
+        ]);
 
-        $result = $this->webhookService->verifyWebhook($params);
-
-        if (is_int($result) && $result === 403) {
+        if ($result === 403) {
             return response('Forbidden', 403);
         }
 
-        return response($result, 200);
+        return response((string) $result, 200);
     }
 
-    /**
-     * Handle WhatsApp webhook (POST request from Facebook)
-     */
+    // POST /webhook/whatsapp  — Inbound messages and status updates
     public function handleWhatsApp(Request $request): Response
     {
-        $payload = $request->all();
+        // Always acknowledge immediately; process asynchronously
+        $this->webhookService->handleWebhook($request->all());
 
-        // Process webhook asynchronously
-        $this->webhookService->handleWebhook($payload);
-
-        // Always return 200 OK immediately
         return response('OK', 200);
     }
 }

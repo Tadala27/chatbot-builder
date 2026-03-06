@@ -25,7 +25,7 @@ class TenantMiddleware
         }
 
         // Get user's primary tenant or first available tenant
-        $tenant = $user->getPrimaryTenant() ?? $user->tenants()->first();
+        $tenant = $user->primaryTenant() ?? $user->tenants()->first();
 
         if (!$tenant) {
             return response()->json([

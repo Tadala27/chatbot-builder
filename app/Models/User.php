@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -14,36 +16,24 @@ use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable, HasApiTokens, HasRoles, LogsActivity, CausesActivity;
+    use HasApiTokens, HasFactory, Notifiable, HasRoles, LogsActivity, CausesActivity;
 
     protected $fillable = [
-        'name',
-        'email',
-        'password',
-        'is_active',
-        'last_login',
-        'locked_until',
-        'failed_login_attempts',
-        'password_reset_required',
-        'is_super_admin',
-        'avatar',
-        'timezone',
-        'locale',
+        'name', 'email', 'password',
+        'is_active', 'is_super_admin', 'avatar', 'timezone', 'locale',
+        'last_login', 'locked_until', 'failed_login_attempts', 'password_reset_required',
     ];
 
-    protected $hidden = [
-        'password',
-        'remember_token',
-    ];
+    protected $hidden = ['password', 'remember_token'];
 
     protected $casts = [
-        'email_verified_at' => 'datetime',
-        'last_login' => 'datetime',
-        'locked_until' => 'datetime',
-        'is_active' => 'boolean',
+        'email_verified_at'       => 'datetime',
+        'last_login'              => 'datetime',
+        'locked_until'            => 'datetime',
+        'password'                => 'hashed',
+        'is_active'               => 'boolean',
+        'is_super_admin'          => 'boolean',
         'password_reset_required' => 'boolean',
-        'is_super_admin' => 'boolean',
-        'password' => 'hashed',
     ];
 
     public function getActivitylogOptions(): LogOptions
@@ -54,33 +44,31 @@ class User extends Authenticatable
             ->dontSubmitEmptyLogs();
     }
 
-    // Relationships
-    public function tenants()
+    public function tenants(): BelongsToMany
     {
         return $this->belongsToMany(Tenant::class, 'tenant_users')
-            ->withPivot('is_primary', 'joined_at')
-            ->withTimestamps();
+                    ->withPivot('is_primary', 'joined_at')
+                    ->withTimestamps();
     }
 
-    // CHANGE: Update relationship names
-    public function flows()  // instead of chatbots()
+    public function bots(): HasMany
     {
-        return $this->hasMany(Flow::class, 'created_by');
+        return $this->hasMany(Bot::class);
     }
 
-    public function flowVersions()  // NEW
+    public function createdFlowVersions(): HasMany
     {
         return $this->hasMany(FlowVersion::class, 'created_by');
     }
 
-    public function customFunctions()
-    {
-        return $this->hasMany(CustomFunction::class, 'created_by');
-    }
-
-    public function assignedConversations()
+    public function assignedConversations(): HasMany
     {
         return $this->hasMany(Conversation::class, 'assigned_agent_id');
+    }
+
+    public function agentHandoverLogs(): HasMany
+    {
+        return $this->hasMany(AgentHandoverLog::class, 'assigned_agent_id');
     }
 
     // Helper methods
@@ -97,29 +85,11 @@ class User extends Authenticatable
         return $this->tenants->contains($tenant->id);
     }
 
-    public function getPrimaryTenant(): ?Tenant
+    public function primaryTenant(): ?Tenant
     {
         return $this->tenants()->wherePivot('is_primary', true)->first();
     }
-
-    public function setPrimaryTenant(Tenant $tenant): void
-    {
-        // Remove primary from all current tenants
-        $this->tenants()->updateExistingPivot(
-            $this->tenants()->pluck('id')->toArray(),
-            ['is_primary' => false]
-        );
-
-        // Set new primary
-        $this->tenants()->updateExistingPivot($tenant->id, ['is_primary' => true]);
-    }
-
-    public function getCurrentTenant(): ?Tenant
-    {
-        return Tenant::current();
-    }
-
-    public function incrementFailedLogin()
+     public function incrementFailedLogin()
     {
         $this->failed_login_attempts++;
         $this->save();

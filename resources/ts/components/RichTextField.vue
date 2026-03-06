@@ -6,24 +6,16 @@
     </v-label>
 
     <!-- Field Container -->
-    <div
-      ref="fieldContainer"
-      class="field-container"
-      :class="{
-        'is-focused': isFocused,
-        'has-error': errorMessages?.length || isOverLimit,
-        'is-disabled': disabled,
-      }"
-      @click="focusEditor"
-    >
+    <div ref="fieldContainer" class="field-container" :class="{
+      'is-focused': isFocused,
+      'has-error': errorMessages?.length || isOverLimit,
+      'is-disabled': disabled,
+    }" @click="focusEditor">
       <!-- Floating Label -->
-      <label
-        class="field-label"
-        :class="{
-          'field-label-floating': isFocused || hasContent,
-          'text-error': errorMessages?.length || isOverLimit,
-        }"
-      >
+      <label class="field-label" :class="{
+        'field-label-floating': isFocused || hasContent,
+        'text-error': errorMessages?.length || isOverLimit,
+      }">
         {{ placeholder }}
       </label>
 
@@ -31,47 +23,23 @@
       <editor-content :editor="editor" class="field-content" />
 
       <!-- Variable Picker -->
-      <div
-        v-if="editor && availableVariables?.length"
-        class="variable-picker"
-        @click.stop
-      >
+      <div v-if="editor && availableVariables?.length" class="variable-picker" @click.stop>
         <v-menu v-model="variableMenu" :close-on-content-click="false">
           <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon
-              size="x-small"
-              variant="text"
-              :disabled="disabled || isOverLimit"
-              title="Insert Variable {{var}}"
-            >
+            <v-btn v-bind="props" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
+              title="Insert Variable">
               <v-icon>$xml</v-icon>
             </v-btn>
           </template>
 
           <v-card min-width="250" max-width="300">
             <v-card-text class="pa-2">
-              <v-text-field
-                v-model="variableSearch"
-                placeholder="Search variables..."
-                density="compact"
-                variant="outlined"
-                hide-details
-                prepend-inner-icon="$magnify"
-                class="mb-2"
-              />
+              <v-text-field v-model="variableSearch" placeholder="Search variables..." density="compact"
+                variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
 
-              <v-list
-                density="compact"
-                style="max-height: 250px; overflow-y: auto"
-              >
-                <v-list-item
-                  v-for="variable in filteredVariables"
-                  :key="variable"
-                  @click="insertVariable(variable)"
-                  class="cursor-pointer"
-                >
+              <v-list density="compact" style="max-height: 250px; overflow-y: auto">
+                <v-list-item v-for="variable in filteredVariables" :key="variable" @click="insertVariable(variable)"
+                  class="cursor-pointer">
                   <v-list-item-title>
                     <v-chip size="small" color="primary" variant="tonal">
                       {{ formatVariable(variable) }}
@@ -95,45 +63,30 @@
     <div class="d-flex justify-space-between align-start mt-1">
       <div>
         <!-- Error Messages -->
-        <div
-          v-if="errorMessages?.length && !hideDetails"
-          class="text-error text-caption ml-3"
-        >
+        <div v-if="errorMessages?.length && !hideDetails" class="text-error text-caption ml-3">
           {{ Array.isArray(errorMessages) ? errorMessages[0] : errorMessages }}
         </div>
 
         <!-- Hint -->
-        <div
-          v-if="hint && !errorMessages?.length && !hideDetails"
-          class="text-caption ml-3"
-        >
+        <div v-if="hint && !errorMessages?.length && !hideDetails" class="text-caption ml-3">
           {{ hint }}
         </div>
       </div>
 
       <!-- Character Counter -->
-      <div
-        v-if="showCharacterCount"
-        class="text-caption mr-3"
-        :class="{
-          'text-error': isOverLimit,
-          'text-disabled': !isOverLimit && characterCount > 0,
-          'text-grey': characterCount === 0,
-        }"
-      >
-        {{ characterCount }} / {{ maxLength }} characters
-        <v-tooltip v-if="maxLength" location="top">
+      <div v-if="showCharacterCount" class="text-caption mr-3" :class="{
+        'text-error': isOverLimit,
+        'text-disabled': !isOverLimit && characterCount > 0,
+        'text-grey': characterCount === 0,
+      }">
+        {{ characterCount }} / {{ effectiveMaxLength }} characters
+        <v-tooltip v-if="effectiveMaxLength" location="top">
           <template #activator="{ props }">
-            <v-icon
-              v-bind="props"
-              size="x-small"
-              class="ml-1"
-              :color="isOverLimit ? 'error' : 'grey'"
-            >
+            <v-icon v-bind="props" size="x-small" class="ml-1" :color="isOverLimit ? 'error' : 'grey'">
               $information
             </v-icon>
           </template>
-          <span>Maximum {{ maxLength }} characters</span>
+          <span>Maximum {{ effectiveMaxLength }} characters</span>
         </v-tooltip>
       </div>
     </div>
@@ -158,22 +111,21 @@ const props = withDefaults(
     hideDetails?: boolean;
     maxLength?: number;
     fieldType?:
-      | "header"
-      | "body"
-      | "footer"
-      | "button"
-      | "title"
-      | "description";
+    | "header"
+    | "body"
+    | "footer"
+    | "button"
+    | "title"
+    | "description";
   }>(),
   {
     disabled: false,
     hideDetails: false,
-    maxLength: 255, // Default max length
+    maxLength: 255,
     fieldType: "body",
   },
 );
 
-// Also update the emit to handle null
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "focus"): void;
@@ -223,6 +175,31 @@ const isOverLimit = computed(() => {
 const showCharacterCount = computed(() => {
   return !props.hideDetails && effectiveMaxLength.value > 0;
 });
+
+// Helper function to check if document has actual content
+function hasDocumentContent(editor: Editor): boolean {
+  const doc = editor.state.doc;
+
+  // Check if there's any content beyond just empty paragraphs
+  for (let i = 0; i < doc.childCount; i++) {
+    const node = doc.child(i);
+
+    // If it's not a paragraph, it has content
+    if (node.type.name !== 'paragraph') return true;
+
+    // If it's a paragraph with content (including variable nodes)
+    if (node.content && node.content.childCount > 0) {
+      // Check if any child is not just empty text
+      for (let j = 0; j < node.content.childCount; j++) {
+        const child = node.content.child(j);
+        if (child.type.name === 'variable') return true;
+        if (child.text && child.text.trim().length > 0) return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 // Custom Variable Node Extension
 const VariableNode = Node.create({
@@ -293,6 +270,86 @@ const VariableNode = Node.create({
   },
 });
 
+// Parse value to editor content
+function parseValue(value: string | null | undefined): any {
+  if (!value) {
+    return {
+      type: "doc",
+      content: [{ type: "paragraph", content: [] }],
+    };
+  }
+
+  const lines = value.split(/\r?\n/);
+
+  const content = lines.map((line) => {
+    const nodes: any[] = [];
+    let currentPos = 0;
+
+    // Match variables: {{variable_name}}
+    const variableRegex = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
+    const matches = Array.from(line.matchAll(variableRegex));
+
+    if (matches.length === 0 && line.length === 0) {
+      return { type: "paragraph", content: [] };
+    }
+
+    matches.forEach((match) => {
+      const [fullMatch, varName] = match;
+      const matchPos = match.index!;
+
+      // Add text before variable
+      if (matchPos > currentPos) {
+        const textBefore = line.slice(currentPos, matchPos);
+        nodes.push({ type: "text", text: textBefore });
+      }
+
+      // Add variable node
+      nodes.push({
+        type: "variable",
+        attrs: { name: varName },
+      });
+
+      currentPos = matchPos + fullMatch.length;
+    });
+
+    // Add remaining text
+    if (currentPos < line.length) {
+      const textAfter = line.slice(currentPos);
+      nodes.push({ type: "text", text: textAfter });
+    }
+
+    return {
+      type: "paragraph",
+      content: nodes,
+    };
+  });
+
+  return {
+    type: "doc",
+    content,
+  };
+}
+
+// Serialize editor content
+function serializeEditorState(editor: Editor): string {
+  const json = editor.getJSON();
+
+  return (json.content || [])
+    .map((block: any) => {
+      if (!block || !block.content || block.content.length === 0) return "";
+
+      return block.content
+        .map((node: any) => {
+          if (node.type === "variable") {
+            return `{{${node.attrs.name}}}`;
+          }
+          return node.text || "";
+        })
+        .join("");
+    })
+    .join("\n");
+}
+
 // Editor setup
 onMounted(() => {
   editor.value = new Editor({
@@ -326,7 +383,7 @@ onMounted(() => {
         editor.commands.setContent(parseValue(props.modelValue));
       }
 
-      hasContent.value = editor.state.doc.textContent.length > 0;
+      hasContent.value = hasDocumentContent(editor);
     },
     onFocus: () => {
       isFocused.value = true;
@@ -344,9 +401,11 @@ onMounted(() => {
     editable: !props.disabled,
   });
 
-  // Set initial hasContent and character count
-  hasContent.value = editor.value.state.doc.textContent.length > 0;
-  characterCount.value = editor.value.state.doc.textContent.length;
+  // Set initial state
+  if (editor.value) {
+    hasContent.value = hasDocumentContent(editor.value);
+    characterCount.value = editor.value.state.doc.textContent.length;
+  }
 });
 
 // Watch disabled prop
@@ -361,10 +420,13 @@ watch(
 watch(
   () => props.modelValue,
   (newValue) => {
-    if (editor.value && newValue !== serializeEditorState(editor.value)) {
-      editor.value.commands.setContent(parseValue(newValue));
-      hasContent.value = editor.value.state.doc.textContent.length > 0;
-      characterCount.value = editor.value.state.doc.textContent.length;
+    if (editor.value) {
+      const currentContent = serializeEditorState(editor.value);
+      if (newValue !== currentContent) {
+        editor.value.commands.setContent(parseValue(newValue));
+        hasContent.value = hasDocumentContent(editor.value);
+        characterCount.value = editor.value.state.doc.textContent.length;
+      }
     }
   },
 );
@@ -392,87 +454,6 @@ const insertVariable = (variable: string) => {
   }
 };
 
-// Serialize editor content
-function serializeEditorState(editor: Editor): string {
-  const json = editor.getJSON();
-
-  return (json.content || [])
-    .map((block: any) => {
-      if (!block || !block.content) return "";
-
-      return block.content
-        .map((node: any) => {
-          if (node.type === "variable") {
-            return `{{${node.attrs.name}}}`;
-          }
-
-          return node.text || "";
-        })
-        .join("");
-    })
-    .join("\n");
-}
-
-// Parse value to editor content
-function parseValue(value: string | null | undefined): any {
-  if (!value) {
-    return {
-      type: "doc",
-      content: [{ type: "paragraph" }],
-    };
-  }
-
-  const lines = value.split(/\r?\n/);
-
-  const content = lines.map((line) => {
-    const nodes: any[] = [];
-    let currentPos = 0;
-
-    // Match variables: {{variable_name}}
-    const variableRegex = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
-    const matches = Array.from(line.matchAll(variableRegex));
-
-    if (matches.length === 0 && line.length === 0) {
-      return { type: "paragraph" };
-    }
-
-    matches.forEach((match) => {
-      const [fullMatch, varName] = match;
-      const matchPos = match.index!;
-
-      // Add text before variable
-      if (matchPos > currentPos) {
-        const textBefore = line.slice(currentPos, matchPos);
-        nodes.push({ type: "text", text: textBefore });
-      }
-
-      // Add variable node
-      nodes.push({
-        type: "variable",
-        attrs: { name: varName },
-      });
-
-      currentPos = matchPos + fullMatch.length;
-    });
-
-    // Add remaining text
-    if (currentPos < line.length) {
-      const textAfter = line.slice(currentPos);
-      nodes.push({ type: "text", text: textAfter });
-    }
-
-    return {
-      type: "paragraph",
-      content: nodes.length > 0 ? nodes : undefined,
-    };
-  });
-
-  return {
-    type: "doc",
-    content,
-  };
-}
-
 // Cleanup
 onBeforeUnmount(() => {
   editor.value?.destroy();
@@ -489,17 +470,17 @@ onBeforeUnmount(() => {
   border: 1px solid #d1d5db;
   border-radius: 9px;
   padding-left: 12px;
-  min-height: max(
-    var(--v-input-control-height, 56px),
-    1.5rem + var(--v-field-input-padding-top) +
-      var(--v-field-input-padding-bottom)
-  );
+  padding-right: 32px;
+  border-color: rgb(var(--v-theme-inputBorder));
+  min-height: max(var(--v-input-control-height, 56px),
+      1.5rem + var(--v-field-input-padding-top) + var(--v-field-input-padding-bottom));
   transition: border-color 0.2s ease;
   cursor: text;
 }
 
 .field-container.is-focused {
   border-color: rgb(var(--v-theme-inputBorder));
+  
 }
 
 .field-container.has-error {
@@ -514,9 +495,10 @@ onBeforeUnmount(() => {
 
 .field-label {
   position: absolute;
-  top: 10px;
-  left: 25px;
-  color: #9ca3af;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  color: rgb(var(--v-theme-lightText));
   font-size: 14px;
   pointer-events: none;
   transition: all 0.2s ease;
@@ -526,8 +508,15 @@ onBeforeUnmount(() => {
 
 .field-label-floating {
   top: -8px;
-  font-size: 12px;
-  background: rgb(var(--v-theme-containerBg));
+  left: 25px;
+  transform: translateY(0);
+  font-size: 11px;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-lightText));
+}
+
+.field-label-floating.text-error {
+  color: rgb(var(--v-theme-error));
 }
 
 .field-content {
@@ -539,8 +528,8 @@ onBeforeUnmount(() => {
 
 .variable-picker {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  right: 8px;
+  bottom: 8px;
   z-index: 5;
 }
 
@@ -549,7 +538,7 @@ onBeforeUnmount(() => {
 }
 
 :deep(.variable-badge) {
-  background-color: #e3f2fd;
+  background-color: rgb(var(--v-theme-primary), 0.1);
   border: 1px solid rgb(var(--v-theme-primary));
   border-radius: 4px;
   padding: 2px 8px;
@@ -575,6 +564,14 @@ onBeforeUnmount(() => {
   padding-inline: var(--v-field-padding-start) var(--v-field-padding-end);
   padding-top: var(--v-field-input-padding-top);
   padding-bottom: var(--v-field-input-padding-bottom);
+}
+
+:deep(.ProseMirror p:first-child) {
+  margin-top: 0;
+}
+
+:deep(.ProseMirror p:last-child) {
+  margin-bottom: 0;
 }
 
 /* Dark mode support */

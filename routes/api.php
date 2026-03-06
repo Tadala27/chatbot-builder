@@ -1,159 +1,209 @@
 <?php
 
-use App\Http\Controllers\Api;
-use App\Http\Controllers\WhatsAppController;
+use App\Http\Controllers\Api\AnalyticsController;
+use App\Http\Controllers\Api\ApiIntegrationController;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BotController;
+use App\Http\Controllers\Api\ConversationController;
+use App\Http\Controllers\Api\CustomFunctionController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\FlowBuilderController;
+use App\Http\Controllers\Api\FlowController;
+use App\Http\Controllers\Api\MediaUploadController;
+use App\Http\Controllers\Api\MessageTemplateController;
+use App\Http\Controllers\Api\SettingsController;
+use App\Http\Controllers\Api\TeamController;
+use App\Http\Controllers\Api\TenantController;
+use App\Http\Controllers\Api\VariableController;
+use App\Http\Controllers\Api\WebhookController;
+use App\Http\Controllers\Api\WhatsAppAccountController;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| API Routes
-|--------------------------------------------------------------------------
-*/
+// =============================================================================
+// PUBLIC — No authentication required
+// =============================================================================
 
-// Public routes
-Route::post('/login', [Api\AuthController::class, 'login']);
-
-// WhatsApp Webhook (public endpoints)
-Route::prefix('webhooks/whatsapp')->group(function () {
-    Route::get('/', [Api\WebhookController::class, 'verifyWhatsApp']);
-    Route::post('/', [Api\WebhookController::class, 'handleWhatsApp']);
+// WhatsApp webhook (Facebook calls these directly)
+Route::prefix('webhook')->group(function () {
+    Route::get('whatsapp',  [WebhookController::class, 'verifyWhatsApp']);
+    Route::post('whatsapp', [WebhookController::class, 'handleWhatsApp']);
 });
-Route::get('/whatsapp/test-account', [WhatsAppController::class, 'getTestAccount']);
 
-// Protected routes
-Route::middleware(['auth:sanctum'])->group(function () {
+// Auth — unauthenticated endpoints
+Route::prefix('auth')->group(function () {
+    Route::post('login',                [AuthController::class, 'login']);
+    Route::post('password/reset-link',  [AuthController::class, 'sendResetLink']);
+    Route::post('password/reset',       [AuthController::class, 'resetPassword']);
+});
 
-    // Auth & Profile
-    Route::post('/logout', [Api\AuthController::class, 'logout']);
-    Route::get('/me', [Api\AuthController::class, 'me']);
-    Route::put('/profile', [Api\AuthController::class, 'updateProfile']);
-    Route::post('/password', [Api\AuthController::class, 'changePassword']);
-    Route::post('/switch-tenant', [Api\AuthController::class, 'switchTenant']);
+// =============================================================================
+// PROTECTED — Requires Sanctum token
+// =============================================================================
 
-    // Super Admin Routes
-    Route::prefix('admin')->middleware(['super-admin'])->group(function () {
-        Route::apiResource('tenants', Api\TenantController::class);
-        Route::post('tenants/{tenant}/activate', [Api\TenantController::class, 'activate']);
-        Route::post('tenants/{tenant}/deactivate', [Api\TenantController::class, 'deactivate']);
-        Route::get('statistics', [Api\TenantController::class, 'statistics']);
+Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
+
+    // -------------------------------------------------------------------------
+    // Auth / Session
+    // -------------------------------------------------------------------------
+    Route::prefix('auth')->group(function () {
+        Route::post('logout',               [AuthController::class, 'logout']);
+        Route::get('me',                  [AuthController::class, 'user']);
+        Route::get('profile',               [AuthController::class, 'profile']);
+        Route::put('profile',               [AuthController::class, 'updateProfile']);
+        Route::put('password',              [AuthController::class, 'updatePassword']);
+        Route::post('password/force-reset', [AuthController::class, 'forceResetPassword']);
+        Route::post('switch-tenant',        [AuthController::class, 'switchTenant']);
     });
 
-    // Tenant Routes (requires tenant context)
-    Route::middleware(['tenant'])->group(function () {
+    // -------------------------------------------------------------------------
+    // Dashboard
+    // -------------------------------------------------------------------------
+    Route::get('dashboard/stats', [DashboardController::class, 'stats']);
 
-        // Dashboard
-        Route::get('dashboard/stats', [Api\DashboardController::class, 'stats']);
+    // -------------------------------------------------------------------------
+    // Settings
+    // -------------------------------------------------------------------------
+    Route::get('settings',  [SettingsController::class, 'index']);
+    Route::put('settings',  [SettingsController::class, 'update']);
 
-        // WhatsApp Accounts
-        Route::prefix('whatsapp')->group(function () {
-            Route::get('accounts', [Api\WhatsAppAccountController::class, 'index']);
-            Route::get('accounts/{account}', [Api\WhatsAppAccountController::class, 'show']);
-            Route::get('signup-url', [Api\WhatsAppAccountController::class, 'getSignupUrl']);
-            Route::post('callback', [Api\WhatsAppAccountController::class, 'handleCallback']);
-            Route::delete('accounts/{account}', [Api\WhatsAppAccountController::class, 'disconnect']);
-            Route::post('accounts/{account}/reconnect', [Api\WhatsAppAccountController::class, 'reconnect']);
-            Route::post('accounts/{account}/sync', [Api\WhatsAppAccountController::class, 'sync']);
-            Route::put('accounts/{account}', [Api\WhatsAppAccountController::class, 'update']);
-            Route::get('accounts/{account}/health', [Api\WhatsAppAccountController::class, 'health']);
+    // -------------------------------------------------------------------------
+    // Team
+    // -------------------------------------------------------------------------
+    Route::prefix('team')->group(function () {
+        Route::get('/',                     [TeamController::class, 'index']);
+        Route::post('invite',               [TeamController::class, 'invite']);
+        Route::put('{user}/role',           [TeamController::class, 'updateRole']);
+        Route::delete('{user}',             [TeamController::class, 'remove']);
+    });
+
+    // -------------------------------------------------------------------------
+    // WhatsApp Accounts  (tenant-scoped)
+    // -------------------------------------------------------------------------
+    Route::prefix('whatsapp-accounts')->group(function () {
+        Route::get('/',                             [WhatsAppAccountController::class, 'index']);
+        Route::get('signup-url',                    [WhatsAppAccountController::class, 'getSignupUrl']);
+        Route::post('callback',                     [WhatsAppAccountController::class, 'handleCallback']);
+        Route::get('{account}',                     [WhatsAppAccountController::class, 'show']);
+        Route::put('{account}',                     [WhatsAppAccountController::class, 'update']);
+        Route::post('{account}/disconnect',         [WhatsAppAccountController::class, 'disconnect']);
+        Route::post('{account}/reconnect',          [WhatsAppAccountController::class, 'reconnect']);
+        Route::post('{account}/sync',               [WhatsAppAccountController::class, 'sync']);
+        Route::get('{account}/health',              [WhatsAppAccountController::class, 'health']);
+    });
+
+    // -------------------------------------------------------------------------
+    // Bots  (tenant → whatsapp_account → bot)
+    // -------------------------------------------------------------------------
+    Route::apiResource('bots', BotController::class);
+
+    // -------------------------------------------------------------------------
+    // Flows  (nested under bots)
+    // -------------------------------------------------------------------------
+    Route::prefix('bots/{bot}')->group(function () {
+
+        // Flow CRUD
+        Route::get('flows',                         [FlowController::class, 'index']);
+        Route::post('flows',                        [FlowController::class, 'store']);
+        Route::get('flows/{flow}',                  [FlowController::class, 'show']);
+        Route::put('flows/{flow}',                  [FlowController::class, 'update']);
+        Route::delete('flows/{flow}',               [FlowController::class, 'destroy']);
+        Route::post('flows/{flow}/unpublish',       [FlowController::class, 'unpublish']);
+        Route::post('flows/{flow}/duplicate',       [FlowController::class, 'duplicate']);
+        Route::get('/media',           [MediaUploadController::class, 'index']);
+
+        // Flow Builder
+        Route::prefix('flows/{flow}/builder')->group(function () {
+            Route::get('/',                         [FlowBuilderController::class, 'show']);
+            Route::post('save',                     [FlowBuilderController::class, 'autoSave']);
+            Route::post('publish',                  [FlowBuilderController::class, 'publish']);
+            Route::get('variables',                 [FlowBuilderController::class, 'getVariables']);
+            Route::get('versions',                  [FlowBuilderController::class, 'getVersions']);
+            Route::post('versions',                 [FlowBuilderController::class, 'createVersion']);
+            Route::get('versions/{version}',        [FlowBuilderController::class, 'getVersion']);
         });
 
-        // Flow Routes
-        // Route::get('/flows', [Api\FlowController::class, 'index']);
-        // Route::post('/flows', [Api\FlowController::class, 'store']);
-        // Route::get('/', [Api\FlowController::class, 'show']);
-        // Route::put('/flows/{flow}', [Api\FlowController::class, 'update']);
-        // Route::delete('/flows/{flow}', [Api\FlowController::class, 'destroy']);
-
-        Route::apiResource('flows', Api\FlowController::class);
-        Route::prefix('flows/{flow}')->group(function () {
-
-            Route::get('/versions', [Api\FlowBuilderController::class, 'getVersions']);
-            Route::get('/versions/{version}', [Api\FlowBuilderController::class, 'getVersion']);
-            Route::post('/versions/new', [Api\FlowBuilderController::class, 'createVersionFromExisting']);
-            Route::post('/auto-save', [Api\FlowBuilderController::class, 'autoSave']);
-
-            // Publish flow
-            Route::post('/publish', [Api\FlowBuilderController::class, 'publish']);
-            Route::post('/unpublish', [Api\FlowController::class, 'unpublish']);
-            Route::post('/duplicate', [Api\FlowController::class, 'duplicate']);
-
-            // Get variables
-            Route::get('/variables', [Api\FlowBuilderController::class, 'getVariables']);
-            Route::post('/variables', [Api\VariableController::class, 'store']);
+        // Flow Analytics
+        Route::prefix('flows/{flow}/analytics')->group(function () {
+            Route::get('/',                         [AnalyticsController::class, 'flow']);
+            Route::get('paths',                     [AnalyticsController::class, 'popularPathsEndpoint']);
+            Route::get('drop-offs',                 [AnalyticsController::class, 'dropOffPointsEndpoint']);
         });
 
-        // Custom Functions
-        Route::prefix('custom-functions')->group(function () {
-            Route::get('/', [Api\CustomFunctionController::class, 'index']);
-            Route::post('/', [Api\CustomFunctionController::class, 'store']);
-            Route::get('/{function}', [Api\CustomFunctionController::class, 'show']);
-            Route::put('/{function}', [Api\CustomFunctionController::class, 'update']);
-            Route::delete('/{function}', [Api\CustomFunctionController::class, 'destroy']);
-            Route::post('/{function}/test', [Api\CustomFunctionController::class, 'test']);
-            Route::get('/{function}/usage', [Api\CustomFunctionController::class, 'usage']);
-        });
+        // Bot-scoped Variables (shared across all flows on this bot)
+        Route::get('variables',                     [VariableController::class, 'index']);
+        Route::post('variables',                    [VariableController::class, 'store']);
+        Route::put('variables/{variable}',          [VariableController::class, 'update']);
+        Route::delete('variables/{variable}',       [VariableController::class, 'destroy']);
 
-        // API Integrations
-        Route::prefix('api-integrations')->group(function () {
-            Route::get('/', [Api\APIIntegrationController::class, 'index']);
-            Route::post('/', [Api\APIIntegrationController::class, 'store']);
-            Route::get('/{integration}', [Api\APIIntegrationController::class, 'show']);
-            Route::put('/{integration}', [Api\APIIntegrationController::class, 'update']);
-            Route::delete('/{integration}', [Api\APIIntegrationController::class, 'destroy']);
-            Route::post('/{integration}/test', [Api\APIIntegrationController::class, 'test']);
-            Route::get('/{integration}/usage', [Api\APIIntegrationController::class, 'usage']);
-        });
+        // Bot-scoped Custom Functions
+        Route::get('functions',                     [CustomFunctionController::class, 'index']);
+        Route::post('functions',                    [CustomFunctionController::class, 'store']);
+        Route::get('functions/{function}',          [CustomFunctionController::class, 'show']);
+        Route::put('functions/{function}',          [CustomFunctionController::class, 'update']);
+        Route::delete('functions/{function}',       [CustomFunctionController::class, 'destroy']);
+        Route::post('functions/{function}/test',    [CustomFunctionController::class, 'test']);
 
-        // Variables
-        Route::prefix('chatbots/{chatbot}/variables')->group(function () {
-            Route::get('/', [Api\VariableController::class, 'indexChatbotVariables']);
-            Route::put('{variable}', [Api\VariableController::class, 'updateChatbotVariable']);
-            Route::delete('{variable}', [Api\VariableController::class, 'destroyChatbotVariable']);
-        });
+        // Bot-scoped API Integrations
+        Route::get('apis',                          [ApiIntegrationController::class, 'index']);
+        Route::post('apis',                         [ApiIntegrationController::class, 'store']);
+        Route::get('apis/{api}',                    [ApiIntegrationController::class, 'show']);
+        Route::put('apis/{api}',                    [ApiIntegrationController::class, 'update']);
+        Route::delete('apis/{api}',                 [ApiIntegrationController::class, 'destroy']);
+        Route::post('apis/{api}/test',              [ApiIntegrationController::class, 'test']);
+    });
 
-        Route::prefix('global-variables')->group(function () {
-            Route::get('/', [Api\VariableController::class, 'indexGlobalVariables']);
-            Route::post('/', [Api\VariableController::class, 'storeGlobalVariable']);
-            Route::put('{variable}', [Api\VariableController::class, 'updateGlobalVariable']);
-            Route::delete('{variable}', [Api\VariableController::class, 'destroyGlobalVariable']);
-        });
+    // -------------------------------------------------------------------------
+    // Conversations  (tenant-scoped; flow is a filter, not a route parent)
+    // -------------------------------------------------------------------------
+    Route::prefix('conversations')->group(function () {
+        Route::get('/',                             [ConversationController::class, 'index']);
+        Route::get('export',                        [ConversationController::class, 'export']);
+        Route::get('statistics',                    [ConversationController::class, 'statistics']);
+        Route::get('{conversation}',                [ConversationController::class, 'show']);
+        Route::get('{conversation}/messages',       [ConversationController::class, 'messages']);
+        Route::post('{conversation}/handoff',       [ConversationController::class, 'handoff']);
+        Route::post('{conversation}/end',           [ConversationController::class, 'end']);
+        Route::delete('{conversation}',             [ConversationController::class, 'destroy']);
+    });
 
-        // Message Templates
-        Route::apiResource('templates', Api\MessageTemplateController::class);
+    // -------------------------------------------------------------------------
+    // Analytics (tenant-level overview + export)
+    // -------------------------------------------------------------------------
+    Route::prefix('analytics')->group(function () {
+        Route::get('overview',                      [AnalyticsController::class, 'overview']);
+        Route::get('export',                        [AnalyticsController::class, 'export']);
+    });
 
-        // Conversations
-        Route::prefix('conversations')->group(function () {
-            Route::get('/', [Api\ConversationController::class, 'index']);
-            Route::get('{conversation}', [Api\ConversationController::class, 'show']);
-            Route::get('{conversation}/messages', [Api\ConversationController::class, 'messages']);
-            Route::post('{conversation}/handoff', [Api\ConversationController::class, 'handoff']);
-            Route::post('{conversation}/end', [Api\ConversationController::class, 'end']);
-            Route::delete('{conversation}', [Api\ConversationController::class, 'destroy']);
-            Route::post('export', [Api\ConversationController::class, 'export']);
-            Route::get('statistics', [Api\ConversationController::class, 'statistics']);
-        });
+    // -------------------------------------------------------------------------
+    // Message Templates  (tenant-scoped)
+    // -------------------------------------------------------------------------
+    Route::apiResource('message-templates', MessageTemplateController::class);
 
-        // Analytics
-        Route::prefix('analytics')->group(function () {
-            Route::get('overview', [Api\AnalyticsController::class, 'overview']);
-            Route::get('chatbot/{chatbot}', [Api\AnalyticsController::class, 'chatbot']);
-            Route::get('chatbot/{chatbot}/popular-paths', [Api\AnalyticsController::class, 'popularPaths']);
-            Route::get('chatbot/{chatbot}/drop-off-points', [Api\AnalyticsController::class, 'dropOffPoints']);
-            Route::post('export', [Api\AnalyticsController::class, 'export']);
-        });
+    // -------------------------------------------------------------------------
+    // Built-in Functions & Templates  (global, no bot scope needed)
+    // -------------------------------------------------------------------------
+    Route::get('built-in-functions',                [CustomFunctionController::class, 'builtInFunctions']);
+    Route::get('function-templates',                [CustomFunctionController::class, 'templates']);
 
-        // Team Management
-        Route::prefix('team')->group(function () {
-            Route::get('users', [Api\TeamController::class, 'index']);
-            Route::post('invite', [Api\TeamController::class, 'invite']);
-            Route::put('users/{user}/role', [Api\TeamController::class, 'updateRole']);
-            Route::delete('users/{user}', [Api\TeamController::class, 'remove']);
-        });
+    // -------------------------------------------------------------------------
+    // Super-Admin only routes
+    // -------------------------------------------------------------------------
+    Route::middleware('role:super-admin')->prefix('admin')->group(function () {
 
-        // Settings
-        Route::prefix('settings')->group(function () {
-            Route::get('/', [Api\SettingsController::class, 'index']);
-            Route::put('/', [Api\SettingsController::class, 'update']);
+        Route::prefix('tenants')->group(function () {
+            Route::get('/',                         [TenantController::class, 'index']);
+            Route::post('/',                        [TenantController::class, 'store']);
+            Route::get('statistics',                [TenantController::class, 'statistics']);
+            Route::get('{tenant}',                  [TenantController::class, 'show']);
+            Route::put('{tenant}',                  [TenantController::class, 'update']);
+            Route::delete('{tenant}',               [TenantController::class, 'destroy']);
+            Route::post('{tenant}/activate',        [TenantController::class, 'activate']);
+            Route::post('{tenant}/deactivate',      [TenantController::class, 'deactivate']);
         });
+    });
+    Route::prefix('media')->group(function () {
+        // ── Media uploads ─────────────────────────────────────────────────────────────
+        Route::post('/upload',              [MediaUploadController::class, 'upload']);
+        Route::delete('/{media}',           [MediaUploadController::class, 'destroy']);
     });
 });

@@ -20,7 +20,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <VNavigationDrawer v-model="customizer.sidebarDrawer" left elevation="0" rail-width="90" mobile-breakpoint="lg" app
+  <VNavigationDrawer v-model="customizer.sidebarDrawer" left elevation="0" rail-width="53" mobile-breakpoint="lg" app
     width="279" class="leftSidebar" :rail="customizer.miniSidebar" expand-on-hover>
     <!-- Logo part -->
 

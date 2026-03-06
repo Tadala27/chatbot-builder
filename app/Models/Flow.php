@@ -7,46 +7,24 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class Flow extends Model
 {
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'tenant_id',
-        'whatsapp_account_id',
-        'name',
-        'slug',
-        'status',
-        'current_published_version_id',
-        'default_language',
-        'settings',
-        'created_by',
-        'published_at',
+        'bot_id', 'name', 'description', 'slug', 'status',
+        'current_published_version_id', 'is_active', 'published_at',
     ];
 
     protected $casts = [
-        'settings' => 'array',
+        'is_active'    => 'boolean',
         'published_at' => 'datetime',
     ];
 
-    // ─── Relationships ────────────────────────────────────────────────────────
-
-    public function tenant(): BelongsTo
+    public function bot(): BelongsTo
     {
-        return $this->belongsTo(Tenant::class);
-    }
-
-    public function whatsappAccount()
-    {
-        return $this->belongsTo(WhatsappAccount::class);
-    }
-
-    public function creator(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'created_by');
+        return $this->belongsTo(Bot::class);
     }
 
     public function versions(): HasMany
@@ -64,151 +42,23 @@ class Flow extends Model
         return $this->hasMany(Conversation::class);
     }
 
-    // ─── Scopes ───────────────────────────────────────────────────────────────
-    public function scopeActive($query)
+    public function analyticsEvents(): HasMany
     {
-        return $query->where('status', 'published');
+        return $this->hasMany(AnalyticsEvent::class);
     }
 
-    public function scopePublished($query)
+    public function outgoingWebhooks(): HasMany
     {
-        return $query->where('status', 'published');
+        return $this->hasMany(OutgoingWebhook::class);
     }
 
-    public function scopeDraft($query)
+    public function draftVersion(): ?FlowVersion
     {
-        return $query->where('status', 'draft');
+        return $this->versions()->where('status', 'draft')->latest()->first();
     }
 
-    public function scopeArchived($query)
-    {
-        return $query->where('status', 'archived');
-    }
-
-    // ─── Business Logic ───────────────────────────────────────────────────────
-
-    public static function boot()
-    {
-        parent::boot();
-
-        static::creating(function ($flow) {
-            if (empty($flow->slug)) {
-                $flow->slug = Str::slug($flow->name);
-            }
-        });
-    }
-
-    public function publish(FlowVersion $version): bool
-    {
-        // Start a database transaction to ensure data consistency
-        return DB::transaction(function () use ($version) {
-            // Check if there's a currently published version
-            $currentlyPublished = $this->getPublishedVersion();
-
-            if ($currentlyPublished) {
-                // Unpublish the current version (lock it)
-                $currentlyPublished->update(['status' => 'locked']); // or 'draft'
-            }
-
-            // Lock/update the new version
-            $version->update(['status' => 'published']);
-
-            // Update flow with new published version
-            $this->update([
-                'status' => 'published',
-                'current_published_version_id' => $version->id,
-                'published_at' => now(),
-            ]);
-
-            return true;
-        });
-    }
-    // In FlowVersion model
-    public function lock(): bool
-    {
-        return $this->update(['status' => 'locked']); // or 'locked'
-    }
-
-    public function unpublish(): bool
-    {
-        $this->update([
-            'status' => 'draft',
-            'published_at' => null,
-        ]);
-
-        return true;
-    }
-
-    public function archive(): bool
-    {
-        $this->update(['status' => 'archived']);
-        return true;
-    }
-
-    public function createVersion(array $data = []): FlowVersion
-    {
-        $latestVersion = $this->versions()->max('version_number') ?? 0;
-
-        return $this->versions()->create(array_merge($data, [
-            'version_number' => $latestVersion + 1,
-            'status' => 'draft',
-            'created_by' => auth()->id(),
-        ]));
-    }
-
-    public function getDraftVersion(): ?FlowVersion
-    {
-        return $this->versions()->where('status', 'draft')->first();
-    }
-
-    public function getPublishedVersion(): ?FlowVersion
+    public function publishedVersion(): ?FlowVersion
     {
         return $this->currentPublishedVersion;
-    }
-
-    public function duplicate(string $newName): self
-    {
-        $newFlow = $this->replicate();
-        $newFlow->name = $newName;
-        $newFlow->slug = Str::slug($newName);
-        $newFlow->status = 'draft';
-        $newFlow->current_published_version_id = null;
-        $newFlow->published_at = null;
-        $newFlow->save();
-
-        // Duplicate latest version
-        $latestVersion = $this->versions()->latest('version_number')->first();
-        if ($latestVersion) {
-            $latestVersion->duplicateToFlow($newFlow);
-        }
-
-        return $newFlow;
-    }
-
-    public function getTotalConversations(): int
-    {
-        return $this->conversations()->count();
-    }
-
-    public function getActiveConversations(): int
-    {
-        return $this->conversations()->where('status', 'active')->count();
-    }
-    public function getCompletedConversations(): int
-    {
-        return $this->conversations()->where('status', 'completed')->count();
-    }
-
-    public function getAbandonedConversations(): int
-    {
-        return $this->conversations()->where('status', 'abandoned')->count();
-    }
-    public function getCompletionRate(): float
-    {
-        $total = $this->conversations()->count();
-        if ($total === 0) return 0;
-
-        $completed = $this->conversations()->where('status', 'completed')->count();
-        return round(($completed / $total) * 100, 2);
     }
 }

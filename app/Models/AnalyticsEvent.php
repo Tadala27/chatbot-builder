@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AnalyticsEvent extends Model
 {
@@ -12,59 +13,27 @@ class AnalyticsEvent extends Model
     public $timestamps = false;
 
     protected $fillable = [
-        'tenant_id',
-        'flow_id',
-        'conversation_id',
-        'event_type',
-        'node_id',
-        'metadata',
+        'tenant_id', 'flow_id', 'conversation_id',
+        'event_type', 'metadata',
     ];
 
     protected $casts = [
-        'metadata' => 'array',
+        'metadata'   => 'array',
         'created_at' => 'datetime',
     ];
 
-    // Relationships
-    public function tenant()
+    public function tenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class);
     }
 
-    // CHANGE: Add relationship to FlowNode (not DialogNode anymore)
-    public function flowNode()
-    {
-        return $this->belongsTo(FlowNode::class, 'node_id');
-    }
-
-    public function flow()
+    public function flow(): BelongsTo
     {
         return $this->belongsTo(Flow::class);
     }
 
-    public function conversation()
+    public function conversation(): BelongsTo
     {
         return $this->belongsTo(Conversation::class);
-    }
-
-    // Scopes
-    public function scopeForFlow($query, int $flowId)
-    {
-        return $query->where('flow_id', $flowId);
-    }
-
-    public function scopeForConversation($query, int $conversationId)
-    {
-        return $query->where('conversation_id', $conversationId);
-    }
-
-    public function scopeByType($query, string $type)
-    {
-        return $query->where('event_type', $type);
-    }
-
-    public function scopeBetween($query, $startDate, $endDate)
-    {
-        return $query->whereBetween('created_at', [$startDate, $endDate]);
     }
 }

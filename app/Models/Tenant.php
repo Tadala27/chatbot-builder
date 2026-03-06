@@ -12,18 +12,27 @@ use Spatie\Multitenancy\Models\Tenant as SpatieTenant;
 
 class Tenant extends SpatieTenant
 {
-    use HasFactory, LogsActivity, SoftDeletes;
+    use HasFactory, SoftDeletes, LogsActivity;
 
     protected $fillable = [
         'name',
         'slug',
         'domain',
+        'database',
         'is_active',
         'subscription_tier',
         'subscription_expires_at',
         'max_flows',
         'max_conversations_per_month',
         'settings',
+    ];
+
+    protected $casts = [
+        'is_active'                => 'boolean',
+        'subscription_expires_at'  => 'datetime',
+        'settings'                 => 'array',
+        'max_flows'                => 'integer',
+        'max_conversations_per_month' => 'integer',
     ];
 
     public function getActivitylogOptions(): LogOptions
@@ -34,15 +43,6 @@ class Tenant extends SpatieTenant
             ->dontSubmitEmptyLogs();
     }
 
-    protected $casts = [
-        'is_active' => 'boolean',
-        'subscription_expires_at' => 'datetime',
-        'max_flows' => 'integer',
-        'max_conversations_per_month' => 'integer',
-        'settings' => 'array',
-    ];
-
-    // ─── Relationships ────────────────────────────────────────────────────────
 
     public function users(): BelongsToMany
     {
@@ -51,47 +51,46 @@ class Tenant extends SpatieTenant
             ->withTimestamps();
     }
 
+    public function bots(): HasMany
+    {
+        return $this->hasMany(Bot::class);
+    }
+
     public function whatsappAccounts(): HasMany
     {
         return $this->hasMany(WhatsappAccount::class);
     }
 
-    public function flows(): HasMany
+    public function facebookBusinessAccounts(): HasMany
     {
-        return $this->hasMany(Flow::class);
+        return $this->hasMany(FacebookBusinessAccount::class);
     }
 
-    public function globalVariables()
+    public function messageTemplates(): HasMany
+    {
+        return $this->hasMany(MessageTemplate::class);
+    }
+
+    public function globalVariables(): HasMany
     {
         return $this->hasMany(GlobalVariable::class);
     }
 
-    public function customFunctions()
-    {
-        return $this->hasMany(CustomFunction::class);
-    }
-
-    public function conversations()
+    public function conversations(): HasMany
     {
         return $this->hasMany(Conversation::class);
     }
 
-    public function apiIntegrations()
+    public function analyticsEvents(): HasMany
     {
-        return $this->hasMany(ApiIntegration::class);
-    }
-    // ─── Scopes ───────────────────────────────────────────────────────────────
-
-    public function scopeActive($query)
-    {
-        return $query->where('is_active', true);
+        return $this->hasMany(AnalyticsEvent::class);
     }
 
-    public function scopeSubscribed($query)
+    public function outgoingWebhooks(): HasMany
     {
-        return $query->where('subscription_expires_at', '>', now())
-            ->orWhereNull('subscription_expires_at');
+        return $this->hasMany(OutgoingWebhook::class);
     }
+
 
     // ─── Business Logic ───────────────────────────────────────────────────────
 
@@ -100,15 +99,14 @@ class Tenant extends SpatieTenant
         return $this->subscription_expires_at === null
             || $this->subscription_expires_at->isFuture();
     }
-
     public function canCreateFlow(): bool
     {
-        return $this->flows()->count() < $this->max_flows;
+        return $this->bots()->count() < $this->max_flows;
     }
 
     public function getRemainingFlows(): int
     {
-        return max(0, $this->max_flows - $this->flows()->count());
+        return max(0, $this->max_flows - $this->bots()->count());
     }
 
     public function getConversationsThisMonth(): int

@@ -15,7 +15,7 @@
                         </p>
                     </div>
                     <VChip color="error" variant="tonal" size="large">
-                        <VIcon start>mdi-shield-crown</VIcon>
+                        <VIcon start>$shield-crown</VIcon>
                         Super Admin
                     </VChip>
                 </div>
@@ -424,13 +424,13 @@ const getLogColor = (event: string) => {
 
 const getLogIcon = (event: string) => {
     const icons: any = {
-        'created': 'mdi-plus-circle',
-        'updated': 'mdi-pencil',
-        'deleted': 'mdi-delete',
-        'login': 'mdi-login',
-        'logout': 'mdi-logout'
+        'created': '$plusCircle',
+        'updated': '$pencil',
+        'deleted': '$delete',
+        'login': '$login',
+        'logout': '$logout'
     }
-    return icons[event] || 'mdi-information'
+    return icons[event] || '$information'
 }
 
 const goToActivityLogs = () => {

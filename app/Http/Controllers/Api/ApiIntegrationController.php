@@ -3,242 +3,155 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\ApiIntegration;
+use App\Models\Api as ApiModel;
+use App\Models\Bot;
 use App\Models\Tenant;
-use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Validator;
 use GuzzleHttp\Client;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
+/**
+ * API integrations are now scoped to a Bot (not a Tenant).
+ * The underlying model is App\Models\Api with a bot_id FK.
+ */
 class ApiIntegrationController extends Controller
 {
-    /**
-     * Get all API integrations for tenant
-     */
-    public function index(): JsonResponse
+    // GET /api/bots/{bot}/apis
+    public function index(Bot $bot): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
 
-        $integrations = ApiIntegration::where('tenant_id', $tenant->id)
-            ->orderBy('name')
-            ->get();
+        $apis = ApiModel::where('bot_id', $bot->id)->orderBy('name')->get();
 
-        return response()->json([
-            'data' => $integrations,
-        ]);
+        return response()->json(['data' => $apis]);
     }
 
-    /**
-     * Store a new API integration
-     */
-    public function store(Request $request): JsonResponse
+    // POST /api/bots/{bot}/apis
+    public function store(Request $request, Bot $bot): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
 
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'type' => 'required|in:rest,graphql,soap,webhook',
-            'base_url' => 'required|url|max:500',
-            'auth_type' => 'required|in:none,basic,bearer,api_key,oauth2',
-            'auth_config' => 'nullable|array',
-            'headers' => 'nullable|array',
-            'timeout_seconds' => 'integer|min:1|max:300',
-            'retry_attempts' => 'integer|min:0|max:10',
+        $validated = $request->validate([
+            'name'               => 'required|string|max:255',
+            'method'             => 'required|in:GET,POST,PUT,PATCH,DELETE',
+            'url'                => 'required|url|max:500',
+            'content_type'       => 'nullable|string|max:100',
+            'headers'            => 'nullable|array',
+            'request_body'       => 'nullable|string',
+            'form_data'          => 'nullable|array',
+            'url_encoded_fields' => 'nullable|array',
+            'body_parameters'    => 'nullable|array',
+            'header_parameters'  => 'nullable|array',
+            'is_active'          => 'nullable|boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
-        }
-
-        $integration = ApiIntegration::create([
-            'tenant_id' => $tenant->id,
-            'name' => $request->name,
-            'type' => $request->type,
-            'base_url' => $request->base_url,
-            'auth_type' => $request->auth_type,
-            'auth_config' => $request->auth_config,
-            'headers' => $request->headers,
-            'timeout_seconds' => $request->timeout_seconds ?? 30,
-            'retry_attempts' => $request->retry_attempts ?? 3,
-            'is_active' => true,
-        ]);
-
-        return response()->json($integration, 201);
-    }
-
-    /**
-     * Update an API integration
-     */
-    public function update(Request $request, ApiIntegration $integration): JsonResponse
-    {
-        $tenant = Tenant::current();
-
-        // Verify integration belongs to tenant
-        if ($integration->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Integration not found'], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|string|max:255',
-            'type' => 'sometimes|in:rest,graphql,soap,webhook',
-            'base_url' => 'sometimes|url|max:500',
-            'auth_type' => 'sometimes|in:none,basic,bearer,api_key,oauth2',
-            'auth_config' => 'nullable|array',
-            'headers' => 'nullable|array',
-            'timeout_seconds' => 'integer|min:1|max:300',
-            'retry_attempts' => 'integer|min:0|max:10',
-            'is_active' => 'boolean',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
-        }
-
-        $integration->update($request->only([
-            'name',
-            'type',
-            'base_url',
-            'auth_type',
-            'auth_config',
-            'headers',
-            'timeout_seconds',
-            'retry_attempts',
-            'is_active',
+        $api = ApiModel::create(array_merge($validated, [
+            'bot_id'    => $bot->id,
+            'is_active' => $validated['is_active'] ?? true,
         ]));
 
-        return response()->json($integration);
+        return response()->json(['message' => 'API created.', 'data' => $api], 201);
     }
 
-    /**
-     * Delete an API integration
-     */
-    public function destroy(ApiIntegration $integration): JsonResponse
+    // GET /api/bots/{bot}/apis/{api}
+    public function show(Bot $bot, ApiModel $api): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
+        $this->authorizeApi($bot, $api);
 
-        // Verify integration belongs to tenant
-        if ($integration->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Integration not found'], 404);
-        }
-
-        $integration->delete();
-
-        return response()->json([
-            'message' => 'Integration deleted successfully',
-        ]);
+        return response()->json(['data' => $api]);
     }
 
-    /**
-     * Test an API integration
-     */
-    public function test(Request $request, ApiIntegration $integration): JsonResponse
+    // PUT /api/bots/{bot}/apis/{api}
+    public function update(Request $request, Bot $bot, ApiModel $api): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
+        $this->authorizeApi($bot, $api);
 
-        // Verify integration belongs to tenant
-        if ($integration->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Integration not found'], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'endpoint' => 'required|string',
-            'method' => 'required|in:GET,POST,PUT,PATCH,DELETE',
-            'body' => 'nullable',
-            'headers' => 'nullable|array',
+        $validated = $request->validate([
+            'name'               => 'sometimes|string|max:255',
+            'method'             => 'sometimes|in:GET,POST,PUT,PATCH,DELETE',
+            'url'                => 'sometimes|url|max:500',
+            'content_type'       => 'nullable|string|max:100',
+            'headers'            => 'nullable|array',
+            'request_body'       => 'nullable|string',
+            'form_data'          => 'nullable|array',
+            'url_encoded_fields' => 'nullable|array',
+            'body_parameters'    => 'nullable|array',
+            'header_parameters'  => 'nullable|array',
+            'is_active'          => 'sometimes|boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
-        }
+        $api->update($validated);
+
+        return response()->json(['message' => 'API updated.', 'data' => $api]);
+    }
+
+    // DELETE /api/bots/{bot}/apis/{api}
+    public function destroy(Bot $bot, ApiModel $api): JsonResponse
+    {
+        $this->authorizeBot($bot);
+        $this->authorizeApi($bot, $api);
+
+        $api->delete();
+
+        return response()->json(['message' => 'API deleted.']);
+    }
+
+    // POST /api/bots/{bot}/apis/{api}/test
+    // Fire a real HTTP request using the stored config to verify it works.
+    public function test(Request $request, Bot $bot, ApiModel $api): JsonResponse
+    {
+        $this->authorizeBot($bot);
+        $this->authorizeApi($bot, $api);
+
+        $validated = $request->validate([
+            'variables' => 'nullable|array',   // key-value pairs to interpolate into URL / body
+        ]);
 
         try {
-            $client = new Client([
-                'timeout' => $integration->timeout_seconds,
-                'http_errors' => false,
-            ]);
+            $client = new Client(['timeout' => 15, 'http_errors' => false]);
 
-            // Build URL
-            $url = rtrim($integration->base_url, '/') . '/' . ltrim($request->endpoint, '/');
-            // Build headers
-            $headers = array_merge(
-                (array) ($integration->headers ?? []),
-                (array) ($request->headers ?? [])
-            );
+            // Simple variable interpolation: {{varName}} → value
+            $variables = $validated['variables'] ?? [];
+            $url       = $this->interpolate($api->url, $variables);
 
-            // Add authentication
-            $headers = $this->addAuthentication($headers, $integration);
+            $options = ['headers' => array_merge($api->headers ?? [], ['Content-Type' => $api->content_type ?? 'application/json'])];
 
-            // Build request options
-            $options = [
-                'headers' => $headers,
-            ];
-
-            if (in_array($request->method, ['POST', 'PUT', 'PATCH'])) {
-                if ($request->has('body')) {
-                    $options['json'] = $request->body;
-                }
+            if (in_array($api->method, ['POST', 'PUT', 'PATCH'], true) && $api->request_body) {
+                $options['body'] = $this->interpolate($api->request_body, $variables);
             }
 
-            // Make request
-            $response = $client->request($request->method, $url, $options);
+            $response = $client->request($api->method, $url, $options);
 
             return response()->json([
                 'success' => true,
-                'status' => $response->getStatusCode(),
+                'status'  => $response->getStatusCode(),
                 'headers' => $response->getHeaders(),
-                'body' => json_decode($response->getBody()->getContents(), true),
+                'body'    => json_decode($response->getBody()->getContents(), true),
             ]);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage(),
-            ], 500);
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 422);
         }
     }
 
-    /**
-     * Add authentication headers based on auth type
-     */
-    private function addAuthentication(array $headers, ApiIntegration $integration): array
+    // -------------------------------------------------------------------------
+
+    private function authorizeBot(Bot $bot): void
     {
-        $authConfig = $integration->auth_config ?? [];
+        if ($bot->tenant_id !== Tenant::current()->id) abort(404, 'Bot not found.');
+    }
 
-        switch ($integration->auth_type) {
-            case 'basic':
-                if (isset($authConfig['username']) && isset($authConfig['password'])) {
-                    $credentials = base64_encode($authConfig['username'] . ':' . $authConfig['password']);
-                    $headers['Authorization'] = 'Basic ' . $credentials;
-                }
-                break;
+    private function authorizeApi(Bot $bot, ApiModel $api): void
+    {
+        if ($api->bot_id !== $bot->id) abort(404, 'API not found.');
+    }
 
-            case 'bearer':
-                if (isset($authConfig['token'])) {
-                    $headers['Authorization'] = 'Bearer ' . $authConfig['token'];
-                }
-                break;
-
-            case 'api_key':
-                if (isset($authConfig['key']) && isset($authConfig['value'])) {
-                    $headers[$authConfig['key']] = $authConfig['value'];
-                }
-                break;
-
-            case 'oauth2':
-                if (isset($authConfig['access_token'])) {
-                    $headers['Authorization'] = 'Bearer ' . $authConfig['access_token'];
-                }
-                break;
+    private function interpolate(string $template, array $vars): string
+    {
+        foreach ($vars as $key => $value) {
+            $template = str_replace("{{$key}}", $value, $template);
         }
-
-        return $headers;
+        return $template;
     }
 }

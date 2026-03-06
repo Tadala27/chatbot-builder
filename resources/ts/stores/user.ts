@@ -198,7 +198,7 @@ export const useUserStore = defineStore(
       isLoading.value = true;
       error.value = null;
       try {
-        const { data } = await axios.post("/api/login", credentials);
+        const { data } = await axios.post("/api/auth/login", credentials);
         
         // Handle password reset required
         if (data.password_reset_required) {
@@ -267,7 +267,7 @@ export const useUserStore = defineStore(
 
       isLoading.value = true;
       try {
-        const { data } = await axios.get("/api/me");
+        const { data } = await axios.get("/api/auth/me");
         // Expected response: { success: true, data: User }
         const userData = data.data || data.user; // Handle both response formats
         
@@ -288,7 +288,7 @@ export const useUserStore = defineStore(
       if (!accessToken.value) return null;
       
       try {
-        const { data } = await axios.get("/api/profile");
+        const { data } = await axios.get("/api/auth/profile");
         // Expected response: { success: true, data: { user: User, current_tenant, tenants } }
         if (data.success && data.data) {
           updateUserData(data.data.user);
@@ -308,7 +308,7 @@ export const useUserStore = defineStore(
 
     const logout = async () => {
       try {
-        await axios.post("/api/logout");
+        await axios.post("/api/auth/logout");
       } catch (err) {
         console.warn("Logout request failed", err);
       } finally {
@@ -319,7 +319,7 @@ export const useUserStore = defineStore(
 
     const switchTenant = async (tenantId: number) => {
       try {
-        const { data } = await axios.post("/api/switch-tenant", {
+        const { data } = await axios.post("/api/auth/switch-tenant", {
           tenant_id: tenantId,
         });
         
@@ -362,7 +362,7 @@ export const useUserStore = defineStore(
 
     const updateProfile = async (profileData: Partial<User>) => {
       try {
-        const { data } = await axios.put("/api/profile", profileData);
+        const { data } = await axios.put("/api/auth/profile", profileData);
         if (data.success && data.data) {
           updateUserData(data.data);
           return { success: true, data: data.data };
@@ -380,7 +380,7 @@ export const useUserStore = defineStore(
       password_confirmation: string;
     }) => {
       try {
-        const { data } = await axios.post("/api/change-password", passwordData);
+        const { data } = await axios.post("/api/auth/change-password", passwordData);
         return { success: true, message: data.message };
       } catch (err: any) {
         console.error("Failed to change password", err);
@@ -397,7 +397,7 @@ export const useUserStore = defineStore(
       password_confirmation: string;
     }) => {
       try {
-        const { data } = await axios.post("/api/force-reset-password", resetData);
+        const { data } = await axios.post("/api/auth/force-reset-password", resetData);
         if (data.success) {
           // Update password reset required flag
           if (user.value) {

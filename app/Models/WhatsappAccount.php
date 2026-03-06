@@ -13,63 +13,32 @@ class WhatsappAccount extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'tenant_id',
-        'waba_id',
-        'phone_number_id',
-        'phone_number',
-        'display_phone_number',
-        'verified_name',
-        'quality_rating',
-        'messaging_limit',
-        'access_token',
-        'is_active',
-        'last_synced_at',
-        'metadata',
+        'tenant_id', 'waba_id', 'phone_number_id', 'phone_number',
+        'display_phone_number', 'verified_name', 'quality_rating',
+        'messaging_limit', 'access_token', 'webhook_verify_token',
+        'is_active', 'last_synced_at', 'metadata',
     ];
+
+    protected $hidden = ['access_token', 'webhook_verify_token'];
 
     protected $casts = [
-        'is_active' => 'boolean',
+        'is_active'      => 'boolean',
         'last_synced_at' => 'datetime',
-        'metadata' => 'array',
+        'metadata'       => 'array',
     ];
-
-    protected $hidden = [
-        'access_token',
-    ];
-
-    // ─── Relationships ────────────────────────────────────────────────────────
 
     public function tenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class);
     }
 
-    public function flows()
+    public function bots(): HasMany
     {
-        return $this->hasMany(Flow::class);
+        return $this->hasMany(Bot::class);
     }
 
     public function conversations(): HasMany
     {
         return $this->hasMany(Conversation::class);
-    }
-
-    // ─── Scopes ───────────────────────────────────────────────────────────────
-
-    public function scopeActive($query)
-    {
-        return $query->where('is_active', true);
-    }
-
-    // ─── Business Logic ───────────────────────────────────────────────────────
-
-    public function getTotalConversations(): int
-    {
-        return $this->conversations()->count();
-    }
-
-    public function getActiveConversations(): int
-    {
-        return $this->conversations()->where('status', 'active')->count();
     }
 }

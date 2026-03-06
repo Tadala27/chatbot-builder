@@ -70,8 +70,8 @@ class AuthController extends Controller
         // ────── CHECK TENANT DOMAIN ACCESS ──────
         $currentHost = $request->getHost();
         $tenants = $user->tenants()->get();
-        $primaryTenant = $user->getPrimaryTenant();
-        
+        $primaryTenant = $user->primaryTenant();
+
         // If not super admin, verify they have access to this tenant domain
         if (!$user->is_super_admin) {
             $hasAccess = $tenants->contains(function ($tenant) use ($currentHost) {
@@ -94,13 +94,9 @@ class AuthController extends Controller
         Auth::login($user, $request->boolean('remember_me'));
         $request->session()->regenerate();
 
-        // Set the current tenant
         $currentTenant = $this->getCurrentTenantFromDomain($currentHost, $tenants, $user);
         if ($currentTenant) {
-            // Use the makeCurrent() method on the tenant instance
             $currentTenant->makeCurrent();
-            
-            // Store in session for easy access
             session(['current_tenant_id' => $currentTenant->id]);
             session(['current_tenant_domain' => $currentTenant->domain]);
         }
@@ -156,7 +152,7 @@ class AuthController extends Controller
                 $tenantDomain = parse_url($tenant->domain, PHP_URL_HOST) ?? $tenant->domain;
                 return $tenantDomain === $host;
             });
-            
+
             return $tenant ?? $tenants->first();
         }
 
@@ -188,7 +184,7 @@ class AuthController extends Controller
         if ($currentTenant = Tenant::current()) {
             $currentTenant->forgetCurrent();
         }
-        
+
         // Clear session
         $request->session()->forget(['current_tenant_id', 'current_tenant_domain']);
         $request->session()->invalidate();
@@ -218,7 +214,7 @@ class AuthController extends Controller
         // Ensure tenant context is correct
         $currentHost = $request->getHost();
         $sessionTenantId = session('current_tenant_id');
-        
+
         // Verify session tenant matches domain
         if ($sessionTenantId) {
             $sessionTenant = Tenant::find($sessionTenantId);
@@ -228,7 +224,7 @@ class AuthController extends Controller
                     // Domain mismatch - force logout
                     return $this->forceLogout($request, 'Tenant domain mismatch');
                 }
-                
+
                 // Make sure tenant is current
                 $currentTenant = Tenant::current();
                 if (!$currentTenant || $currentTenant->id !== $sessionTenant->id) {
@@ -249,11 +245,11 @@ class AuthController extends Controller
     private function forceLogout(Request $request, $reason)
     {
         Log::warning('Force logout', ['reason' => $reason, 'ip' => $request->ip()]);
-        
+
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
-        
+
         return response()->json([
             'message' => 'Session expired. Please login again.'
         ], 401);
@@ -297,7 +293,7 @@ class AuthController extends Controller
                     'slug' => $t->slug,
                     'domain' => $t->domain,
                     'is_active' => $t->is_active,
-                    'is_primary' => $user->getPrimaryTenant()?->id === $t->id,
+                    'is_primary' => $user->primaryTenant()?->id === $t->id,
                 ]),
             ]
         ]);
@@ -510,7 +506,7 @@ class AuthController extends Controller
         // Check if the domain matches the current host
         $currentHost = $request->getHost();
         $tenantDomain = parse_url($tenant->domain, PHP_URL_HOST) ?? $tenant->domain;
-        
+
         if ($tenantDomain !== $currentHost) {
             // Return the domain to redirect to
             return response()->json([
@@ -522,7 +518,7 @@ class AuthController extends Controller
 
         // Set as primary tenant
         $user->setPrimaryTenant($tenant);
-        
+
         // Make tenant current
         $tenant->makeCurrent();
         session(['current_tenant_id' => $tenant->id]);
@@ -569,7 +565,7 @@ class AuthController extends Controller
             ];
         })->values();
 
-        $primaryTenant = $user->getPrimaryTenant();
+        $primaryTenant = $user->primaryTenant();
         $currentTenant = Tenant::current();
 
         return [

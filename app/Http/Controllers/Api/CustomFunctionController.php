@@ -3,224 +3,140 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\CustomFunction;
+use App\Models\Bot;
 use App\Models\BuiltInFunction;
+use App\Models\CustomFunction;
 use App\Models\Tenant;
 use App\Services\FunctionExecutor;
-use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
+/**
+ * Custom functions are scoped to a Bot in the new schema.
+ */
 class CustomFunctionController extends Controller
 {
-    protected FunctionExecutor $executor;
+    public function __construct(protected FunctionExecutor $executor) {}
 
-    public function __construct(FunctionExecutor $executor)
+    // GET /api/bots/{bot}/functions
+    public function index(Request $request, Bot $bot): JsonResponse
     {
-        $this->executor = $executor;
-    }
+        $this->authorizeBot($bot);
 
-    /**
-     * List custom functions
-     */
-    public function index(Request $request): JsonResponse
-    {
-        $tenant = Tenant::current();
+        $query = CustomFunction::where('bot_id', $bot->id);
 
-        $query = CustomFunction::where('tenant_id', $tenant->id)
-            ->with('creator');
-
-        // Search
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('slug', 'like', "%{$search}%")
-                    ->orWhere('description', 'like', "%{$search}%");
-            });
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where(fn($q) => $q
+                ->where('name', 'like', "%{$s}%")
+                ->orWhere('slug', 'like', "%{$s}%")
+                ->orWhere('description', 'like', "%{$s}%"));
         }
 
-        // Filter by type
-        if ($request->has('function_type')) {
+        if ($request->filled('function_type')) {
             $query->where('function_type', $request->function_type);
         }
 
-        // Filter by active status
-        if ($request->has('is_active')) {
+        if ($request->filled('is_active')) {
             $query->where('is_active', $request->boolean('is_active'));
         }
 
-        // Sorting
-        $sortField = $request->get('sort', 'created_at');
-        $sortDirection = $request->get('direction', 'desc');
-        $query->orderBy($sortField, $sortDirection);
+        $query->orderBy($request->get('sort', 'created_at'), $request->get('direction', 'desc'));
 
-        $functions = $query->paginate($request->get('per_page', 20));
-
-        return response()->json($functions);
+        return response()->json($query->paginate($request->get('per_page', 20)));
     }
 
-    /**
-     * Get single function
-     */
-    public function show(CustomFunction $function): JsonResponse
+    // GET /api/bots/{bot}/functions/{function}
+    public function show(Bot $bot, CustomFunction $function): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($function->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Function not found'], 404);
-        }
-
-        $function->load('creator');
+        $this->authorizeBot($bot);
+        $this->authorizeFunction($bot, $function);
 
         return response()->json(['function' => $function]);
     }
 
-    /**
-     * Create new function
-     */
-    public function store(Request $request): JsonResponse
+    // POST /api/bots/{bot}/functions
+    public function store(Request $request, Bot $bot): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
 
         $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'slug' => 'nullable|string|max:255',
-            'description' => 'nullable|string',
-            'function_type' => 'required|in:javascript,api_call,webhook,built_in',
-            'code' => 'required|string',
-            'parameters' => 'nullable|array',
-            'return_type' => 'nullable|string|max:50',
-            'is_async' => 'boolean',
-            'timeout_seconds' => 'integer|min:1|max:300',
-            'test_cases' => 'nullable|array',
+            'name'            => 'required|string|max:255',
+            'slug'            => 'nullable|string|max:255',
+            'description'     => 'nullable|string',
+            'function_type'   => 'required|in:javascript,webhook,built_in',
+            'code'            => 'required|string',
+            'parameters'      => 'nullable|array',
+            'return_type'     => 'nullable|string|max:50',
+            'timeout_seconds' => 'nullable|integer|min:1|max:300',
         ]);
 
-        // Auto-generate slug if not provided
-        if (empty($validated['slug'])) {
-            $validated['slug'] = Str::slug($validated['name']);
+        $validated['slug'] = $validated['slug'] ?? $this->uniqueSlug($bot->id, $validated['name']);
 
-            $count = 1;
-            while (CustomFunction::where('tenant_id', $tenant->id)
-                ->where('slug', $validated['slug'])
-                ->exists()
-            ) {
-                $validated['slug'] = Str::slug($validated['name']) . '-' . $count;
-                $count++;
-            }
+        $errors = $this->executor->validateSyntax($validated['code'], $validated['function_type']);
+        if (!empty($errors)) {
+            return response()->json(['message' => 'Syntax errors found.', 'errors' => ['code' => $errors]], 422);
         }
 
-        // Validate syntax
-        $syntaxErrors = $this->executor->validateSyntax(
-            $validated['code'],
-            $validated['function_type']
-        );
+        $function = CustomFunction::create(array_merge($validated, [
+            'bot_id'    => $bot->id,
+            'is_active' => true,
+        ]));
 
-        if (!empty($syntaxErrors)) {
-            return response()->json([
-                'message' => 'Function code has syntax errors',
-                'errors' => ['code' => $syntaxErrors],
-            ], 422);
-        }
+        activity()->causedBy(auth()->user())->performedOn($function)->log('Custom function created');
 
-        $validated['tenant_id'] = $tenant->id;
-        $validated['created_by'] = auth()->id();
-        $validated['is_active'] = true;
-
-        $function = CustomFunction::create($validated);
-
-        activity()
-            ->causedBy(auth()->user())
-            ->performedOn($function)
-            ->log('Custom function created');
-
-        return response()->json([
-            'message' => 'Function created successfully',
-            'function' => $function,
-        ], 201);
+        return response()->json(['message' => 'Function created.', 'function' => $function], 201);
     }
 
-    /**
-     * Update function
-     */
-    public function update(Request $request, CustomFunction $function): JsonResponse
+    // PUT /api/bots/{bot}/functions/{function}
+    public function update(Request $request, Bot $bot, CustomFunction $function): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($function->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Function not found'], 404);
-        }
+        $this->authorizeBot($bot);
+        $this->authorizeFunction($bot, $function);
 
         $validated = $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'description' => 'nullable|string',
-            'code' => 'sometimes|string',
-            'parameters' => 'nullable|array',
-            'return_type' => 'nullable|string|max:50',
-            'is_async' => 'sometimes|boolean',
+            'name'            => 'sometimes|string|max:255',
+            'description'     => 'nullable|string',
+            'code'            => 'sometimes|string',
+            'parameters'      => 'nullable|array',
+            'return_type'     => 'nullable|string|max:50',
             'timeout_seconds' => 'sometimes|integer|min:1|max:300',
-            'test_cases' => 'nullable|array',
-            'is_active' => 'sometimes|boolean',
+            'is_active'       => 'sometimes|boolean',
         ]);
 
-        // Validate syntax if code is being updated
         if (isset($validated['code'])) {
-            $syntaxErrors = $this->executor->validateSyntax(
-                $validated['code'],
-                $function->function_type
-            );
-
-            if (!empty($syntaxErrors)) {
-                return response()->json([
-                    'message' => 'Function code has syntax errors',
-                    'errors' => ['code' => $syntaxErrors],
-                ], 422);
+            $errors = $this->executor->validateSyntax($validated['code'], $function->function_type);
+            if (!empty($errors)) {
+                return response()->json(['message' => 'Syntax errors found.', 'errors' => ['code' => $errors]], 422);
             }
         }
 
         $function->update($validated);
 
-        activity()
-            ->causedBy(auth()->user())
-            ->performedOn($function)
-            ->log('Custom function updated');
+        activity()->causedBy(auth()->user())->performedOn($function)->log('Custom function updated');
 
-        return response()->json([
-            'message' => 'Function updated successfully',
-            'function' => $function,
-        ]);
+        return response()->json(['message' => 'Function updated.', 'function' => $function]);
     }
 
-    /**
-     * Delete function
-     */
-    public function destroy(CustomFunction $function): JsonResponse
+    // DELETE /api/bots/{bot}/functions/{function}
+    public function destroy(Bot $bot, CustomFunction $function): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($function->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Function not found'], 404);
-        }
+        $this->authorizeBot($bot);
+        $this->authorizeFunction($bot, $function);
 
         $function->delete();
 
-        activity()
-            ->causedBy(auth()->user())
-            ->log('Custom function deleted: ' . $function->name);
+        activity()->causedBy(auth()->user())->log("Custom function deleted: {$function->name}");
 
-        return response()->json(['message' => 'Function deleted successfully']);
+        return response()->json(['message' => 'Function deleted.']);
     }
 
-    /**
-     * Test function execution
-     */
-    public function test(Request $request, CustomFunction $function): JsonResponse
+    // POST /api/bots/{bot}/functions/{function}/test
+    public function test(Request $request, Bot $bot, CustomFunction $function): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        if ($function->tenant_id !== $tenant->id) {
-            return response()->json(['message' => 'Function not found'], 404);
-        }
+        $this->authorizeBot($bot);
+        $this->authorizeFunction($bot, $function);
 
         $validated = $request->validate([
             'parameters' => 'required|array',
@@ -231,96 +147,77 @@ class CustomFunctionController extends Controller
         return response()->json($result);
     }
 
-    /**
-     * Get built-in functions
-     */
+    // GET /api/built-in-functions
     public function builtInFunctions(Request $request): JsonResponse
     {
-        $query = BuiltInFunction::query()->where('is_active', true);
+        $query = BuiltInFunction::where('is_active', true);
 
-        // Filter by category
-        if ($request->has('category')) {
+        if ($request->filled('category')) {
             $query->where('category', $request->category);
         }
 
-        // Search
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('description', 'like', "%{$search}%");
-            });
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where(fn($q) => $q
+                ->where('name', 'like', "%{$s}%")
+                ->orWhere('description', 'like', "%{$s}%"));
         }
 
         $functions = $query->orderBy('category')->orderBy('name')->get();
-
-        // Group by category
-        $grouped = $functions->groupBy('category');
+        $grouped   = $functions->groupBy('category');
 
         return response()->json([
-            'functions' => $functions,
-            'grouped' => $grouped,
+            'functions'  => $functions,
+            'grouped'    => $grouped,
             'categories' => $grouped->keys(),
         ]);
     }
 
-    /**
-     * Get function templates
-     */
+    // GET /api/functions/templates
     public function templates(): JsonResponse
     {
-        $templates = [
+        return response()->json([
             'javascript' => [
                 [
-                    'name' => 'Simple Calculator',
-                    'code' => "function calculate(a, b, operation) {\n  switch(operation) {\n    case 'add': return a + b;\n    case 'subtract': return a - b;\n    case 'multiply': return a * b;\n    case 'divide': return b !== 0 ? a / b : 'Error';\n    default: return 'Invalid operation';\n  }\n}\n\nreturn calculate(a, b, operation);",
+                    'name'       => 'Simple Calculator',
                     'parameters' => ['a', 'b', 'operation'],
+                    'code'       => "function calculate(a, b, op) {\n  switch(op) {\n    case 'add':      return a + b;\n    case 'subtract': return a - b;\n    case 'multiply': return a * b;\n    case 'divide':   return b !== 0 ? a / b : 'Error';\n    default:         return 'Invalid operation';\n  }\n}\nreturn calculate(a, b, operation);",
                 ],
                 [
-                    'name' => 'String Formatter',
-                    'code' => "function formatString(text, format) {\n  switch(format) {\n    case 'uppercase': return text.toUpperCase();\n    case 'lowercase': return text.toLowerCase();\n    case 'capitalize': return text.charAt(0).toUpperCase() + text.slice(1);\n    default: return text;\n  }\n}\n\nreturn formatString(text, format);",
+                    'name'       => 'String Formatter',
                     'parameters' => ['text', 'format'],
-                ],
-            ],
-            'api_call' => [
-                [
-                    'name' => 'GET Request',
-                    'code' => json_encode([
-                        'url' => 'https://api.example.com/endpoint',
-                        'method' => 'GET',
-                        'headers' => [
-                            'Content-Type' => 'application/json',
-                        ],
-                    ], JSON_PRETTY_PRINT),
-                ],
-                [
-                    'name' => 'POST Request',
-                    'code' => json_encode([
-                        'url' => 'https://api.example.com/endpoint',
-                        'method' => 'POST',
-                        'headers' => [
-                            'Content-Type' => 'application/json',
-                            'Authorization' => 'Bearer {token}',
-                        ],
-                        'body' => [
-                            'key' => 'value',
-                        ],
-                    ], JSON_PRETTY_PRINT),
+                    'code'       => "function fmt(text, format) {\n  switch(format) {\n    case 'uppercase':  return text.toUpperCase();\n    case 'lowercase':  return text.toLowerCase();\n    case 'capitalize': return text.charAt(0).toUpperCase() + text.slice(1);\n    default:           return text;\n  }\n}\nreturn fmt(text, format);",
                 ],
             ],
             'webhook' => [
                 [
                     'name' => 'Simple Webhook',
-                    'code' => json_encode([
-                        'url' => 'https://webhook.example.com/endpoint',
-                        'headers' => [
-                            'Content-Type' => 'application/json',
-                        ],
-                    ], JSON_PRETTY_PRINT),
+                    'code' => json_encode(['url' => 'https://webhook.example.com/endpoint', 'headers' => ['Content-Type' => 'application/json']], JSON_PRETTY_PRINT),
                 ],
             ],
-        ];
+        ]);
+    }
 
-        return response()->json($templates);
+    // -------------------------------------------------------------------------
+
+    private function authorizeBot(Bot $bot): void
+    {
+        if ($bot->tenant_id !== Tenant::current()->id) abort(404, 'Bot not found.');
+    }
+
+    private function authorizeFunction(Bot $bot, CustomFunction $function): void
+    {
+        if ($function->bot_id !== $bot->id) abort(404, 'Function not found.');
+    }
+
+    private function uniqueSlug(int $botId, string $name): string
+    {
+        $base  = Str::slug($name);
+        $slug  = $base;
+        $count = 1;
+        while (CustomFunction::where('bot_id', $botId)->where('slug', $slug)->exists()) {
+            $slug = $base . '-' . $count++;
+        }
+        return $slug;
     }
 }

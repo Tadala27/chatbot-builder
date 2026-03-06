@@ -11,28 +11,17 @@ class AgentHandoverLog extends Model
     use HasFactory;
 
     protected $fillable = [
-        'conversation_id',
-        'flow_node_id',
-        'assigned_agent_id',
-        'started_at',
-        'ended_at',
+        'conversation_id', 'assigned_agent_id', 'started_at', 'ended_at',
     ];
 
     protected $casts = [
         'started_at' => 'datetime',
-        'ended_at' => 'datetime',
+        'ended_at'   => 'datetime',
     ];
-
-    // ─── Relationships ────────────────────────────────────────────────────────
 
     public function conversation(): BelongsTo
     {
         return $this->belongsTo(Conversation::class);
-    }
-
-    public function flowNode(): BelongsTo
-    {
-        return $this->belongsTo(FlowNode::class);
     }
 
     public function agent(): BelongsTo
@@ -40,19 +29,9 @@ class AgentHandoverLog extends Model
         return $this->belongsTo(User::class, 'assigned_agent_id');
     }
 
-    // ─── Business Logic ───────────────────────────────────────────────────────
-
-    public function getDuration(): ?int
+    public function durationInSeconds(): ?int
     {
-        if (!$this->ended_at) {
-            return null;
-        }
-
+        if (!$this->ended_at) return null;
         return $this->started_at->diffInSeconds($this->ended_at);
-    }
-
-    public function isActive(): bool
-    {
-        return $this->ended_at === null;
     }
 }

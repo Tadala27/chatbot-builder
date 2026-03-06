@@ -3,723 +3,459 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Bot;
 use App\Models\CustomVariable;
+use App\Models\Dialog;
 use App\Models\Flow;
-use App\Models\FlowNode;
+use App\Models\FlowVersion;
 use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
+/**
+ * Handles the visual flow builder: fetching, auto-saving dialogs, publishing
+ * and version management. "Dialogs" are the new equivalent of "flow_nodes".
+ */
 class FlowBuilderController extends Controller
 {
-    /**
-     * Get flow with current draft or published version for the builder.
-     * Returns nodes + nodeActions separately for frontend rehydration.
-     */
-    public function show(Flow $flow): JsonResponse
-    {
-        $this->authorizeAccess($flow);
+    // =========================================================================
+    // GET /api/bots/{bot}/flows/{flow}/builder
+    // Returns the current draft (or published) version with all dialogs.
+    // =========================================================================
 
-        $version = $flow->getDraftVersion() ?? $flow->getPublishedVersion();
+    public function show(Bot $bot, Flow $flow): JsonResponse
+    {
+        $this->authorizeFlow($bot, $flow);
+
+        $version = $flow->draftVersion() ?? $flow->publishedVersion();
 
         if (!$version) {
-            $version = $flow->createVersion();
+            $version = $this->createInitialVersion($flow);
         }
 
-        $nodes = $version->nodes()->with('actions')->get();
+        $dialogs = $version->dialogs()->with(['options', 'actions'])->get();
 
         return response()->json([
-            'flow'        => $flow->load('whatsappAccount'),
-            'version'     => $version,
-            'nodes'       => $nodes,
-            'nodeActions' => $this->buildNodeActionsPayload($nodes),
+            'flow'    => $flow,
+            'version' => $version,
+            'dialogs' => $dialogs,
         ]);
     }
 
-    public function autoSave(Request $request, Flow $flow): JsonResponse
+    // =========================================================================
+    // POST /api/bots/{bot}/flows/{flow}/builder/save
+    // Auto-save: upsert dialogs + options + actions from the frontend state.
+    // =========================================================================
+
+    public function autoSave(Request $request, Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         $validated = $request->validate([
-            'nodes'              => 'required|array',
-            'nodes.*.node_id'    => 'required|string',
-            'nodes.*.node_type'  => 'required|string',
-            'nodes.*.position_x' => 'required|numeric',
-            'nodes.*.position_y' => 'required|numeric',
-            'nodes.*.config'     => 'required|array',
+            'dialogs'                  => 'required|array',
+            'dialogs.*.dialog_id'      => 'required|string',   // frontend UUID
+            'dialogs.*.kind'           => 'required|string',
+            'dialogs.*.label'          => 'nullable|string',
+            'dialogs.*.position_x'     => 'required|numeric',
+            'dialogs.*.position_y'     => 'required|numeric',
+            'dialogs.*.config'         => 'required|array',
+            'dialogs.*.is_entry_point' => 'sometimes|boolean',
+            'dialogs.*.is_terminal'    => 'sometimes|boolean',
+            'dialogs.*.options'        => 'sometimes|array',
+            'dialogs.*.actions'        => 'sometimes|array',
         ]);
 
-        $version = $flow->getDraftVersion();
+        $version = $flow->draftVersion();
+
         if (!$version) {
-            return response()->json([
-                'message' => 'No draft version found. Create new version first.',
-            ], 422);
+            return response()->json(['message' => 'No draft version found. Create a new version first.'], 422);
         }
 
         if ($version->status !== 'draft') {
-            return response()->json([
-                'message' => 'Cannot modify published version. Create new version first.',
-            ], 422);
+            return response()->json(['message' => 'Cannot modify a published version. Create a new version first.'], 422);
         }
 
         DB::transaction(function () use ($validated, $version) {
-            $existingNodes = $version->nodes()
-                ->with('actions')
+            // Index existing dialogs by their frontend uuid stored in config['id']
+            $existing = $version->dialogs()
+                ->with(['options', 'actions'])
                 ->get()
-                ->keyBy(fn($n) => $n->config['id'] ?? $n->uuid);
+                ->keyBy(fn($d) => $d->config['id'] ?? $d->uuid);
 
-            $incomingIds = collect($validated['nodes'])->pluck('node_id')->all();
+            $incomingIds = collect($validated['dialogs'])->pluck('dialog_id')->all();
 
-            // Delete removed nodes
-            foreach ($existingNodes as $frontendId => $dbNode) {
+            // Remove deleted dialogs
+            foreach ($existing as $frontendId => $dbDialog) {
                 if (!in_array($frontendId, $incomingIds, true)) {
-                    $dbNode->actions()->delete();
-                    $dbNode->delete();
+                    $dbDialog->actions()->delete();
+                    $dbDialog->options()->delete();
+                    $dbDialog->delete();
                 }
             }
 
-            // Upsert nodes
-            $nodeIdMap = [];
-            foreach ($validated['nodes'] as $nodeData) {
-                $originalConfig       = $nodeData['config'];
-                $originalConfig['id'] = $nodeData['node_id'];
+            $dialogIdMap = [];
 
-                if ($nodeData['node_type'] === 'list') {
-                    $originalConfig = $this->normalizeListNodeConfig($originalConfig);
-                }
-
-                $configForStorage = $this->stripActionsFromConfig($originalConfig);
+            foreach ($validated['dialogs'] as $data) {
+                $config              = $data['config'];
+                $config['id']        = $data['dialog_id'];
 
                 $attributes = [
-                    'type'           => $this->mapNodeType($nodeData['node_type']),
-                    'label'          => $originalConfig['kind'] ?? $nodeData['node_type'],
-                    'content'        => $this->extractNodeContent($configForStorage),
-                    'config'         => $configForStorage,
-                    'position_x'     => $nodeData['position_x'],
-                    'position_y'     => $nodeData['position_y'],
-                    'is_entry_point' => $originalConfig['isFirstNode'] ?? false,
-                    'is_terminal'    => $originalConfig['isLastNode']  ?? false,
+                    'kind'           => $data['kind'],
+                    'label'          => $data['label'] ?? $data['kind'],
+                    'config'         => $config,
+                    'position_x'     => $data['position_x'],
+                    'position_y'     => $data['position_y'],
+                    'is_entry_point' => $data['is_entry_point'] ?? ($config['isFirstNode'] ?? false),
+                    'is_terminal'    => $data['is_terminal']    ?? ($config['isLastNode']  ?? false),
+                    'input_variable' => $config['inputVariable'] ?? null,
                 ];
 
-                if (isset($existingNodes[$nodeData['node_id']])) {
-                    $dbNode = $existingNodes[$nodeData['node_id']];
-                    $dbNode->update($attributes);
-                    $this->syncNodeActions($dbNode, $originalConfig);
+                if (isset($existing[$data['dialog_id']])) {
+                    $dbDialog = $existing[$data['dialog_id']];
+                    $dbDialog->update($attributes);
                 } else {
-                    $dbNode = $version->nodes()->create(array_merge(
-                        ['uuid' => Str::uuid()],
+                    $dbDialog = $version->dialogs()->create(array_merge(
+                        ['uuid' => (string) Str::uuid()],
                         $attributes
                     ));
-                    $this->createNodeActions($dbNode, $originalConfig['actions'] ?? []);
-                    $this->createInteractiveActions($dbNode, $originalConfig);
                 }
 
-                $nodeIdMap[$nodeData['node_id']] = $dbNode->id;
+                $dialogIdMap[$data['dialog_id']] = $dbDialog->id;
+
+                // Sync options (buttons / list rows)
+                $this->syncOptions($dbDialog, $data['options'] ?? []);
+
+                // Sync actions
+                $this->syncActions($dbDialog, $data['actions'] ?? []);
             }
 
-            // Update start node
-            $firstNodeData = collect($validated['nodes'])
-                ->firstWhere('config.isFirstNode', true);
-
-            if ($firstNodeData && isset($nodeIdMap[$firstNodeData['node_id']])) {
-                $version->start_node_id = $nodeIdMap[$firstNodeData['node_id']];
+            // Update the entry-point start_node_id on the version
+            $entryData = collect($validated['dialogs'])->first(fn($d) => ($d['is_entry_point'] ?? false) || ($d['config']['isFirstNode'] ?? false));
+            if ($entryData && isset($dialogIdMap[$entryData['dialog_id']])) {
+                $version->update(['start_node_id' => $dialogIdMap[$entryData['dialog_id']]]);
             }
 
             $version->touch();
-            $version->save();
         });
 
-        return response()->json([
-            'message'  => 'Auto-saved',
-            'saved_at' => now()->toIso8601String(),
-        ]);
+        return response()->json(['message' => 'Auto-saved.', 'saved_at' => now()->toIso8601String()]);
     }
 
-    public function publish(Flow $flow): JsonResponse
+    // =========================================================================
+    // POST /api/bots/{bot}/flows/{flow}/builder/publish
+    // =========================================================================
+
+    public function publish(Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
-        $version = $flow->getDraftVersion();
-
-        if (!$version) {
-            return response()->json(['message' => 'No draft version to publish'], 422);
+        // If the flow is already published, we might want to handle it differently
+        if ($flow->status === 'published') {
+            // Option: Republish the same flow (update version)
+            $version = $flow->draftVersion();
+            if (!$version) {
+                return response()->json(['message' => 'No draft version to publish.'], 422);
+            }
+        } else {
+            $version = $flow->draftVersion();
+            if (!$version) {
+                return response()->json(['message' => 'No draft version to publish.'], 422);
+            }
         }
 
-        $errors = $version->validate();
-
-        if (!empty($errors)) {
+        // Validation
+        if (!$version->dialogs()->where('is_entry_point', true)->exists()) {
             return response()->json([
-                'message' => 'Flow validation failed',
-                'errors'  => $errors,
+                'message' => 'Flow validation failed.',
+                'errors'  => ['Flow must have at least one entry-point dialog.'],
             ], 422);
         }
 
-        try {
-            $flow->publish($version);
+        DB::transaction(function () use ($bot, $flow, $version) {
+            // Archive all currently published flows EXCEPT the current one
+            // (if it's already published, we're just updating its version)
+            Flow::where('bot_id', $bot->id)
+                ->where('status', 'published')
+                ->where('is_active', true)
+                ->where('id', '!=', $flow->id)
+                ->each(function ($otherFlow) {
+                    $otherFlow->update([
+                        'status'    => 'archived',
+                        'is_active' => false,
+                    ]);
 
-            return response()->json([
-                'message' => 'Flow published successfully',
-                'flow'    => $flow->fresh(),
+                    if ($otherFlow->current_published_version_id) {
+                        $otherFlow->versions()
+                            ->where('id', $otherFlow->current_published_version_id)
+                            ->update(['status' => 'archived']);
+                    }
+                });
+
+            // Publish the new version
+            $version->update([
+                'status'       => 'published',
+                'published_at' => now(),
             ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Failed to publish flow',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
 
-    public function getVariables(Flow $flow): JsonResponse
-    {
-        $this->authorizeAccess($flow);
-
-        $customVariables = CustomVariable::where('flow_id', $flow->id)
-            ->orderBy('name')
-            ->get()
-            ->map(fn($v) => array_merge($v->toArray(), ['is_system' => false]));
-
-        $systemVariables = collect([
-            ['id' => null, 'flow_id' => null, 'name' => 'phone_number',  'save_in' => 'bot_variables', 'use_in_js' => false, 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'flow_id' => null, 'name' => 'user_name',     'save_in' => 'bot_variables', 'use_in_js' => false, 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'flow_id' => null, 'name' => 'current_date',  'save_in' => 'bot_variables', 'use_in_js' => false, 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'flow_id' => null, 'name' => 'current_time',  'save_in' => 'bot_variables', 'use_in_js' => false, 'is_sensitive' => false, 'is_system' => true],
-        ]);
+            $flow->update([
+                'status'                       => 'published',
+                'current_published_version_id' => $version->id,
+                'published_at'                 => now(),
+                'is_active'                    => true,
+            ]);
+        });
 
         return response()->json([
-            'variables' => $customVariables->concat($systemVariables)->unique('name')->values(),
+            'message' => 'Flow published successfully. Previous flows archived.',
+            'flow' => $flow->fresh()
         ]);
     }
 
-    public function getVersions(Flow $flow): JsonResponse
+    // =========================================================================
+    // GET /api/bots/{bot}/flows/{flow}/builder/versions
+    // =========================================================================
+
+    public function getVersions(Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         $versions = $flow->versions()
-            ->orderBy('version_number', 'desc')
+            ->with('creator:id,name')
+            ->orderByDesc('version_number')
             ->get()
             ->map(fn($v) => [
                 'id'             => $v->id,
                 'version_number' => $v->version_number,
                 'status'         => $v->status,
-                'created_at'     => $v->created_at->toISOString(),
-                'created_by'     => $v->created_by,
+                'published_at'   => $v->published_at?->toIso8601String(),
+                'created_at'     => $v->created_at->toIso8601String(),
+                'created_by'     => $v->creator?->only('id', 'name'),
             ]);
 
         return response()->json(['versions' => $versions]);
     }
 
-    public function getVersion(Flow $flow, int $versionId): JsonResponse
-    {
-        $this->authorizeAccess($flow);
+    // =========================================================================
+    // GET /api/bots/{bot}/flows/{flow}/builder/versions/{version}
+    // =========================================================================
 
-        $version = $flow->versions()->findOrFail($versionId);
-        $nodes   = $version->nodes()->with('actions')->get();
+    public function getVersion(Bot $bot, Flow $flow, int $versionId): JsonResponse
+    {
+        $this->authorizeFlow($bot, $flow);
+
+        $version = $flow->versions()->with(['dialogs.options', 'dialogs.actions'])->findOrFail($versionId);
 
         return response()->json([
             'version' => [
                 'id'             => $version->id,
                 'version_number' => $version->version_number,
                 'status'         => $version->status,
-                'created_at'     => $version->created_at->toISOString(),
                 'start_node_id'  => $version->start_node_id,
+                'created_at'     => $version->created_at->toIso8601String(),
             ],
-            'nodes'       => $nodes->map(fn($node) => [
-                'id'             => $node->id,
-                'uuid'           => $node->uuid,
-                'type'           => $node->type,
-                'label'          => $node->label,
-                'config'         => $node->config,
-                'position_x'     => $node->position_x,
-                'position_y'     => $node->position_y,
-                'is_entry_point' => $node->is_entry_point,
-                'is_terminal'    => $node->is_terminal,
-            ]),
-            'nodeActions' => $this->buildNodeActionsPayload($nodes),
+            'dialogs' => $version->dialogs,
         ]);
     }
 
-    public function createVersionFromExisting(Request $request, Flow $flow): JsonResponse
+    // =========================================================================
+    // POST /api/bots/{bot}/flows/{flow}/builder/versions
+    // Branch a new draft from an existing version.
+    // =========================================================================
+
+    public function createVersion(Request $request, Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         $validated = $request->validate([
-            'source_version_id' => 'required|exists:flow_versions,id',
+            'source_version_id' => 'required|integer|exists:flow_versions,id',
+            'changelog'         => 'nullable|string',
         ]);
 
-        $sourceVersion    = $flow->versions()->findOrFail($validated['source_version_id']);
+        $source          = $flow->versions()->findOrFail($validated['source_version_id']);
         $newVersionNumber = $flow->versions()->max('version_number') + 1;
         $newVersion       = null;
 
-        DB::transaction(function () use (&$newVersion, $flow, $sourceVersion, $newVersionNumber) {
-            $newVersion = $flow->versions()->create([
+        DB::transaction(function () use (&$newVersion, $flow, $source, $newVersionNumber, $validated) {
+            $newVersion = FlowVersion::create([
+                'flow_id'        => $flow->id,
                 'version_number' => $newVersionNumber,
                 'status'         => 'draft',
                 'created_by'     => auth()->id(),
+                'changelog'      => $validated['changelog'] ?? null,
             ]);
 
-            $nodeIdMap = [];
+            $dialogIdMap = [];
 
-            foreach ($sourceVersion->nodes as $oldNode) {
-                $newNode = $newVersion->nodes()->create([
-                    'uuid'           => Str::uuid(),
-                    'type'           => $oldNode->type,
-                    'label'          => $oldNode->label,
-                    'content'        => $oldNode->content,
-                    'config'         => $oldNode->config,
-                    'position_x'     => $oldNode->position_x,
-                    'position_y'     => $oldNode->position_y,
-                    'is_entry_point' => $oldNode->is_entry_point,
-                    'is_terminal'    => $oldNode->is_terminal,
+            foreach ($source->dialogs()->with(['options', 'actions'])->get() as $oldDialog) {
+                $newDialog = $newVersion->dialogs()->create([
+                    'uuid'           => (string) Str::uuid(),
+                    'label'          => $oldDialog->label,
+                    'kind'           => $oldDialog->kind,
+                    'config'         => $oldDialog->config,
+                    'position_x'     => $oldDialog->position_x,
+                    'position_y'     => $oldDialog->position_y,
+                    'is_entry_point' => $oldDialog->is_entry_point,
+                    'is_terminal'    => $oldDialog->is_terminal,
+                    'input_variable' => $oldDialog->input_variable,
                 ]);
 
-                $nodeIdMap[$oldNode->id] = $newNode->id;
+                $dialogIdMap[$oldDialog->id] = $newDialog->id;
 
-                foreach ($oldNode->actions as $oldAction) {
-                    $newNode->actions()->create([
-                        'trigger_event'       => $oldAction->trigger_event,
-                        'source_item_id'      => $oldAction->source_item_id,
-                        'source_item_type'    => $oldAction->source_item_type,
-                        'action_type'         => $oldAction->action_type,
-                        'execution_order'     => $oldAction->execution_order,
-                        'config'              => $oldAction->config,
-                        'continue_on_failure' => $oldAction->continue_on_failure,
-                    ]);
+                // Clone options
+                foreach ($oldDialog->options as $opt) {
+                    $newDialog->options()->create($opt->only([
+                        'external_id',
+                        'title',
+                        'description',
+                        'section_title',
+                        'section_order',
+                        'option_order',
+                        'save_response',
+                    ]));
+                }
+
+                // Clone actions
+                foreach ($oldDialog->actions as $act) {
+                    $newDialog->actions()->create($act->only([
+                        'action_type',
+                        'action_order',
+                        'config',
+                        'is_active',
+                    ]));
                 }
             }
 
-            if ($sourceVersion->start_node_id && isset($nodeIdMap[$sourceVersion->start_node_id])) {
-                $newVersion->start_node_id = $nodeIdMap[$sourceVersion->start_node_id];
-                $newVersion->save();
+            if ($source->start_node_id && isset($dialogIdMap[$source->start_node_id])) {
+                $newVersion->update(['start_node_id' => $dialogIdMap[$source->start_node_id]]);
             }
         });
 
-        activity()
-            ->causedBy(auth()->user())
-            ->performedOn($flow)
-            ->log("Created version {$newVersionNumber} from version {$sourceVersion->version_number}");
+        activity()->causedBy(auth()->user())->performedOn($flow)
+            ->log("Version {$newVersionNumber} created from version {$source->version_number}");
+
+        return response()->json(['message' => 'Version created.', 'version' => $newVersion], 201);
+    }
+
+    // =========================================================================
+    // GET /api/bots/{bot}/flows/{flow}/builder/variables
+    // Returns bot-scoped custom variables + system variables
+    // =========================================================================
+
+    public function getVariables(Bot $bot, Flow $flow): JsonResponse
+    {
+        $this->authorizeFlow($bot, $flow);
+
+        $custom = CustomVariable::where('bot_id', $bot->id)
+            ->orderBy('name')
+            ->get()
+            ->map(fn($v) => array_merge($v->toArray(), ['is_system' => false]));
+
+        $system = collect([
+            ['id' => null, 'name' => 'phone_number', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'user_name',    'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'current_date', 'data_type' => 'date',   'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'current_time', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+        ]);
 
         return response()->json([
-            'message' => 'Version created successfully',
-            'version' => $newVersion,
-        ], 201);
+            'variables' => $custom->concat($system)->values(),
+        ]);
     }
 
     // =========================================================================
-    // PRIVATE HELPERS (All the complex node/action helpers from original)
+    // PRIVATE HELPERS
     // =========================================================================
 
-    private function authorizeAccess(Flow $flow): void
+    private function authorizeFlow(Bot $bot, Flow $flow): void
     {
-        $tenant = Tenant::current();
-
-        if ($flow->tenant_id !== $tenant->id) {
-            abort(404, 'Flow not found');
-        }
+        if ($bot->tenant_id !== Tenant::current()->id) abort(404, 'Bot not found.');
+        if ($flow->bot_id !== $bot->id) abort(404, 'Flow not found.');
     }
 
-    private function buildNodeActionsPayload($nodes): array
+    private function createInitialVersion(Flow $flow): FlowVersion
     {
-        return $nodes->flatMap(
-            fn($node) =>
-            $node->actions
-                ->where('trigger_event', 'on_select')
-                ->map(fn($a) => [
-                    'node_id'          => $node->config['id'] ?? $node->uuid,
-                    'source_item_id'   => $a->source_item_id,
-                    'source_item_type' => $a->source_item_type,
-                    'execution_order'  => $a->execution_order,
-                    'config'           => $a->config,
-                ])
-        )->values()->toArray();
+        $version = FlowVersion::create([
+            'flow_id'        => $flow->id,
+            'version_number' => 1,
+            'status'         => 'draft',
+            'created_by'     => auth()->id(),
+        ]);
+
+        $entry = $version->dialogs()->create([
+            'uuid'           => (string) Str::uuid(),
+            'label'          => 'Start',
+            'kind'           => 'trigger',
+            'is_entry_point' => true,
+            'is_terminal'    => false,
+            'position_x'     => 100,
+            'position_y'     => 100,
+            'config'         => ['id' => 'trigger-' . Str::uuid(), 'isFirstNode' => true, 'isLastNode' => false],
+        ]);
+
+        $version->update(['start_node_id' => $entry->id]);
+
+        return $version->fresh();
     }
 
-    private function stripActionsFromConfig(array $config): array
+    private function syncOptions(Dialog $dialog, array $options): void
     {
-        if (!empty($config['buttons'])) {
-            foreach ($config['buttons'] as &$btn) {
-                unset($btn['actions']);
-            }
-            unset($btn);
-        }
+        $keepIds = [];
 
-        if (!empty($config['action']['sections'])) {
-            foreach ($config['action']['sections'] as &$section) {
-                foreach ($section['rows'] ?? [] as &$row) {
-                    unset($row['actions']);
-                }
-                unset($row);
-            }
-            unset($section);
-        }
-
-        if (!empty($config['sections'])) {
-            foreach ($config['sections'] as &$section) {
-                foreach ($section['rows'] ?? [] as &$row) {
-                    unset($row['actions']);
-                }
-                unset($row);
-            }
-            unset($section);
-        }
-
-        return $config;
-    }
-
-    private function normalizeListNodeConfig(array $config): array
-    {
-        if (!isset($config['action'])) {
-            $config['action'] = [
-                'button'   => $config['actionButton'] ?? 'View Options',
-                'sections' => $config['sections'] ?? [],
-            ];
-        }
-
-        if (!isset($config['action']['button'])) {
-            $config['action']['button'] = $config['actionButton'] ?? 'View Options';
-        }
-
-        if (!isset($config['action']['sections'])) {
-            $config['action']['sections'] = $config['sections'] ?? [];
-        }
-
-        foreach ($config['action']['sections'] as &$section) {
-            foreach ($section['rows'] ?? [] as &$row) {
-                if (!isset($row['description'])) {
-                    $row['description'] = $row['desc'] ?? '';
-                }
-                unset($row['desc']);
-            }
-            unset($row);
-        }
-        unset($section);
-
-        return $config;
-    }
-
-    private function mapNodeType(string $frontendType): string
-    {
-        return [
-            'trigger'  => 'message',
-            'message'  => 'message',
-            'buttons'  => 'buttons',
-            'list'     => 'list',
-            'media'    => 'message',
-            'location' => 'message',
-            'contact'  => 'message',
-            'end'      => 'end',
-        ][$frontendType] ?? 'message';
-    }
-
-    private function extractNodeContent(array $config): array
-    {
-        $content = [];
-
-        if (!empty($config['text']))       $content['text']       = $config['text'];
-        if (!empty($config['buttons']))    $content['buttons']    = $config['buttons'];
-        if (!empty($config['action']))     $content['action']     = $config['action'];
-        if (!empty($config['listHeader'])) $content['listHeader'] = $config['listHeader'];
-        if (!empty($config['listFooter'])) $content['listFooter'] = $config['listFooter'];
-        if (!empty($config['listBody']))   $content['listBody']   = $config['listBody'];
-        if (!empty($config['sections']))   $content['sections']   = $config['sections'];
-
-        if (!empty($config['mediaType'])) {
-            $content['media_type'] = $config['mediaType'];
-            $content['media_url']  = $config['mediaUrl']     ?? '';
-            $content['caption']    = $config['mediaCaption'] ?? '';
-        }
-
-        return $content;
-    }
-
-    private function mapActionType(string $kind): string
-    {
-        return [
-            'navigation' => 'emit_event',
-            'condition'  => 'emit_event',
-            'function'   => 'execute_function',
-            'variable'   => 'save_variable',
-            'delay'      => 'delay',
-            'api'        => 'api_call',
-        ][$kind] ?? 'emit_event';
-    }
-
-    private function syncNodeActions(FlowNode $node, array $config): void
-    {
-        $processedActionIds = [];
-
-        // On-enter actions
-        if (!empty($config['actions'])) {
-            foreach ($config['actions'] as $index => $action) {
-                if (!is_array($action)) continue;
-
-                $existingAction = $this->findExistingAction($node, 'on_enter', 'node', null, $action, $index);
-
-                if (!isset($action['id'])) {
-                    $action['id'] = (string) Str::uuid();
-                }
-
-                $actionData = [
-                    'trigger_event'       => 'on_enter',
-                    'source_item_id'      => null,
-                    'source_item_type'    => 'node',
-                    'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                    'execution_order'     => $index,
-                    'config'              => $action,
-                    'continue_on_failure' => true,
-                ];
-
-                if ($existingAction) {
-                    $existingAction->update($actionData);
-                    $processedActionIds[] = $existingAction->id;
-                } else {
-                    $newAction = $node->actions()->create($actionData);
-                    $processedActionIds[] = $newAction->id;
-                }
-            }
-        }
-
-        // Button actions
-        if (!empty($config['buttons'])) {
-            foreach ($config['buttons'] as $btnIndex => $btn) {
-                $btnId = $btn['id'] ?? null;
-                if (!$btnId) continue;
-
-                foreach ($btn['actions'] ?? [] as $actIndex => $action) {
-                    if (!is_array($action)) continue;
-
-                    if (!isset($action['id'])) {
-                        $action['id'] = (string) Str::uuid();
-                    }
-
-                    $existingAction = $this->findExistingAction($node, 'on_select', 'button', $btnId, $action, ($btnIndex * 10) + $actIndex);
-
-                    $actionData = [
-                        'trigger_event'       => 'on_select',
-                        'source_item_id'      => $btnId,
-                        'source_item_type'    => 'button',
-                        'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                        'execution_order'     => ($btnIndex * 10) + $actIndex,
-                        'config'              => $action,
-                        'continue_on_failure' => true,
-                    ];
-
-                    if ($existingAction) {
-                        $existingAction->update($actionData);
-                        $processedActionIds[] = $existingAction->id;
-                    } else {
-                        $newAction = $node->actions()->create($actionData);
-                        $processedActionIds[] = $newAction->id;
-                    }
-                }
-            }
-        }
-
-        // List row actions
-        $this->syncListRowActions($node, $config, $processedActionIds);
-
-        // Clean up orphaned actions
-        if (!empty($processedActionIds)) {
-            $node->actions()
-                ->whereNotIn('id', $processedActionIds)
-                ->delete();
-        }
-    }
-
-    private function findExistingAction(FlowNode $node, string $triggerEvent, string $sourceItemType, ?string $sourceItemId, array $action, int $executionOrder): ?\App\Models\FlowNodeAction
-    {
-        if (!empty($action['id'])) {
-            $existing = $node->actions()
-                ->where('trigger_event', $triggerEvent)
-                ->where('source_item_type', $sourceItemType)
-                ->when($sourceItemId, fn($q) => $q->where('source_item_id', $sourceItemId))
-                ->where('config->id', $action['id'])
+        foreach ($options as $index => $opt) {
+            $existing = $dialog->options()
+                ->where('external_id', $opt['external_id'] ?? null)
                 ->first();
 
+            $data = [
+                'external_id'    => $opt['external_id'] ?? null,
+                'title'          => $opt['title'] ?? '',
+                'description'    => $opt['description'] ?? null,
+                'section_title'  => $opt['section_title'] ?? null,
+                'section_order'  => $opt['section_order'] ?? 0,
+                'option_order'   => $opt['option_order'] ?? $index,
+                'save_response'  => $opt['save_response'] ?? false,
+            ];
+
             if ($existing) {
-                return $existing;
+                $existing->update($data);
+                $keepIds[] = $existing->id;
+            } else {
+                $created   = $dialog->options()->create($data);
+                $keepIds[] = $created->id;
             }
         }
 
-        return $node->actions()
-            ->where('trigger_event', $triggerEvent)
-            ->where('source_item_type', $sourceItemType)
-            ->when($sourceItemId, fn($q) => $q->where('source_item_id', $sourceItemId))
-            ->where('execution_order', $executionOrder)
-            ->first();
+        // Remove options no longer in the payload
+        $dialog->options()->whereNotIn('id', $keepIds)->delete();
     }
 
-    private function syncListRowActions(FlowNode $node, array $config, array &$processedActionIds): void
+    private function syncActions(Dialog $dialog, array $actions): void
     {
-        // New structure (action.sections)
-        if (!empty($config['action']['sections'])) {
-            foreach ($config['action']['sections'] as $sectionIndex => $section) {
-                foreach ($section['rows'] ?? [] as $rowIndex => $row) {
-                    $rowId = $row['id'] ?? null;
-                    if (!$rowId) continue;
+        $keepIds = [];
 
-                    foreach ($row['actions'] ?? [] as $actIndex => $action) {
-                        if (!is_array($action)) continue;
+        foreach ($actions as $index => $act) {
+            $existing = $dialog->actions()
+                ->where('action_order', $index)
+                ->first();
 
-                        if (!isset($action['id'])) {
-                            $action['id'] = (string) Str::uuid();
-                        }
+            $data = [
+                'action_type'  => $act['action_type'],
+                'action_order' => $index,
+                'config'       => $act['config'] ?? [],
+                'is_active'    => $act['is_active'] ?? true,
+            ];
 
-                        $executionOrder = ($rowIndex * 10) + $actIndex;
-
-                        $existingAction = $this->findExistingAction($node, 'on_select', 'row', $rowId, $action, $executionOrder);
-
-                        $actionData = [
-                            'trigger_event'       => 'on_select',
-                            'source_item_id'      => $rowId,
-                            'source_item_type'    => 'row',
-                            'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                            'execution_order'     => $executionOrder,
-                            'config'              => $action,
-                            'continue_on_failure' => true,
-                        ];
-
-                        if ($existingAction) {
-                            $existingAction->update($actionData);
-                            $processedActionIds[] = $existingAction->id;
-                        } else {
-                            $newAction = $node->actions()->create($actionData);
-                            $processedActionIds[] = $newAction->id;
-                        }
-                    }
-                }
+            if ($existing) {
+                $existing->update($data);
+                $keepIds[] = $existing->id;
+            } else {
+                $created   = $dialog->actions()->create($data);
+                $keepIds[] = $created->id;
             }
         }
 
-        // Legacy structure (direct sections)
-        if (!empty($config['sections']) && empty($config['action'])) {
-            foreach ($config['sections'] as $sectionIndex => $section) {
-                foreach ($section['rows'] ?? [] as $rowIndex => $row) {
-                    $rowId = $row['id'] ?? null;
-                    if (!$rowId) continue;
-
-                    foreach ($row['actions'] ?? [] as $actIndex => $action) {
-                        if (!is_array($action)) continue;
-
-                        if (!isset($action['id'])) {
-                            $action['id'] = (string) Str::uuid();
-                        }
-
-                        $executionOrder = ($rowIndex * 10) + $actIndex;
-
-                        $existingAction = $this->findExistingAction($node, 'on_select', 'row', $rowId, $action, $executionOrder);
-
-                        $actionData = [
-                            'trigger_event'       => 'on_select',
-                            'source_item_id'      => $rowId,
-                            'source_item_type'    => 'row',
-                            'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                            'execution_order'     => $executionOrder,
-                            'config'              => $action,
-                            'continue_on_failure' => true,
-                        ];
-
-                        if ($existingAction) {
-                            $existingAction->update($actionData);
-                            $processedActionIds[] = $existingAction->id;
-                        } else {
-                            $newAction = $node->actions()->create($actionData);
-                            $processedActionIds[] = $newAction->id;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private function createNodeActions(FlowNode $node, array $actions): void
-    {
-        foreach ($actions as $index => $action) {
-            if (!is_array($action)) continue;
-
-            $node->actions()->create([
-                'trigger_event'       => 'on_enter',
-                'source_item_id'      => null,
-                'source_item_type'    => 'node',
-                'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                'execution_order'     => $index,
-                'config'              => $action,
-                'continue_on_failure' => true,
-            ]);
-        }
-    }
-
-    private function createInteractiveActions(FlowNode $node, array $config): void
-    {
-        // List row actions - new structure
-        if (!empty($config['action']['sections'])) {
-            foreach ($config['action']['sections'] as $sectionIndex => $section) {
-                foreach ($section['rows'] ?? [] as $rowIndex => $row) {
-                    $rowId = $row['id'] ?? null;
-                    if (!$rowId) continue;
-
-                    foreach ($row['actions'] ?? [] as $actIndex => $action) {
-                        if (!is_array($action)) continue;
-
-                        $node->actions()->create([
-                            'trigger_event'       => 'on_select',
-                            'source_item_id'      => $rowId,
-                            'source_item_type'    => 'row',
-                            'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                            'execution_order'     => ($rowIndex * 10) + $actIndex,
-                            'config'              => $action,
-                            'continue_on_failure' => true,
-                        ]);
-                    }
-                }
-            }
-        }
-
-        // List row actions - legacy structure
-        if (!empty($config['sections']) && empty($config['action'])) {
-            foreach ($config['sections'] as $sectionIndex => $section) {
-                foreach ($section['rows'] ?? [] as $rowIndex => $row) {
-                    $rowId = $row['id'] ?? null;
-                    if (!$rowId) continue;
-
-                    foreach ($row['actions'] ?? [] as $actIndex => $action) {
-                        if (!is_array($action)) continue;
-
-                        $node->actions()->create([
-                            'trigger_event'       => 'on_select',
-                            'source_item_id'      => $rowId,
-                            'source_item_type'    => 'row',
-                            'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                            'execution_order'     => ($rowIndex * 10) + $actIndex,
-                            'config'              => $action,
-                            'continue_on_failure' => true,
-                        ]);
-                    }
-                }
-            }
-        }
-
-        // Button actions
-        if (!empty($config['buttons'])) {
-            foreach ($config['buttons'] as $btnIndex => $btn) {
-                $btnId = $btn['id'] ?? null;
-                if (!$btnId) continue;
-
-                foreach ($btn['actions'] ?? [] as $actIndex => $action) {
-                    if (!is_array($action)) continue;
-
-                    $node->actions()->create([
-                        'trigger_event'       => 'on_select',
-                        'source_item_id'      => $btnId,
-                        'source_item_type'    => 'button',
-                        'action_type'         => $this->mapActionType($action['kind'] ?? ''),
-                        'execution_order'     => ($btnIndex * 10) + $actIndex,
-                        'config'              => $action,
-                        'continue_on_failure' => true,
-                    ]);
-                }
-            }
-        }
+        $dialog->actions()->whereNotIn('id', $keepIds)->delete();
     }
 }

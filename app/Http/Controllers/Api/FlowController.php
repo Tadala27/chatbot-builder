@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Bot;
 use App\Models\Flow;
+use App\Models\FlowVersion;
 use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,210 +14,171 @@ use Illuminate\Support\Str;
 
 class FlowController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    // GET /api/bots/{bot}/flows
+    public function index(Request $request, Bot $bot): JsonResponse
     {
-        $tenant = Tenant::current();
+        $this->authorizeBot($bot);
 
-        $query = Flow::where('tenant_id', $tenant->id)
-            ->with(['whatsappAccount', 'creator']);
+        $query = Flow::where('bot_id', $bot->id);
 
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('description', 'like', "%{$search}%")
-                    ->orWhere('slug', 'like', "%{$search}%");
-            });
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where(fn($q) => $q
+                ->where('name', 'like', "%{$s}%")
+                ->orWhere('description', 'like', "%{$s}%")
+                ->orWhere('slug', 'like', "%{$s}%"));
         }
 
-        if ($request->has('status')) {
+        if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        if ($request->has('whatsapp_account_id')) {
-            $query->where('whatsapp_account_id', $request->whatsapp_account_id);
-        }
+        $query->orderBy($request->get('sort', 'created_at'), $request->get('direction', 'desc'));
 
-        if ($request->has('is_active')) {
-            $query->where('is_active', $request->boolean('is_active'));
-        }
-
-        $sortField     = $request->get('sort', 'created_at');
-        $sortDirection = $request->get('direction', 'desc');
-        $query->orderBy($sortField, $sortDirection);
-
-        $flows = $query->paginate($request->get('per_page', 20));
-
-        $flows->getCollection()->transform(function ($flow) {
-            $flow->stats = [
-                'total_conversations'     => $flow->getTotalConversations(),
-                'completed_conversations' => $flow->getCompletedConversations(),
-                'completion_rate'         => $flow->getCompletionRate(),
-            ];
-            return $flow;
-        });
-
-        return response()->json($flows);
+        return response()->json($query->paginate($request->get('per_page', 20)));
     }
 
-    public function show(Flow $flow): JsonResponse
+    // GET /api/bots/{bot}/flows/{flow}
+    public function show(Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
-        return response()->json([
-            'flow' => $flow->load('whatsappAccount'),
-        ]);
+        return response()->json(['flow' => $flow->load('currentPublishedVersion')]);
     }
 
-    public function store(Request $request): JsonResponse
+    // POST /api/bots/{bot}/flows
+    public function store(Request $request, Bot $bot): JsonResponse
     {
+        $this->authorizeBot($bot);
+
         $tenant = Tenant::current();
-
         if (!$tenant->canCreateFlow()) {
             return response()->json([
-                'message'   => 'Flow limit reached for your subscription plan',
+                'message'   => 'Flow limit reached for your subscription plan.',
                 'max_flows' => $tenant->max_flows,
             ], 422);
         }
 
         $validated = $request->validate([
-            'whatsapp_account_id' => 'required|exists:whatsapp_accounts,id',
-            'name'                => 'required|string|max:255',
-            'description'         => 'nullable|string',
-            'slug'                => 'nullable|string|max:255',
-            'welcome_message'     => 'nullable|string',
-            'fallback_message'    => 'nullable|string',
-            'default_language'    => 'nullable|string|max:10',
-            'supported_languages' => 'nullable|array',
-            'settings'            => 'nullable|array',
+            'name'        => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'slug'        => 'nullable|string|max:255',
         ]);
 
         if (empty($validated['slug'])) {
-            $validated['slug'] = $this->generateUniqueSlug($tenant->id, $validated['name']);
+            $validated['slug'] = $this->uniqueSlug($bot->id, $validated['name']);
         }
-
-        $validated['tenant_id']  = $tenant->id;
-        $validated['created_by'] = auth()->id();
-        $validated['status']     = 'draft';
 
         $flow = null;
 
-        DB::transaction(function () use (&$flow, $validated) {
-            $flow    = Flow::create($validated);
+        DB::transaction(function () use (&$flow, $bot, $validated) {
+            $flow = Flow::create([
+                'bot_id'      => $bot->id,
+                'name'        => $validated['name'],
+                'description' => $validated['description'] ?? null,
+                'slug'        => $validated['slug'],
+                'status'      => 'draft',
+            ]);
 
-            // Create initial version with trigger node
-            $version = $flow->versions()->create([
+            // Seed the first draft version with an entry-point trigger dialog
+            $version = FlowVersion::create([
+                'flow_id'        => $flow->id,
                 'version_number' => 1,
                 'status'         => 'draft',
                 'created_by'     => auth()->id(),
             ]);
 
-            $triggerNode = $version->nodes()->create([
-                'uuid'           => Str::uuid(),
-                'type'           => 'trigger',
+            $entryDialog = $version->dialogs()->create([
+                'uuid'           => (string) Str::uuid(),
                 'label'          => 'Start',
+                'kind'           => 'trigger',
+                'is_entry_point' => true,
+                'is_terminal'    => false,
                 'position_x'     => 100,
                 'position_y'     => 100,
-                'is_entry_point' => true,
                 'config'         => [
-                    'kind'            => 'trigger',
-                    'id'              => 'trigger-' . Str::uuid()->toString(),
-                    'isFirstNode'     => true,
-                    'isLastNode'      => false,
-                    'triggersHandoff' => false,
-                    'actions'         => [],
-                    'goTo'            => '',
-                    'text'            => 'keyword',
-                    'mediaCaption'    => '',
-                    'inputVariable'   => '',
+                    'id'          => 'trigger-' . Str::uuid(),
+                    'isFirstNode' => true,
+                    'isLastNode'  => false,
+                    'goTo'        => '',
                 ],
             ]);
 
-            $version->start_node_id = $triggerNode->id;
-            $version->save();
-            
-            $this->logActivity($flow, 'Flow created');
+            $version->update(['start_node_id' => $entryDialog->id]);
+            activity()->causedBy(auth()->user())->performedOn($flow)->log('Flow created');
         });
 
 
-        return response()->json([
-            'message' => 'Flow created successfully',
-            'flow'    => $flow?->load('whatsappAccount'),
-        ], 201);
+        return response()->json(['message' => 'Flow created.', 'flow' => $flow], 201);
     }
 
-    public function update(Request $request, Flow $flow): JsonResponse
+    // PUT /api/bots/{bot}/flows/{flow}
+    public function update(Request $request, Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         $validated = $request->validate([
-            'whatsapp_account_id' => 'sometimes|exists:whatsapp_accounts,id',
-            'name'                => 'sometimes|string|max:255',
-            'description'         => 'nullable|string',
-            'slug'                => 'sometimes|string|max:255',
-            'welcome_message'     => 'nullable|string',
-            'fallback_message'    => 'nullable|string',
-            'default_language'    => 'sometimes|string|max:10',
-            'supported_languages' => 'nullable|array',
-            'settings'            => 'nullable|array',
+            'name'        => 'sometimes|string|max:255',
+            'description' => 'nullable|string',
+            'slug'        => 'sometimes|string|max:255',
+            'is_active'   => 'sometimes|boolean',
         ]);
 
         if (isset($validated['slug']) && $validated['slug'] !== $flow->slug) {
-            $this->validateUniqueSlug($flow, $validated['slug']);
+            if (Flow::where('bot_id', $bot->id)->where('slug', $validated['slug'])->where('id', '!=', $flow->id)->exists()) {
+                return response()->json(['message' => 'Slug already in use on this bot.'], 422);
+            }
         }
 
         $flow->update($validated);
 
-        $this->logActivity($flow, 'Flow updated');
+        activity()->causedBy(auth()->user())->performedOn($flow)->log('Flow updated');
 
-        return response()->json([
-            'message' => 'Flow updated successfully',
-            'flow'    => $flow->load('whatsappAccount'),
-        ]);
+        return response()->json(['message' => 'Flow updated.', 'flow' => $flow]);
     }
 
-    public function destroy(Flow $flow): JsonResponse
+    // DELETE /api/bots/{bot}/flows/{flow}
+    public function destroy(Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         if ($flow->conversations()->where('status', 'active')->exists()) {
-            return response()->json([
-                'message' => 'Cannot delete flow with active conversations',
-            ], 422);
+            return response()->json(['message' => 'Cannot delete flow with active conversations.'], 422);
         }
 
-        $flowName = $flow->name;
+        $name = $flow->name;
         $flow->delete();
 
-        activity()
-            ->causedBy(auth()->user())
-            ->log('Flow deleted: ' . $flowName);
+        activity()->causedBy(auth()->user())->log("Flow deleted: {$name}");
 
-        return response()->json(['message' => 'Flow deleted successfully']);
+        return response()->json(['message' => 'Flow deleted.']);
     }
 
-    public function unpublish(Flow $flow): JsonResponse
+    // POST /api/bots/{bot}/flows/{flow}/unpublish
+    public function unpublish(Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
-        $flow->unpublish();
-
-        return response()->json([
-            'message' => 'Flow unpublished successfully',
-            'flow'    => $flow,
+        $flow->update([
+            'status'                     => 'draft',
+            'current_published_version_id' => null,
+            'published_at'               => null,
+            'is_active'                  => false,
         ]);
+
+        activity()->causedBy(auth()->user())->performedOn($flow)->log('Flow unpublished');
+
+        return response()->json(['message' => 'Flow unpublished.', 'flow' => $flow]);
     }
 
-    public function duplicate(Request $request, Flow $flow): JsonResponse
+    // POST /api/bots/{bot}/flows/{flow}/duplicate
+    public function duplicate(Request $request, Bot $bot, Flow $flow): JsonResponse
     {
-        $this->authorizeAccess($flow);
+        $this->authorizeFlow($bot, $flow);
 
         $tenant = Tenant::current();
-
         if (!$tenant->canCreateFlow()) {
-            return response()->json([
-                'message' => 'Flow limit reached for your subscription plan',
-            ], 422);
+            return response()->json(['message' => 'Flow limit reached for your subscription plan.'], 422);
         }
 
         $validated = $request->validate([
@@ -223,60 +186,84 @@ class FlowController extends Controller
             'slug' => 'nullable|string|max:255',
         ]);
 
-        if (empty($validated['slug'])) {
-            $validated['slug'] = $this->generateUniqueSlug($tenant->id, $validated['name']);
-        }
+        $slug = $validated['slug'] ?? $this->uniqueSlug($bot->id, $validated['name']);
 
-        $duplicate = $flow->duplicate($validated['name'], $validated['slug']);
+        $duplicate = null;
 
-        return response()->json([
-            'message' => 'Flow duplicated successfully',
-            'flow'    => $duplicate->load('whatsappAccount'),
-        ], 201);
+        DB::transaction(function () use (&$duplicate, $flow, $bot, $validated, $slug) {
+            $duplicate = Flow::create([
+                'bot_id'      => $bot->id,
+                'name'        => $validated['name'],
+                'description' => $flow->description,
+                'slug'        => $slug,
+                'status'      => 'draft',
+            ]);
+
+            // Clone the latest version's dialogs into a new draft version
+            $sourceVersion = $flow->draftVersion() ?? $flow->publishedVersion();
+
+            if ($sourceVersion) {
+                $newVersion = FlowVersion::create([
+                    'flow_id'        => $duplicate->id,
+                    'version_number' => 1,
+                    'status'         => 'draft',
+                    'created_by'     => auth()->id(),
+                ]);
+
+                $dialogIdMap = [];
+
+                foreach ($sourceVersion->dialogs as $dialog) {
+                    $newDialog = $newVersion->dialogs()->create([
+                        'uuid'           => (string) Str::uuid(),
+                        'label'          => $dialog->label,
+                        'kind'           => $dialog->kind,
+                        'config'         => $dialog->config,
+                        'position_x'     => $dialog->position_x,
+                        'position_y'     => $dialog->position_y,
+                        'is_entry_point' => $dialog->is_entry_point,
+                        'is_terminal'    => $dialog->is_terminal,
+                        'input_variable' => $dialog->input_variable,
+                    ]);
+
+                    $dialogIdMap[$dialog->id] = $newDialog->id;
+                }
+
+                if ($sourceVersion->start_node_id && isset($dialogIdMap[$sourceVersion->start_node_id])) {
+                    $newVersion->update(['start_node_id' => $dialogIdMap[$sourceVersion->start_node_id]]);
+                }
+            }
+            activity()->causedBy(auth()->user())->performedOn($duplicate)->log("Flow duplicated from: {$flow->name}");
+        });
+
+
+        return response()->json(['message' => 'Flow duplicated.', 'flow' => $duplicate], 201);
     }
 
-    // =========================================================================
-    // PRIVATE HELPERS
-    // =========================================================================
+    // -------------------------------------------------------------------------
 
-    private function authorizeAccess(Flow $flow): void
+    private function authorizeBot(Bot $bot): void
     {
-        $tenant = Tenant::current();
-
-        if ($flow->tenant_id !== $tenant->id) {
-            abort(404, 'Flow not found');
+        if ($bot->tenant_id !== Tenant::current()->id) {
+            abort(404, 'Bot not found.');
         }
     }
 
-    private function generateUniqueSlug(int $tenantId, string $name): string
+    private function authorizeFlow(Bot $bot, Flow $flow): void
     {
-        $slug  = Str::slug($name);
+        $this->authorizeBot($bot);
+        if ($flow->bot_id !== $bot->id) {
+            abort(404, 'Flow not found.');
+        }
+    }
+
+    private function uniqueSlug(int $botId, string $name): string
+    {
+        $base  = Str::slug($name);
+        $slug  = $base;
         $count = 1;
-
-        while (Flow::where('tenant_id', $tenantId)->where('slug', $slug)->exists()) {
-            $slug = Str::slug($name) . '-' . $count++;
+        while (Flow::where('bot_id', $botId)->where('slug', $slug)->exists()) {
+            $slug = $base . '-' . $count++;
         }
-
         return $slug;
-    }
-
-    private function validateUniqueSlug(Flow $flow, string $slug): void
-    {
-        $exists = Flow::where('tenant_id', $flow->tenant_id)
-            ->where('slug', $slug)
-            ->where('id', '!=', $flow->id)
-            ->exists();
-
-        if ($exists) {
-            abort(422, 'Slug already exists');
-        }
-    }
-
-    private function logActivity(Flow $flow, string $description): void
-    {
-        activity()
-            ->causedBy(auth()->user())
-            ->performedOn($flow)
-            ->log($description);
     }
 }

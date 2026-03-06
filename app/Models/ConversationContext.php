@@ -4,69 +4,34 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ConversationContext extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'conversation_id',
-        'variables',
-        'last_node_id',
-        'expires_at',
+        'conversation_id', 'variables', 'last_dialog_id', 'expires_at',
     ];
 
     protected $casts = [
-        'variables' => 'array',
+        'variables'  => 'array',
         'expires_at' => 'datetime',
     ];
 
-    // Relationships
-    public function conversation()
+    public function conversation(): BelongsTo
     {
         return $this->belongsTo(Conversation::class);
     }
 
-    // Helper methods
-    public function getVariable(string $key, $default = null)
+    /** Soft reference to the last dialog visited (no FK — dialogs can be deleted) */
+    public function lastDialog(): BelongsTo
     {
-        return $this->variables[$key] ?? $default;
-    }
-
-    public function setVariable(string $key, $value): void
-    {
-        $variables = $this->variables ?? [];
-        $variables[$key] = $value;
-        $this->update(['variables' => $variables]);
-    }
-
-    public function removeVariable(string $key): void
-    {
-        $variables = $this->variables ?? [];
-        unset($variables[$key]);
-        $this->update(['variables' => $variables]);
-    }
-
-    public function hasVariable(string $key): bool
-    {
-        return isset($this->variables[$key]);
-    }
-
-    public function clearVariables(): void
-    {
-        $this->update(['variables' => []]);
+        return $this->belongsTo(Dialog::class, 'last_dialog_id');
     }
 
     public function isExpired(): bool
     {
         return $this->expires_at && $this->expires_at->isPast();
-    }
-
-    public function extendExpiry(int $hours = 24): void
-    {
-        $this->update([
-            'expires_at' => now()->addHours($hours),
-        ]);
     }
 }

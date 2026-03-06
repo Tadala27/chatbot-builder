@@ -43,7 +43,6 @@ export const useActionEditorStore = defineStore("actionEditor", {
   }),
   actions: {
     openActionEditor(payload: OpenActionEditorPayload) {
-      console.log("openActionEditor payload", payload);
       this.show = true;
       this.targetNode = payload.targetNode;
       this.targetButton = payload.targetButton || null;

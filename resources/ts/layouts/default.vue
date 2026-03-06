@@ -3,7 +3,7 @@ import { onMounted, watch, computed } from "vue";
 import { useTheme } from "vuetify";
 import LoaderWrapper from "./components/LoaderWrapper.vue";
 import ActionEditor from "./components/ActionEditor.vue"; // ✅ ADD THIS
-import Customizer from "./components/CustomizerPanel.vue"; // ✅ ADD THIS
+// import Customizer from "./components/CustomizerPanel.vue"; // ✅ ADD THIS
 import VerticalSidebarVue from "./components/VerticalSidebar.vue";
 import VerticalHeaderVue from "./components/VerticalHeader.vue";
 import HorizontalSidebar from "./components/HorizontalSidebar.vue";
@@ -45,22 +45,18 @@ const getStyleObject = () => {
 
 <template>
   <VLocaleProvider :rtl="customizer.isRtl">
-    <VApp
-      :style="getStyleObject()"
-      :theme="customizer.actTheme"
-      :class="[
-        customizer.actTheme,
-        customizer.fontTheme,
-        customizer.miniSidebar ? 'mini-sidebar' : '',
-        customizer.isHorizontalLayout ? 'horizontalLayout' : 'verticalLayout',
-        customizer.inputBg ? 'inputWithbg' : '',
-        customizer.themeContrast ? 'contrast' : '',
-      ]"
-    >
+    <VApp :style="getStyleObject()" :theme="customizer.actTheme" :class="[
+      customizer.actTheme,
+      customizer.fontTheme,
+      customizer.miniSidebar ? 'mini-sidebar' : '',
+      customizer.isHorizontalLayout ? 'horizontalLayout' : 'verticalLayout',
+      customizer.inputBg ? 'inputWithbg' : '',
+      customizer.themeContrast ? 'contrast' : '',
+    ]">
       <!-- ✅ ADD ACTION EDITOR DRAWER HERE - Same level as Customizer -->
       <ActionEditor />
 
-      <Customizer />
+      <!-- <Customizer /> -->
       <VerticalSidebarVue v-if="!customizer.isHorizontalLayout" />
       <VerticalHeaderVue v-if="!customizer.isHorizontalLayout" />
       <HorizontalHeader v-if="customizer.isHorizontalLayout" />

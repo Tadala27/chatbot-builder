@@ -3,137 +3,99 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Bot;
 use App\Models\CustomVariable;
-use App\Models\Flow;
-use Illuminate\Http\Request;
+use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Validator;
+use Illuminate\Http\Request;
 
+/**
+ * Custom variables belong to Bots (not flows) in the new schema.
+ * A bot's variables are shared across all its flows.
+ */
 class VariableController extends Controller
 {
-    /**
-     * Get all custom variables for a flow
-     */
-    public function index(Flow $flow): JsonResponse
+    // GET /api/bots/{bot}/variables
+    public function index(Bot $bot): JsonResponse
     {
-        $variables = CustomVariable::where('flow_id', $flow->id)
+        $this->authorizeBot($bot);
+
+        $variables = CustomVariable::where('bot_id', $bot->id)
             ->orderBy('name')
             ->get();
 
-        return response()->json([
-            'variables' => $variables,
-        ]);
+        return response()->json(['variables' => $variables]);
     }
 
-    /**
-     * Store a new custom variable
-     */
-    public function store(Request $request, Flow $flow): JsonResponse
+    // POST /api/bots/{bot}/variables
+    public function store(Request $request, Bot $bot): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'save_in' => 'required|in:bot_variables,user_properties',
-            'use_in_js' => 'boolean',
-            'is_sensitive' => 'boolean',
+        $this->authorizeBot($bot);
+
+        $validated = $request->validate([
+            'name'          => 'required|string|max:255',
+            'key'           => 'required|string|max:100',
+            'data_type'     => 'required|in:string,number,boolean,json,date',
+            'default_value' => 'nullable|string',
+            'description'   => 'nullable|string',
+            'is_sensitive'  => 'boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
+        // Key must be unique within the bot
+        if (CustomVariable::where('bot_id', $bot->id)->where('key', $validated['key'])->exists()) {
+            return response()->json(['message' => "Variable key '{$validated['key']}' already exists on this bot."], 422);
         }
 
-        // Check if variable name already exists in this flow
-        $exists = CustomVariable::where('flow_id', $flow->id)
-            ->where('name', $request->name)
-            ->exists();
+        $variable = CustomVariable::create(array_merge($validated, ['bot_id' => $bot->id]));
 
-        if ($exists) {
-            return response()->json([
-                'message' => 'Variable name already exists in this flow',
-            ], 422);
-        }
-
-        $variable = CustomVariable::create([
-            'flow_id' => $flow->id,
-            'name' => $request->name,
-            'save_in' => $request->save_in,
-            'use_in_js' => $request->use_in_js ?? false,
-            'is_sensitive' => $request->is_sensitive ?? false,
-        ]);
-
-        return response()->json([
-            'message' => 'Variable created successfully',
-            'variable' => $variable,
-        ], 201);
+        return response()->json(['message' => 'Variable created.', 'variable' => $variable], 201);
     }
 
-    /**
-     * Update a custom variable
-     */
-    public function update(Request $request, Flow $flow, CustomVariable $variable): JsonResponse
+    // PUT /api/bots/{bot}/variables/{variable}
+    public function update(Request $request, Bot $bot, CustomVariable $variable): JsonResponse
     {
-        // Verify variable belongs to this flow
-        if ($variable->flow_id !== $flow->id) {
-            return response()->json(['message' => 'Variable not found'], 404);
-        }
+        $this->authorizeBot($bot);
+        $this->authorizeVariable($bot, $variable);
 
-        $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|string|max:255',
-            'save_in' => 'sometimes|in:bot_variables,user_properties',
-            'use_in_js' => 'boolean',
-            'is_sensitive' => 'boolean',
+        $validated = $request->validate([
+            'name'          => 'sometimes|string|max:255',
+            'data_type'     => 'sometimes|in:string,number,boolean,json,date',
+            'default_value' => 'nullable|string',
+            'description'   => 'nullable|string',
+            'is_sensitive'  => 'sometimes|boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
-        }
+        // Key is immutable after creation to avoid breaking conversation data
 
-        // If name is being changed, check for duplicates
-        if ($request->has('name') && $request->name !== $variable->name) {
-            $exists = CustomVariable::where('flow_id', $flow->id)
-                ->where('name', $request->name)
-                ->where('id', '!=', $variable->id)
-                ->exists();
+        $variable->update($validated);
 
-            if ($exists) {
-                return response()->json([
-                    'message' => 'Variable name already exists in this flow',
-                ], 422);
-            }
-        }
-
-        $variable->update($request->only([
-            'name',
-            'save_in',
-            'use_in_js',
-            'is_sensitive',
-        ]));
-
-        return response()->json([
-            'message' => 'Variable updated successfully',
-            'variable' => $variable,
-        ]);
+        return response()->json(['message' => 'Variable updated.', 'variable' => $variable]);
     }
 
-    /**
-     * Delete a custom variable
-     */
-    public function destroy(Flow $flow, CustomVariable $variable): JsonResponse
+    // DELETE /api/bots/{bot}/variables/{variable}
+    public function destroy(Bot $bot, CustomVariable $variable): JsonResponse
     {
-        // Verify variable belongs to this flow
-        if ($variable->flow_id !== $flow->id) {
-            return response()->json(['message' => 'Variable not found'], 404);
-        }
+        $this->authorizeBot($bot);
+        $this->authorizeVariable($bot, $variable);
 
         $variable->delete();
 
-        return response()->json([
-            'message' => 'Variable deleted successfully',
-        ]);
+        return response()->json(['message' => 'Variable deleted.']);
+    }
+
+    // -------------------------------------------------------------------------
+
+    private function authorizeBot(Bot $bot): void
+    {
+        if ($bot->tenant_id !== Tenant::current()->id) {
+            abort(404, 'Bot not found.');
+        }
+    }
+
+    private function authorizeVariable(Bot $bot, CustomVariable $variable): void
+    {
+        if ($variable->bot_id !== $bot->id) {
+            abort(404, 'Variable not found.');
+        }
     }
 }

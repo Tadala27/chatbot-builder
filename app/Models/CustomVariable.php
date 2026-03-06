@@ -2,36 +2,31 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CustomVariable extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
-        'flow_id',
-        'name',
-        'save_in',
-        'use_in_js',
-        'is_sensitive',
+        'bot_id', 'name', 'key', 'data_type',
+        'default_value', 'is_sensitive', 'description',
     ];
 
     protected $casts = [
-        'use_in_js' => 'boolean',
         'is_sensitive' => 'boolean',
     ];
 
-    /**
-     * Get the flow that owns the variable
-     */
-    public function flow(): BelongsTo
+    public function bot(): BelongsTo
     {
-        return $this->belongsTo(Flow::class);
+        return $this->belongsTo(Bot::class);
     }
 
-    /**
-     * Get conversation variables that use this custom variable
-     */
-    public function conversationVariables()
+    /** Conversation-level values for this variable definition */
+    public function conversationVariables(): HasMany
     {
         return $this->hasMany(ConversationVariable::class);
     }
