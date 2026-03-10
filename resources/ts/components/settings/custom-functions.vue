@@ -1,631 +1,830 @@
-<template>
-  <div class="functions-library">
-    <h3>Custom Functions</h3>
-    <p>
-      Create reusable JavaScript functions that can be called from your flow.
-    </p>
-
-    <v-row class="mb-4">
-      <v-col cols="12" md="6">
-        <v-text-field
-          v-model="searchQuery"
-          placeholder="Search functions..."
-          prepend-inner-icon="$magnify"
-          density="compact"
-          variant="outlined"
-          hide-details
-        />
-      </v-col>
-      <v-col cols="12" md="6" class="d-flex justify-end">
-        <v-btn color="primary" prepend-icon="$plus" @click="openFunctionForm">
-          Add Function
-        </v-btn>
-      </v-col>
-    </v-row>
-
-    <!-- Function Form -->
-    <v-expand-transition>
-      <v-card v-if="showForm" class="mb-4 pa-4" variant="outlined">
-        <v-card-title
-          class="d-flex justify-space-between align-center pa-0 mb-4"
-        >
-          <span class="text-h6">{{
-            editingFunction ? "Edit Function" : "New Function"
-          }}</span>
-          <v-btn
-            icon="$close"
-            size="small"
-            variant="text"
-            @click="closeFunctionForm"
-          />
-        </v-card-title>
-
-        <v-form @submit.prevent="submitFunction">
-          <v-row>
-            <v-col cols="12" md="6">
-              <v-text-field
-                v-model="functionForm.name"
-                label="Function Name *"
-                variant="outlined"
-                density="compact"
-                hint="Display name for the function"
-                persistent-hint
-                required
-              />
-            </v-col>
-
-            <v-col cols="12" md="6">
-              <v-text-field
-                v-model="functionForm.slug"
-                label="Function Slug *"
-                variant="outlined"
-                density="compact"
-                hint="Unique identifier (lowercase, no spaces)"
-                persistent-hint
-                required
-              />
-            </v-col>
-
-            <v-col cols="12">
-              <v-textarea
-                v-model="functionForm.description"
-                label="Description"
-                variant="outlined"
-                density="compact"
-                rows="2"
-                hint="Brief description of what this function does"
-                persistent-hint
-              />
-            </v-col>
-
-            <v-col cols="12">
-              <v-select
-                v-model="functionForm.function_type"
-                label="Function Type *"
-                :items="[
-                  { value: 'javascript', title: 'JavaScript' },
-                  { value: 'api_call', title: 'API Call' },
-                  { value: 'webhook', title: 'Webhook' },
-                ]"
-                variant="outlined"
-                density="compact"
-                required
-              />
-            </v-col>
-
-            <!-- JavaScript Code Editor -->
-            <template v-if="functionForm.function_type === 'javascript'">
-              <v-col cols="12">
-                <v-label class="mb-2">JavaScript Code *</v-label>
-                <v-textarea
-                  v-model="functionForm.code"
-                  variant="outlined"
-                  density="compact"
-                  rows="10"
-                  placeholder="function execute(params) {
-  // Your code here
-  return result;
-}"
-                  hint="Define a function named 'execute' that accepts 'params' and returns a result"
-                  persistent-hint
-                  class="code-editor"
-                />
-              </v-col>
-            </template>
-
-            <!-- API Call Configuration -->
-            <template v-if="functionForm.function_type === 'api_call'">
-              <v-col cols="12">
-                <v-textarea
-                  v-model="functionForm.code"
-                  label="API Configuration (JSON)"
-                  variant="outlined"
-                  density="compact"
-                  rows="6"
-                  placeholder='{
-  "url": "https://api.example.com/endpoint",
-  "method": "GET",
-  "headers": {},
-  "body": {}
-}'
-                  hint="JSON configuration for the API call"
-                  persistent-hint
-                />
-              </v-col>
-            </template>
-
-            <!-- Webhook Configuration -->
-            <template v-if="functionForm.function_type === 'webhook'">
-              <v-col cols="12">
-                <v-textarea
-                  v-model="functionForm.code"
-                  label="Webhook Configuration (JSON)"
-                  variant="outlined"
-                  density="compact"
-                  rows="6"
-                  placeholder='{
-  "url": "https://webhook.example.com/endpoint",
-  "headers": {}
-}'
-                  hint="JSON configuration for the webhook"
-                  persistent-hint
-                />
-              </v-col>
-            </template>
-
-            <!-- Parameters -->
-            <v-col cols="12">
-              <v-textarea
-                v-model="functionForm.parameters"
-                label="Parameters (JSON)"
-                variant="outlined"
-                density="compact"
-                rows="4"
-                placeholder='[
-  {"name": "param1", "type": "string", "required": true},
-  {"name": "param2", "type": "number", "required": false}
-]'
-                hint="Define the parameters this function accepts"
-                persistent-hint
-              />
-            </v-col>
-
-            <!-- Advanced Settings -->
-            <v-col cols="12">
-              <v-divider class="my-2" />
-              <h6 class="text-h6 mb-3">Advanced Settings</h6>
-            </v-col>
-
-            <v-col cols="12" md="4">
-              <v-text-field
-                v-model="functionForm.return_type"
-                label="Return Type"
-                variant="outlined"
-                density="compact"
-                placeholder="string, number, object, etc."
-              />
-            </v-col>
-
-            <v-col cols="12" md="4">
-              <v-text-field
-                v-model.number="functionForm.timeout_seconds"
-                label="Timeout (seconds)"
-                type="number"
-                variant="outlined"
-                density="compact"
-                min="1"
-                max="300"
-              />
-            </v-col>
-
-            <v-col cols="12" md="4">
-              <v-checkbox
-                v-model="functionForm.is_async"
-                label="Async Function"
-                density="compact"
-              />
-            </v-col>
-
-            <v-col cols="12">
-              <v-checkbox
-                v-model="functionForm.is_active"
-                label="Active (enable this function)"
-                density="compact"
-              />
-            </v-col>
-
-            <!-- Test Section -->
-            <v-col cols="12" v-if="functionForm.function_type === 'javascript'">
-              <v-divider class="my-2" />
-              <h6 class="text-h6 mb-3">Test Function</h6>
-            </v-col>
-
-            <v-col cols="12" v-if="functionForm.function_type === 'javascript'">
-              <v-textarea
-                v-model="testParams"
-                label="Test Parameters (JSON)"
-                variant="outlined"
-                density="compact"
-                rows="3"
-                placeholder='{"param1": "value1", "param2": 123}'
-              />
-            </v-col>
-
-            <v-col
-              cols="12"
-              v-if="functionForm.function_type === 'javascript'"
-              class="d-flex justify-space-between"
-            >
-              <v-btn
-                color="primary"
-                size="small"
-                :loading="isTesting"
-                @click="testFunction"
-              >
-                <v-icon icon="$play" size="small" class="mr-1" />
-                Test Function
-              </v-btn>
-
-              <div v-if="testResult" class="test-result">
-                <v-chip
-                  :color="testResult.success ? 'success' : 'error'"
-                  size="small"
-                >
-                  {{ testResult.success ? "Success" : "Error" }}
-                </v-chip>
-                <span class="ml-2 text-caption">
-                  {{ testResult.execution_time_ms }}ms
-                </span>
-              </div>
-            </v-col>
-
-            <v-col cols="12" v-if="testResult">
-              <v-card variant="outlined">
-                <v-card-title class="text-subtitle-2 bg-grey-lighten-4">
-                  Test Result
-                </v-card-title>
-                <v-card-text>
-                  <pre class="test-output">{{
-                    testResult.result || testResult.error
-                  }}</pre>
-                </v-card-text>
-              </v-card>
-            </v-col>
-          </v-row>
-
-          <v-divider class="my-4" />
-
-          <div class="d-flex justify-end gap-2">
-            <v-btn variant="outlined" color="error" @click="closeFunctionForm">
-              Cancel
-            </v-btn>
-            <v-btn color="primary" type="submit" :loading="isSubmitting">
-              {{ editingFunction ? "Update" : "Create" }} Function
-            </v-btn>
-          </div>
-        </v-form>
-      </v-card>
-    </v-expand-transition>
-
-    <!-- Functions List -->
-    <v-data-table
-      :headers="tableHeaders"
-      :items="filteredFunctions"
-      :loading="isLoading"
-      class="elevation-1"
-    >
-      <template #item.function_type="{ item }">
-        <v-chip
-          size="small"
-          :color="getTypeColor(item.function_type)"
-          variant="flat"
-        >
-          {{ item.function_type.replace("_", " ").toUpperCase() }}
-        </v-chip>
-      </template>
-
-      <template #item.is_active="{ item }">
-        <v-icon
-          :icon="item.is_active ? '$checkCircle' : '$closeCircle'"
-          :color="item.is_active ? 'success' : 'grey'"
-          size="small"
-        />
-      </template>
-
-      <template #item.is_async="{ item }">
-        <v-icon
-          :icon="item.is_async ? '$checkCircle' : '$closeCircle'"
-          :color="item.is_async ? 'info' : 'grey'"
-          size="small"
-        />
-      </template>
-
-      <template #item.actions="{ item }">
-        <v-btn
-          icon="$pencil"
-          size="x-small"
-          variant="text"
-          @click="editFunction(item)"
-        />
-        <v-btn
-          icon="$delete"
-          size="x-small"
-          variant="text"
-          color="error"
-          @click="deleteFunction(item)"
-        />
-      </template>
-    </v-data-table>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import axios from "axios";
-import Swal from "sweetalert2";
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import axios from 'axios'
+import Swal from 'sweetalert2'
 
+// ── Props ─────────────────────────────────────────────────────────────────────
 const props = defineProps<{
-  flowId: string | number;
-}>();
+  botId: string | number
+  availableVariables?: string[]   // for resultVar autocomplete
+}>()
 
 const emit = defineEmits<{
-  (e: "functionsUpdated", functions: any[]): void;
-}>();
+  (e: 'functionsUpdated', functions: any[]): void
+}>()
 
-// State
-const searchQuery = ref("");
-const showForm = ref(false);
-const editingFunction = ref<any>(null);
-const isLoading = ref(false);
-const isSubmitting = ref(false);
-const isTesting = ref(false);
-const allFunctions = ref<any[]>([]);
-const testParams = ref("{}");
-const testResult = ref<any>(null);
+// ── View state (slider) ───────────────────────────────────────────────────────
+const view = ref<'list' | 'form'>('list')
+const editingFunction = ref<any>(null)
 
-const functionForm = ref({
-  name: "",
-  slug: "",
-  description: "",
-  function_type: "javascript",
-  code: "",
-  parameters: "[]",
-  return_type: "string",
-  is_async: false,
-  timeout_seconds: 30,
-  is_active: true,
-});
+function openCreateForm() {
+  editingFunction.value = null
+  resetForm()
+  view.value = 'form'
+}
+function openEditForm(fn: any) {
+  editingFunction.value = fn
+  populateForm(fn)
+  view.value = 'form'
+}
+function backToList() {
+  view.value = 'list'
+  editingFunction.value = null
+  resetForm()
+  testResult.value = null
+}
 
-const tableHeaders = [
-  { title: "Name", key: "name" },
-  { title: "Slug", key: "slug" },
-  { title: "Type", key: "function_type" },
-  { title: "Async", key: "is_async" },
-  { title: "Active", key: "is_active" },
-  { title: "Actions", key: "actions", sortable: false },
-];
+// ── Data ──────────────────────────────────────────────────────────────────────
+const allFunctions = ref<any[]>([])
+const loading = ref(false)
+const saving = ref(false)
+const testing = ref(false)
+const search = ref('')
+const testResult = ref<any>(null)
+const testParamsJson = ref('{}')
 
-// Computed
 const filteredFunctions = computed(() => {
-  if (!searchQuery.value) return allFunctions.value;
+  const q = search.value.toLowerCase()
+  if (!q) return allFunctions.value
+  return allFunctions.value.filter(fn =>
+    fn.name.toLowerCase().includes(q) ||
+    fn.slug.toLowerCase().includes(q) ||
+    (fn.description ?? '').toLowerCase().includes(q)
+  )
+})
 
-  return allFunctions.value.filter(
-    (fn: any) =>
-      fn.name.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      fn.slug.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      fn.description?.toLowerCase().includes(searchQuery.value.toLowerCase()),
-  );
-});
+// ── Function types ────────────────────────────────────────────────────────────
+// Must match the DB enum: javascript | webhook | built_in
+const FUNCTION_TYPES = [
+  { value: 'javascript', title: 'JavaScript', icon: '$codeJson', color: 'primary' },
+  { value: 'webhook', title: 'Webhook', icon: '$webhook', color: 'info' },
+  { value: 'built_in', title: 'Built-in', icon: '$puzzle', color: 'warning' },
+]
 
-// Methods
-async function loadFunctions() {
-  isLoading.value = true;
-  try {
-    const response = await axios.get(`/api/custom-functions`);
-    allFunctions.value = response.data.data || [];
-    emit("functionsUpdated", allFunctions.value);
-  } catch (error) {
-    console.error("Failed to load functions:", error);
-    Swal.fire("Error", "Failed to load functions", "error");
-  } finally {
-    isLoading.value = false;
+const RETURN_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'void']
+
+// ── Form model ────────────────────────────────────────────────────────────────
+interface Param { name: string; type: string; required: boolean; description: string }
+
+const form = ref(blankForm())
+
+function blankForm() {
+  return {
+    name: '',
+    slug: '',
+    description: '',
+    function_type: 'javascript' as 'javascript' | 'webhook' | 'built_in',
+    code: defaultCode('javascript'),
+    parameters: [] as Param[],
+    return_type: 'string',
+    timeout_seconds: 30,
+    is_active: true,
+    // UI-only
+    slugTouched: false,
+    showAdvanced: false,
+    paramsJson: '[]',   // raw JSON string for the params textarea (webhook/built_in)
+    paramsJsonError: '',
   }
 }
 
-function getTypeColor(type: string): string {
-  const colors: Record<string, string> = {
-    javascript: "primary",
-    api_call: "success",
-    webhook: "info",
-    built_in: "warning",
-  };
-  return colors[type] || "default";
-}
+function resetForm() { form.value = blankForm() }
 
-function openFunctionForm() {
-  showForm.value = true;
-  editingFunction.value = null;
-  resetForm();
-}
-
-function closeFunctionForm() {
-  showForm.value = false;
-  editingFunction.value = null;
-  testResult.value = null;
-  resetForm();
-}
-
-function resetForm() {
-  functionForm.value = {
-    name: "",
-    slug: "",
-    description: "",
-    function_type: "javascript",
-    code: "",
-    parameters: "[]",
-    return_type: "string",
-    is_async: false,
-    timeout_seconds: 30,
-    is_active: true,
-  };
-  testParams.value = "{}";
-  testResult.value = null;
-}
-
-function editFunction(fn: any) {
-  editingFunction.value = fn;
-  functionForm.value = {
-    name: fn.name,
-    slug: fn.slug,
-    description: fn.description || "",
-    function_type: fn.function_type,
-    code: fn.code || "",
-    parameters: JSON.stringify(fn.parameters || [], null, 2),
-    return_type: fn.return_type || "string",
-    is_async: fn.is_async || false,
-    timeout_seconds: fn.timeout_seconds || 30,
+function populateForm(fn: any) {
+  const params: Param[] = Array.isArray(fn.parameters) ? fn.parameters : []
+  form.value = {
+    name: fn.name ?? '',
+    slug: fn.slug ?? '',
+    description: fn.description ?? '',
+    function_type: fn.function_type ?? 'javascript',
+    code: fn.code ?? defaultCode(fn.function_type ?? 'javascript'),
+    parameters: params,
+    return_type: fn.return_type ?? 'string',
+    timeout_seconds: fn.timeout_seconds ?? 30,
     is_active: fn.is_active ?? true,
-  };
-  showForm.value = true;
+    slugTouched: true,
+    showAdvanced: false,
+    paramsJson: JSON.stringify(params, null, 2),
+    paramsJsonError: '',
+  }
+}
+
+function defaultCode(type: string): string {
+  if (type === 'javascript') {
+    return `// Available variables are passed in as named parameters\n// Return a value to store in the result variable\n\nreturn "hello world";`
+  }
+  if (type === 'webhook') {
+    return JSON.stringify({
+      url: 'https://webhook.example.com/endpoint',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, null, 2)
+  }
+  return ''
+}
+
+// Auto-slug from name
+function onNameInput() {
+  if (form.value.slugTouched || editingFunction.value) return
+  form.value.slug = form.value.name
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/^[^a-z_]+/, '')
+    .slice(0, 100)
+}
+
+// When function_type changes, reset code to sensible default
+watch(() => form.value.function_type, (newType) => {
+  if (!editingFunction.value) {
+    form.value.code = defaultCode(newType)
+  }
+})
+
+// ── Parameter rows (JS functions) ─────────────────────────────────────────────
+const PARAM_TYPES = ['string', 'number', 'boolean', 'array', 'object', 'any']
+
+function addParam() {
+  form.value.parameters.push({ name: '', type: 'string', required: true, description: '' })
+}
+function removeParam(i: number) {
+  form.value.parameters.splice(i, 1)
+}
+
+// ── Load / Save / Delete ──────────────────────────────────────────────────────
+async function loadFunctions() {
+  loading.value = true
+  try {
+    const { data } = await axios.get(`/api/bots/${props.botId}/functions`)
+    // Controller returns paginated; fall back to flat array
+    allFunctions.value = data.data ?? data.functions ?? data ?? []
+    emit('functionsUpdated', allFunctions.value)
+  } catch {
+    Swal.fire({ icon: 'error', title: 'Failed to load functions', timer: 2000, showConfirmButton: false })
+  } finally {
+    loading.value = false
+  }
+}
+
+async function saveFunction() {
+  // Validate slug
+  if (!/^[a-z_][a-z0-9_]*$/.test(form.value.slug)) {
+    Swal.fire({ icon: 'error', title: 'Invalid slug', text: 'Must start with a letter or underscore, lowercase only.' })
+    return
+  }
+
+  saving.value = true
+  try {
+    const payload = buildPayload()
+    let response: any
+
+    if (editingFunction.value) {
+      response = await axios.put(`/api/bots/${props.botId}/functions/${editingFunction.value.id}`, payload)
+      const idx = allFunctions.value.findIndex(f => f.id === editingFunction.value.id)
+      if (idx !== -1) allFunctions.value.splice(idx, 1, response.data.function)
+    } else {
+      response = await axios.post(`/api/bots/${props.botId}/functions`, payload)
+      allFunctions.value.push(response.data.function)
+    }
+
+    emit('functionsUpdated', allFunctions.value)
+    Swal.fire({
+      icon: 'success',
+      title: editingFunction.value ? 'Function updated' : 'Function created',
+      timer: 1600,
+      showConfirmButton: false,
+    })
+    backToList()
+  } catch (err: any) {
+    const errors = err.response?.data?.errors?.code
+    if (errors) {
+      Swal.fire({ icon: 'error', title: 'Syntax error', html: errors.join('<br/>') })
+    } else {
+      Swal.fire({ icon: 'error', title: 'Save failed', text: err.response?.data?.message ?? err.message })
+    }
+  } finally {
+    saving.value = false
+  }
 }
 
 async function deleteFunction(fn: any) {
-  const result = await Swal.fire({
-    title: "Delete Function?",
-    text: `Are you sure you want to delete "${fn.name}"?`,
-    icon: "warning",
+  const { isConfirmed } = await Swal.fire({
+    title: `Delete "${fn.name}"?`,
+    text: 'Any flow actions referencing this function will stop working.',
+    icon: 'warning',
     showCancelButton: true,
-    confirmButtonColor: "#d33",
-    cancelButtonColor: "#3085d6",
-    confirmButtonText: "Delete",
-  });
-
-  if (!result.isConfirmed) return;
+    confirmButtonColor: '#ef4444',
+    confirmButtonText: 'Delete',
+  })
+  if (!isConfirmed) return
 
   try {
-    await axios.delete(`/api/custom-functions/${fn.id}`);
-    allFunctions.value = allFunctions.value.filter((f: any) => f.id !== fn.id);
-    emit("functionsUpdated", allFunctions.value);
-    Swal.fire("Deleted!", "Function has been deleted.", "success");
-  } catch (error: any) {
-    Swal.fire(
-      "Error",
-      error.response?.data?.message || "Failed to delete function",
-      "error",
-    );
+    await axios.delete(`/api/bots/${props.botId}/functions/${fn.id}`)
+    allFunctions.value = allFunctions.value.filter(f => f.id !== fn.id)
+    emit('functionsUpdated', allFunctions.value)
+  } catch (err: any) {
+    Swal.fire({ icon: 'error', title: 'Delete failed', text: err.response?.data?.message ?? err.message })
   }
 }
 
-async function testFunction() {
-  isTesting.value = true;
-  testResult.value = null;
+// ── Test ──────────────────────────────────────────────────────────────────────
+async function runTest() {
+  let params: any = {}
+  try {
+    params = JSON.parse(testParamsJson.value || '{}')
+  } catch {
+    Swal.fire({ icon: 'error', title: 'Invalid JSON', text: 'Test parameters must be valid JSON.' })
+    return
+  }
+
+  testing.value = true
+  testResult.value = null
 
   try {
-    // Parse test parameters
-    const params = JSON.parse(testParams.value);
-
-    // Create temporary function for testing
-    const tempFunction = {
-      ...functionForm.value,
-      parameters: JSON.parse(functionForm.value.parameters),
-    };
-
-    const response = await axios.post(`/api/custom-functions/test`, {
-      function: tempFunction,
-      test_parameters: params,
-    });
-
-    testResult.value = response.data;
-  } catch (error: any) {
+    let response: any
+    if (editingFunction.value) {
+      // Saved function — use the test endpoint
+      response = await axios.post(`/api/bots/${props.botId}/functions/${editingFunction.value.id}/test`, { parameters: params })
+    } else {
+      // Unsaved draft — send full payload for server-side execution
+      response = await axios.post(`/api/bots/${props.botId}/functions/test-draft`, {
+        ...buildPayload(),
+        test_parameters: params,
+      })
+    }
+    testResult.value = response.data
+  } catch (err: any) {
     testResult.value = {
       success: false,
-      error: error.response?.data?.message || error.message,
-    };
+      error: err.response?.data?.message ?? err.message,
+      result: null,
+      execution_time_ms: null,
+    }
   } finally {
-    isTesting.value = false;
+    testing.value = false
+    await nextTick()
+    document.getElementById('fn-test-result')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 }
 
-async function submitFunction() {
-  // Validate slug format
-  const slugRegex = /^[a-z_][a-z0-9_]*$/;
-  if (!slugRegex.test(functionForm.value.slug)) {
-    Swal.fire({
-      title: "Invalid Slug",
-      text: "Slug must start with lowercase letter or underscore, and contain only lowercase letters, numbers, and underscores.",
-      icon: "error",
-    });
-    return;
-  }
-
-  isSubmitting.value = true;
-
-  try {
-    const payload = {
-      name: functionForm.value.name,
-      slug: functionForm.value.slug,
-      description: functionForm.value.description,
-      function_type: functionForm.value.function_type,
-      code: functionForm.value.code,
-      parameters: JSON.parse(functionForm.value.parameters),
-      return_type: functionForm.value.return_type,
-      is_async: functionForm.value.is_async,
-      timeout_seconds: functionForm.value.timeout_seconds,
-      is_active: functionForm.value.is_active,
-    };
-
-    let response;
-    if (editingFunction.value) {
-      response = await axios.put(
-        `/api/custom-functions/${editingFunction.value.id}`,
-        payload,
-      );
-    } else {
-      response = await axios.post(`/api/custom-functions`, payload);
-    }
-
-    if (editingFunction.value) {
-      allFunctions.value = allFunctions.value.map((f: any) =>
-        f.id === editingFunction.value.id ? response.data : f,
-      );
-    } else {
-      allFunctions.value.push(response.data);
-    }
-
-    emit("functionsUpdated", allFunctions.value);
-
-    Swal.fire({
-      title: "Success!",
-      text: `Function ${editingFunction.value ? "updated" : "created"} successfully`,
-      icon: "success",
-      timer: 2000,
-    });
-
-    closeFunctionForm();
-  } catch (error: any) {
-    Swal.fire({
-      title: "Error",
-      text: error.response?.data?.message || "Failed to save function",
-      icon: "error",
-    });
-  } finally {
-    isSubmitting.value = false;
+function buildPayload() {
+  return {
+    name: form.value.name,
+    slug: form.value.slug,
+    description: form.value.description || undefined,
+    function_type: form.value.function_type,
+    code: form.value.code,
+    parameters: form.value.parameters.filter(p => p.name),
+    return_type: form.value.return_type,
+    timeout_seconds: form.value.timeout_seconds,
+    is_active: form.value.is_active,
   }
 }
 
-onMounted(() => {
-  loadFunctions();
-});
+function prettyJson(val: any): string {
+  if (val === null || val === undefined) return ''
+  try { return JSON.stringify(typeof val === 'string' ? JSON.parse(val) : val, null, 2) }
+  catch { return String(val) }
+}
 
-// Expose load method
-defineExpose({
-  loadFunctions,
-});
+// ── Display helpers ───────────────────────────────────────────────────────────
+const TYPE_COLORS: Record<string, string> = { javascript: 'primary', webhook: 'info', built_in: 'warning' }
+const TYPE_LABELS: Record<string, string> = { javascript: 'JavaScript', webhook: 'Webhook', built_in: 'Built-in' }
+
+onMounted(loadFunctions)
+defineExpose({ loadFunctions })
 </script>
 
-<style scoped>
-.gap-2 {
-  gap: 8px;
+<template>
+  <div class="function-library">
+    <div class="slider-track">
+
+      <!-- ══════════════════════════════════ LIST ════════════════════════════ -->
+      <div class="panel" :class="view === 'list' ? 'panel--visible' : 'panel--hidden-left'">
+
+        <div class="panel-header">
+          <div>
+            <h4 class="panel-title">Custom Functions</h4>
+            <p class="panel-subtitle">
+              Write reusable JavaScript, configure webhooks, or reference built-in helpers
+              that your flow actions can call.
+            </p>
+          </div>
+          <VBtn color="primary" prepend-icon="$plus" @click="openCreateForm">
+            Create Function
+          </VBtn>
+        </div>
+
+        <VTextField v-model="search" placeholder="Search by name, slug or description…" prepend-inner-icon="$magnify"
+          variant="outlined" density="compact" hide-details class="mb-4" />
+
+        <VProgressLinear v-if="loading" indeterminate color="primary" class="mb-2" />
+
+        <div class="fn-table-wrap">
+          <div v-if="!loading && filteredFunctions.length === 0" class="empty-state">
+            <VIcon icon="$codeJson" size="44" class="mb-3 text-medium-emphasis" />
+            <p class="text-body-2 font-weight-medium">No functions yet</p>
+            <p class="text-caption text-medium-emphasis mb-4">
+              Create a function to run logic, call webhooks, or use built-in helpers inside your flow actions.
+            </p>
+            <VBtn color="primary" size="small" prepend-icon="$plus" @click="openCreateForm">
+              Create Function
+            </VBtn>
+          </div>
+
+          <VTable v-else density="compact" class="fn-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Slug</th>
+                <th>Type</th>
+                <th>Return</th>
+                <th>Timeout</th>
+                <th>Active</th>
+                <th width="72">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="fn in filteredFunctions" :key="fn.id" class="fn-row">
+                <td>
+                  <div class="font-weight-medium text-body-2">{{ fn.name }}</div>
+                  <div v-if="fn.description" class="text-caption text-medium-emphasis text-truncate"
+                    style="max-width:200px">
+                    {{ fn.description }}
+                  </div>
+                </td>
+                <td><code class="slug-code">{{ fn.slug }}</code></td>
+                <td>
+                  <VChip size="x-small" :color="TYPE_COLORS[fn.function_type] ?? 'grey'" variant="flat">
+                    {{ TYPE_LABELS[fn.function_type] ?? fn.function_type }}
+                  </VChip>
+                </td>
+                <td><span class="text-caption">{{ fn.return_type ?? '—' }}</span></td>
+                <td><span class="text-caption">{{ fn.timeout_seconds }}s</span></td>
+                <td>
+                  <VIcon :icon="fn.is_active ? '$checkCircle' : '$closeCircle'"
+                    :color="fn.is_active ? 'success' : 'grey'" size="18" />
+                </td>
+                <td>
+                  <div class="d-flex align-center ga-1">
+                    <VBtn icon="$pencil" size="x-small" variant="text" @click="openEditForm(fn)" />
+                    <VBtn icon="$delete" size="x-small" variant="text" color="error" @click="deleteFunction(fn)" />
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </VTable>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════ FORM ════════════════════════════ -->
+      <div class="panel" :class="view === 'form' ? 'panel--visible' : 'panel--hidden-right'">
+
+        <div class="panel-header">
+          <div class="d-flex align-center ga-3">
+            <VBtn icon="$arrowLeft" size="small" variant="text" @click="backToList" />
+            <div>
+              <h4 class="panel-title">{{ editingFunction ? 'Edit Function' : 'Create Function' }}</h4>
+              <p class="panel-subtitle mb-0">
+                {{ editingFunction ? `Editing "${editingFunction.name}"` : 'Define a new reusable function for this bot'
+                }}
+              </p>
+            </div>
+          </div>
+          <VBtn variant="outlined" size="small" prepend-icon="$formatListBulleted" @click="backToList">
+            View Functions
+          </VBtn>
+        </div>
+
+        <div class="form-body">
+
+          <!-- ── Identity ──────────────────────────────────────────────────── -->
+          <section class="form-section">
+            <div class="section-label">Identity</div>
+            <VRow>
+              <VCol cols="12" md="6">
+                <VTextField v-model="form.name" label="Function Name *" variant="outlined" density="compact"
+                  hint="Display name shown in the builder" persistent-hint @input="onNameInput" />
+              </VCol>
+              <VCol cols="12" md="6">
+                <VTextField v-model="form.slug" label="Slug *" variant="outlined" density="compact"
+                  :readonly="!!editingFunction" :hint="editingFunction
+                    ? 'Slug is locked — flow actions reference it by this slug'
+                    : 'Lowercase, underscores only. Used internally by flow actions.'" persistent-hint
+                  @input="form.slugTouched = true">
+                  <template #append-inner>
+                    <VIcon v-if="editingFunction" icon="$lock" size="14" color="grey" />
+                  </template>
+                </VTextField>
+              </VCol>
+              <VCol cols="12">
+                <VTextField v-model="form.description" label="Description" variant="outlined" density="compact"
+                  hint="What does this function do?" persistent-hint />
+              </VCol>
+            </VRow>
+          </section>
+
+          <!-- ── Type selector ─────────────────────────────────────────────── -->
+          <section class="form-section">
+            <div class="section-label">Function Type</div>
+            <VRow>
+              <VCol v-for="t in FUNCTION_TYPES" :key="t.value" cols="12" md="4">
+                <div class="type-card" :class="{ 'type-card--active': form.function_type === t.value }"
+                  @click="form.function_type = t.value as any">
+                  <VIcon :icon="t.icon" size="22" :color="form.function_type === t.value ? t.color : undefined"
+                    class="mb-1" />
+                  <div class="font-weight-semibold text-body-2">{{ t.title }}</div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    <template v-if="t.value === 'javascript'">Write JS logic, access variables</template>
+                    <template v-else-if="t.value === 'webhook'">Fire HTTP requests on execution</template>
+                    <template v-else>Use pre-built platform helpers</template>
+                  </div>
+                </div>
+              </VCol>
+            </VRow>
+          </section>
+
+          <!-- ── Code / Config ─────────────────────────────────────────────── -->
+          <section class="form-section">
+            <div class="d-flex align-center justify-space-between mb-3">
+              <div class="section-label mb-0">
+                <template v-if="form.function_type === 'javascript'">JavaScript Code</template>
+                <template v-else-if="form.function_type === 'webhook'">Webhook Configuration (JSON)</template>
+                <template v-else>Configuration</template>
+              </div>
+              <VChip v-if="form.function_type === 'javascript'" size="x-small" variant="tonal" color="primary">
+                {{form.parameters.filter(p => p.name).length}} param{{form.parameters.filter(p => p.name).length !== 1 ?
+                  's' : ''
+                }} available
+              </VChip>
+            </div>
+
+            <!-- JS editor hint -->
+            <VAlert v-if="form.function_type === 'javascript'" type="info" variant="tonal" density="compact"
+              rounded="lg" class="mb-3" :icon="false">
+              <div class="text-caption">
+                Parameters defined below are injected as named variables.
+                Use <code>return</code> to output a value.
+                Available globals: <code>JSON</code>, <code>Math</code>, <code>Date</code>, <code>parseInt</code>,
+                <code>parseFloat</code>, <code>String</code>, <code>Number</code>.
+              </div>
+            </VAlert>
+
+            <VTextarea v-model="form.code"
+              :label="form.function_type === 'javascript' ? 'JavaScript Code *' : 'Webhook Configuration JSON *'"
+              variant="outlined" :rows="form.function_type === 'javascript' ? 12 : 8" class="code-textarea"
+              placeholder="Write your logic here" />
+          </section>
+
+          <!-- ── Parameters (JS only) ──────────────────────────────────────── -->
+          <section v-if="form.function_type === 'javascript'" class=" form-section">
+            <div class="d-flex align-center justify-space-between mb-3">
+              <div class="section-label mb-0">Parameters</div>
+              <VBtn size="x-small" variant="outlined" prepend-icon="$plus" @click="addParam">
+                Add Parameter
+              </VBtn>
+            </div>
+            <p class="text-caption text-medium-emphasis mb-3">
+              Each parameter becomes a variable in your JS code. Flow actions provide values when calling this
+              function.
+            </p>
+
+            <div v-if="form.parameters.length === 0" class="text-caption text-medium-emphasis py-2">
+              No parameters — function takes no inputs.
+            </div>
+
+            <div v-for="(p, i) in form.parameters" :key="i" class="param-row">
+              <VTextField v-model="p.name" placeholder="param_name" label="Name" variant="outlined" density="compact"
+                hide-details style="flex:1.2" />
+              <VSelect v-model="p.type" :items="PARAM_TYPES" label="Type" variant="outlined" density="compact"
+                hide-details style="width:110px" />
+              <VTextField v-model="p.description" placeholder="Optional description" label="Description"
+                variant="outlined" density="compact" hide-details style="flex:2" />
+              <div class="d-flex align-center ga-1">
+                <VTooltip text="Required">
+                  <template #activator="{ props: tp }">
+                    <VIcon v-bind="tp" :icon="p.required ? '$asterisk' : '$asteriskOff'"
+                      :color="p.required ? 'error' : 'grey'" size="18" class="cursor-pointer"
+                      @click="p.required = !p.required" />
+                  </template>
+                </VTooltip>
+                <VBtn icon="$close" size="x-small" variant="text" color="error" @click="removeParam(i)" />
+              </div>
+            </div>
+          </section>
+
+          <!-- ── Advanced ───────────────────────────────────────────────────── -->
+          <section class="form-section">
+            <div class="section-toggle" @click="form.showAdvanced = !form.showAdvanced">
+              <VIcon :icon="form.showAdvanced ? '$chevronDown' : '$chevronRight'" size="16" class="mr-1" />
+              <span class="section-label mb-0">Advanced Settings</span>
+            </div>
+            <Transition name="expand">
+              <div v-if="form.showAdvanced" class="mt-3">
+                <VRow>
+                  <VCol cols="12" md="4">
+                    <VSelect v-model="form.return_type" label="Return Type" :items="RETURN_TYPES" variant="outlined"
+                      density="compact" hint="Helps the flow builder know what to expect back" persistent-hint />
+                  </VCol>
+                  <VCol cols="12" md="4">
+                    <VTextField v-model.number="form.timeout_seconds" label="Timeout (seconds)" type="number" min="1"
+                      max="300" variant="outlined" density="compact" hint="Max execution time before failing"
+                      persistent-hint />
+                  </VCol>
+                  <VCol cols="12" md="4" class="d-flex align-center">
+                    <VSwitch v-model="form.is_active" label="Active" color="primary" hide-details density="compact"
+                      inset />
+                  </VCol>
+                </VRow>
+              </div>
+            </Transition>
+          </section>
+
+          <!-- ── Test ───────────────────────────────────────────────────────── -->
+          <section class="form-section">
+            <div class="d-flex align-center justify-space-between mb-3">
+              <div class="section-label mb-0">Test Function</div>
+              <VBtn color="secondary" size="small" prepend-icon="$play" :loading="testing" @click="runTest">
+                Run Test
+              </VBtn>
+            </div>
+
+            <VTextarea v-model="testParamsJson" label="Test Parameters (JSON)" variant="outlined" density="compact"
+              rows="3" class="code-textarea mb-3" placeholder='{"param_name": "value"}'
+              hint="Key-value pairs matching your parameter names" persistent-hint />
+
+            <div v-if="testResult" id="fn-test-result" class="test-result-panel">
+              <div class="test-result-header">
+                <div class="d-flex align-center ga-2">
+                  <VChip size="x-small" variant="flat" :color="testResult.success ? 'success' : 'error'">
+                    {{ testResult.success ? 'Success' : 'Failed' }}
+                  </VChip>
+                  <span v-if="testResult.execution_time_ms" class="text-caption text-medium-emphasis">
+                    {{ testResult.execution_time_ms }}ms
+                  </span>
+                </div>
+              </div>
+              <div v-if="testResult.error" class="test-error">{{ testResult.error }}</div>
+              <pre v-if="testResult.result !== null && testResult.result !== undefined" class="code-block">{{
+                prettyJson(testResult.result) }}</pre>
+            </div>
+          </section>
+
+          <!-- ── Actions ───────────────────────────────────────────────────── -->
+          <div class="form-actions">
+            <VBtn variant="outlined" @click="backToList">Cancel</VBtn>
+            <VBtn color="primary" :loading="saving" @click="saveFunction">
+              {{ editingFunction ? 'Update Function' : 'Create Function' }}
+            </VBtn>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.function-library {
+  overflow: hidden;
+  position: relative;
 }
 
-.code-editor :deep(textarea) {
-  font-family: "Courier New", monospace;
-  font-size: 13px;
+// ── Slider ────────────────────────────────────────────────────────────────────
+.slider-track {
+  position: relative;
+  width: 100%;
 }
 
-.test-output {
-  background: #f5f5f5;
-  padding: 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: "Courier New", monospace;
-  max-height: 200px;
-  overflow: auto;
+.panel {
+  width: 100%;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+  will-change: transform, opacity;
+
+  &--visible {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: all;
+    position: relative;
+  }
+
+  &--hidden-left {
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+  }
+
+  &--hidden-right {
+    transform: translateX(100%);
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+  }
+}
+
+// ── Panel header ──────────────────────────────────────────────────────────────
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+.panel-subtitle {
+  font-size: 0.8rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
   margin: 0;
 }
 
-.test-result {
+// ── Table ─────────────────────────────────────────────────────────────────────
+.fn-table-wrap {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fn-table th {
+  font-size: 0.68rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: rgba(var(--v-theme-on-surface), 0.45) !important;
+}
+
+.fn-row {
+  transition: background 0.12s;
+
+  &:hover {
+    background: rgba(var(--v-theme-primary), 0.03);
+  }
+}
+
+.slug-code {
+  background: rgba(var(--v-theme-surface-variant), 1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+// ── Form ──────────────────────────────────────────────────────────────────────
+.form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-section {
+  padding: 16px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  background: rgba(var(--v-theme-surface), 1);
+}
+
+.section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  margin-bottom: 12px;
+}
+
+// ── Type cards ────────────────────────────────────────────────────────────────
+.type-card {
+  padding: 14px 12px;
+  text-align: center;
+  border: 2px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s;
+  height: 100%;
+
+  &:hover {
+    border-color: rgba(var(--v-theme-primary), 0.4);
+  }
+
+  &--active {
+    border-color: rgb(var(--v-theme-primary));
+    background: rgba(var(--v-theme-primary), 0.05);
+  }
+}
+
+// ── Params ────────────────────────────────────────────────────────────────────
+.param-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+// ── Code textarea ─────────────────────────────────────────────────────────────
+.code-textarea :deep(textarea) {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace !important;
+  font-size: 0.8rem !important;
+  line-height: 1.55 !important;
+}
+
+// ── Section toggle ────────────────────────────────────────────────────────────
+.section-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: 0.8rem;
+  font-weight: 600;
+
+  &:hover {
+    color: rgba(var(--v-theme-on-surface), 1);
+  }
+}
+
+// ── Test panel ────────────────────────────────────────────────────────────────
+.test-result-panel {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-surface-variant), 0.5);
+}
+
+.test-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.test-error {
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.06);
+}
+
+.code-block {
+  margin: 0;
+  padding: 12px;
+  font-size: 0.76rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+  margin-bottom: 8px;
+}
+
+// ── Expand transition ─────────────────────────────────────────────────────────
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.expand-enter-from,
+.expand-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+
+.expand-enter-to,
+.expand-leave-from {
+  max-height: 400px;
+  opacity: 1;
 }
 </style>

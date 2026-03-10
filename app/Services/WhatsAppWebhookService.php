@@ -2,29 +2,32 @@
 
 namespace App\Services;
 
-use App\Models\WhatsappAccount;
+use App\Events\ContactTyping;
+use App\Events\MessageSent;
+use App\Events\MessageStatusUpdated;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\WhatsappAccount;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppWebhookService
 {
-    /**
-     * Verify webhook (GET request from Facebook)
-     */
+    // =========================================================================
+    // WEBHOOK VERIFICATION  (GET from Facebook)
+    // =========================================================================
+
     public function verifyWebhook(array $params): string|int
     {
-        $mode = $params['hub_mode'] ?? '';
-        $token = $params['hub_verify_token'] ?? '';
-        $challenge = $params['hub_challenge'] ?? '';
+        $mode      = $params['hub_mode']         ?? '';
+        $token     = $params['hub_verify_token'] ?? '';
+        $challenge = $params['hub_challenge']    ?? '';
 
         if ($mode === 'subscribe' && $token) {
-            // Verify token matches one of our accounts
             $account = WhatsappAccount::where('webhook_verify_token', $token)->first();
 
             if ($account) {
-                Log::info("Webhook verified for WABA", [
-                    'waba_id' => $account->waba_id,
+                Log::info('Webhook verified', [
+                    'waba_id'      => $account->waba_id,
                     'phone_number' => $account->phone_number,
                 ]);
                 return (int) $challenge;
@@ -32,16 +35,17 @@ class WhatsAppWebhookService
         }
 
         Log::warning('Webhook verification failed', [
-            'mode' => $mode,
+            'mode'           => $mode,
             'token_provided' => !empty($token),
         ]);
 
         return 403;
     }
 
-    /**
-     * Handle incoming webhook (POST request from Facebook)
-     */
+    // =========================================================================
+    // WEBHOOK HANDLER  (POST from Facebook)
+    // =========================================================================
+
     public function handleWebhook(array $payload): void
     {
         if (!isset($payload['entry'])) {
@@ -51,13 +55,10 @@ class WhatsAppWebhookService
 
         foreach ($payload['entry'] as $entry) {
             foreach ($entry['changes'] ?? [] as $change) {
-                if ($change['field'] !== 'messages') {
-                    continue;
-                }
+                if (($change['field'] ?? '') !== 'messages') continue;
 
                 $value = $change['value'];
 
-                // Handle different event types
                 if (isset($value['messages'])) {
                     $this->handleIncomingMessage($value);
                 }
@@ -68,108 +69,138 @@ class WhatsAppWebhookService
             }
         }
     }
-    /**
-     * Handle incoming message
-     */
+
+    // =========================================================================
+    // INCOMING MESSAGE
+    // =========================================================================
+
     private function handleIncomingMessage(array $data): void
     {
         try {
             $metadata = $data['metadata'];
-            $message = $data['messages'][0];
-            $contact = $data['contacts'][0] ?? null;
+            $message  = $data['messages'][0];
+            $contact  = $data['contacts'][0] ?? null;
 
-            // Find WhatsApp account
+            // 1. Find the WhatsApp account
             $account = WhatsappAccount::where('phone_number_id', $metadata['phone_number_id'])->first();
+
             if (!$account) {
-                Log::warning("WhatsApp account not found", [
+                Log::warning('WhatsApp account not found for phone_number_id', [
                     'phone_number_id' => $metadata['phone_number_id'],
                 ]);
                 return;
             }
 
             if (!$account->is_active) {
-                Log::info("Message received for inactive account", [
+                Log::info('Message received for inactive account', [
                     'phone_number_id' => $metadata['phone_number_id'],
                 ]);
                 return;
             }
 
-            // Get active flow for this account
-            $flow = $account->flows()->published()->first();
-            if (!$flow) {
-                Log::warning("No published flow found for account", [
-                    'account_id' => $account->id,
+            // 2. Find an active bot on this account that has a published flow.
+            //    Schema: whatsapp_account → bots → flows
+            $publishedFlow = null;
+            $bot           = null;
+
+            foreach ($account->bots()->where('is_active', true)->get() as $candidate) {
+                $flow = $candidate->flows()
+                    ->where('status', 'published')
+                    ->where('is_active', true)
+                    ->latest('published_at')
+                    ->first();
+
+                if ($flow) {
+                    $bot           = $candidate;
+                    $publishedFlow = $flow;
+                    break;
+                }
+            }
+
+            if (!$publishedFlow || !$bot) {
+                Log::warning('No active bot with a published flow found for account', [
+                    'account_id'   => $account->id,
                     'phone_number' => $account->phone_number,
                 ]);
-                // Optionally send a default message or just return
                 return;
             }
 
-            // Get the published version
-            $publishedVersion = $flow->currentPublishedVersion;
+            $publishedVersion = $publishedFlow->currentPublishedVersion;
+
             if (!$publishedVersion) {
-                Log::warning("Flow has no published version", [
-                    'flow_id' => $flow->id,
-                    'flow_name' => $flow->name,
+                Log::warning('Published flow has no version', [
+                    'flow_id'   => $publishedFlow->id,
+                    'flow_name' => $publishedFlow->name,
                 ]);
                 return;
             }
 
-            // Find or create conversation
+            // 3. Find or create conversation
             $conversation = Conversation::firstOrCreate(
                 [
                     'whatsapp_account_id' => $account->id,
                     'whatsapp_user_phone' => $message['from'],
+                    'status'              => 'active',     // scope: only resume open conversations
                 ],
                 [
-                    'tenant_id'           => $account->tenant_id,
-                    'flow_id'             => $flow->id,
-                    'flow_version_id'     => $publishedVersion->id,
-                    'whatsapp_user_name'  => $contact['profile']['name'] ?? null,
-                    'status'              => 'active',
-                    'started_at'          => now(),
-                    'last_message_at'     => now(),
+                    'tenant_id'          => $account->tenant_id,
+                    'flow_id'            => $publishedFlow->id,
+                    'flow_version_id'    => $publishedVersion->id,
+                    'whatsapp_user_name' => $contact['profile']['name'] ?? null,
+                    'status'             => 'active',
+                    'started_at'         => now(),
+                    'last_message_at'    => now(),
                 ]
             );
 
-            // If conversation was previously ended, reopen it with current flow
-            if (in_array($conversation->status, ['completed', 'abandoned'])) {
+            // Reopen ended conversations with the current flow
+            if (in_array($conversation->status, ['completed', 'abandoned'], true)) {
                 $conversation->update([
                     'status'          => 'active',
-                    'flow_id'         => $flow->id,
+                    'flow_id'         => $publishedFlow->id,
                     'flow_version_id' => $publishedVersion->id,
                     'started_at'      => now(),
                     'last_message_at' => now(),
                 ]);
             }
 
-            // Store message (prevent duplicates)
+            // 4. Persist message (deduplicate by WhatsApp message ID)
             $storedMessage = Message::firstOrCreate(
                 ['whatsapp_message_id' => $message['id']],
                 [
-                    'conversation_id'  => $conversation->id,
-                    'direction'        => 'inbound',
-                    'message_type'     => $message['type'],
-                    'content'          => $this->extractMessageContent($message),
-                    'status'           => 'delivered',
-                    'sent_at'          => now(),
-                    'delivered_at'     => now(),
+                    'conversation_id' => $conversation->id,
+                    'direction'       => 'inbound',
+                    'message_type'    => $message['type'],
+                    'content'         => $this->extractMessageContent($message),
+                    'status'          => 'delivered',
+                    'sent_at'         => now(),
+                    'delivered_at'    => now(),
                 ]
             );
 
-            // Only process new messages
-            if ($storedMessage->wasRecentlyCreated) {
-                $conversation->increment('message_count');
-                $conversation->update(['last_message_at' => now()]);
-
-                if ($conversation->status === 'active' && $conversation->flow_id) {
-
-                    dispatch(new \App\Jobs\ProcessChatbotMessage($conversation, $storedMessage));
-                }
-            } else {
-                Log::info('Duplicate webhook message received – already processed', [
+            if (!$storedMessage->wasRecentlyCreated) {
+                Log::info('Duplicate webhook message — already processed', [
                     'whatsapp_message_id' => $message['id'],
                 ]);
+                return;
+            }
+
+            $conversation->increment('message_count');
+            $conversation->update(['last_message_at' => now()]);
+
+            // 5. Broadcast to Pusher so the inbox sidebar + chat window update instantly
+            try {
+                broadcast(new MessageSent($storedMessage, $conversation->fresh()));
+            } catch (\Exception $broadcastEx) {
+                Log::warning('Failed to broadcast inbound MessageSent', [
+                    'message_id' => $storedMessage->id,
+                    'error'      => $broadcastEx->getMessage(),
+                ]);
+            }
+
+            // 6. Dispatch flow execution job
+            if ($conversation->status === 'active' && $conversation->flow_id) {
+                dispatch(new \App\Jobs\ProcessChatbotMessage($conversation, $storedMessage));
             }
         } catch (\Exception $e) {
             Log::error('Error handling incoming message', [
@@ -179,123 +210,185 @@ class WhatsAppWebhookService
             ]);
         }
     }
-    /**
-     * Handle message status update
-     */
+
+    // =========================================================================
+    // STATUS UPDATES
+    // =========================================================================
+
     private function handleMessageStatus(array $data): void
     {
         try {
-            foreach ($data['statuses'] as $status) {
-                $message = Message::where('whatsapp_message_id', $status['id'])->first();
+            foreach ($data['statuses'] as $statusData) {
+                $newStatus = $statusData['status']; // sent | delivered | read | failed | typing | deleted
 
-                if ($message) {
-                    $updates = [
-                        'status' => $status['status'],
-                    ];
+                // ── Contact typing indicator ──────────────────────────────────
+                // WhatsApp Cloud API sends status="typing" when the contact is
+                // composing a reply. There is no "stopped typing" event — the
+                // frontend auto-clears after a timeout.
+                if ($newStatus === 'typing') {
+                    $this->handleContactTyping($statusData, $data['metadata'] ?? []);
+                    continue;
+                }
 
-                    if ($status['status'] === 'delivered' && !$message->delivered_at) {
-                        $updates['delivered_at'] = now();
-                    }
+                // ── Message delivery / read status ────────────────────────────
+                $message = Message::where('whatsapp_message_id', $statusData['id'])->first();
 
-                    if ($status['status'] === 'read' && !$message->read_at) {
-                        $updates['read_at'] = now();
-                    }
+                if (!$message) continue;
 
-                    if ($status['status'] === 'failed') {
-                        $updates['error_message'] = $status['errors'][0]['title'] ?? 'Message failed';
-                    }
+                $updates = ['status' => $newStatus];
 
-                    $message->update($updates);
+                if ($newStatus === 'delivered' && !$message->delivered_at) {
+                    $updates['delivered_at'] = now();
+                }
 
-                    Log::debug('Message status updated', [
+                if ($newStatus === 'read' && !$message->read_at) {
+                    $updates['read_at'] = now();
+                }
+
+                if ($newStatus === 'failed') {
+                    $updates['error_message'] = $statusData['errors'][0]['title'] ?? 'Message failed';
+                }
+
+                $message->update($updates);
+
+                // Broadcast so the tick marks in the inbox update in real time
+                try {
+                    broadcast(new MessageStatusUpdated($message->fresh()));
+                } catch (\Exception $e) {
+                    Log::warning('Failed to broadcast MessageStatusUpdated', [
                         'message_id' => $message->id,
-                        'status' => $status['status'],
+                        'error'      => $e->getMessage(),
                     ]);
                 }
+
+                Log::debug('Message status updated', [
+                    'message_id' => $message->id,
+                    'status'     => $newStatus,
+                ]);
             }
         } catch (\Exception $e) {
             Log::error('Error handling message status', [
                 'error' => $e->getMessage(),
-                'data' => $data,
+                'data'  => $data,
             ]);
         }
     }
 
     /**
-     * Extract content based on message type
+     * Resolve the conversation from a typing status event and broadcast
+     * ContactTyping so the inbox shows "Contact is typing…" in real time.
+     *
+     * The typing status payload looks like:
+     *   { "id": "<wamid>", "status": "typing", "recipient_id": "<contact_phone>" }
      */
+    private function handleContactTyping(array $statusData, array $metadata): void
+    {
+        try {
+            // recipient_id = the contact's phone number (who is typing TO us)
+            $contactPhone  = $statusData['recipient_id'] ?? null;
+            $phoneNumberId = $metadata['phone_number_id'] ?? null;
+
+            if (!$contactPhone || !$phoneNumberId) return;
+
+            $account = WhatsappAccount::where('phone_number_id', $phoneNumberId)->first();
+            if (!$account) return;
+
+            $conversation = Conversation::where('whatsapp_account_id', $account->id)
+                ->where('whatsapp_user_phone', $contactPhone)
+                ->where('status', 'active')
+                ->latest('last_message_at')
+                ->first();
+
+            if (!$conversation) return;
+
+            broadcast(new ContactTyping(
+                conversationId: $conversation->id,
+                contactPhone: $contactPhone,
+                isTyping: true,
+            ));
+
+            Log::debug('Contact typing indicator received', [
+                'conversation_id' => $conversation->id,
+                'contact_phone'   => $contactPhone,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Failed to handle contact typing', ['error' => $e->getMessage()]);
+        }
+    }
+
+    // =========================================================================
+    // CONTENT EXTRACTION
+    // =========================================================================
+
     private function extractMessageContent(array $message): array
     {
         return match ($message['type']) {
-            'text' => [
-                'text' => $message['text']['body'],
-            ],
+            'text' => ['text' => $message['text']['body']],
+
             'interactive' => [
-                'type' => $message['interactive']['type'],
-                'response' => $message['interactive']['button_reply'] ??
-                    $message['interactive']['list_reply'] ?? null,
+                'type'     => $message['interactive']['type'],
+                'response' => $message['interactive']['button_reply']
+                    ?? $message['interactive']['list_reply']
+                    ?? null,
             ],
+
             'button' => [
-                'text' => $message['button']['text'],
+                'text'    => $message['button']['text'],
                 'payload' => $message['button']['payload'],
             ],
+
             'image', 'video', 'audio', 'document' => [
-                'id' => $message[$message['type']]['id'],
+                'id'        => $message[$message['type']]['id'],
                 'mime_type' => $message[$message['type']]['mime_type'],
-                'caption' => $message[$message['type']]['caption'] ?? null,
-                'sha256' => $message[$message['type']]['sha256'] ?? null,
+                'caption'   => $message[$message['type']]['caption'] ?? null,
+                'sha256'    => $message[$message['type']]['sha256']   ?? null,
             ],
+
             'location' => [
-                'latitude' => $message['location']['latitude'],
+                'latitude'  => $message['location']['latitude'],
                 'longitude' => $message['location']['longitude'],
-                'name' => $message['location']['name'] ?? null,
-                'address' => $message['location']['address'] ?? null,
+                'name'      => $message['location']['name']    ?? null,
+                'address'   => $message['location']['address'] ?? null,
             ],
-            'contacts' => [
-                'contacts' => $message['contacts'],
-            ],
+
+            'contacts' => ['contacts' => $message['contacts']],
+
             'sticker' => [
-                'id' => $message['sticker']['id'],
+                'id'        => $message['sticker']['id'],
                 'mime_type' => $message['sticker']['mime_type'],
             ],
+
             default => $message,
         };
     }
 
-    /**
-     * Download media from WhatsApp
-     */
+    // =========================================================================
+    // MEDIA
+    // =========================================================================
+
     public function downloadMedia(WhatsappAccount $account, string $mediaId): ?array
     {
         try {
             $client = new \GuzzleHttp\Client();
 
-            // Get media URL
-            $response = $client->get("https://graph.facebook.com/v18.0/{$mediaId}", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . decrypt($account->access_token),
-                ],
+            $response  = $client->get("https://graph.facebook.com/v18.0/{$mediaId}", [
+                'headers' => ['Authorization' => 'Bearer ' . decrypt($account->access_token)],
             ]);
-
             $mediaData = json_decode($response->getBody()->getContents(), true);
-            $mediaUrl = $mediaData['url'];
 
-            // Download media
-            $response = $client->get($mediaUrl, [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . decrypt($account->access_token),
-                ],
+            $response = $client->get($mediaData['url'], [
+                'headers' => ['Authorization' => 'Bearer ' . decrypt($account->access_token)],
             ]);
 
             return [
-                'content' => $response->getBody()->getContents(),
+                'content'   => $response->getBody()->getContents(),
                 'mime_type' => $mediaData['mime_type'],
                 'file_size' => $mediaData['file_size'],
             ];
         } catch (\Exception $e) {
             Log::error('Error downloading media', [
                 'media_id' => $mediaId,
-                'error' => $e->getMessage(),
+                'error'    => $e->getMessage(),
             ]);
             return null;
         }

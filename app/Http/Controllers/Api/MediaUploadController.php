@@ -8,7 +8,6 @@ use App\Models\BotMediaFile;
 use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -59,31 +58,25 @@ class MediaUploadController extends Controller
         'video'    => '.3gp, .mp4 (H.264 video + AAC audio)',
     ];
 
-    // =========================================================================
-    // POST /api/media/upload
-    // Multipart body: file, type (image|video|audio|document), bot_id
-    // =========================================================================
 
-    public function upload(Request $request): JsonResponse
+    public function upload(Request $request, $botId): JsonResponse
     {
-        Log::debug("Here is my request", $request->all());
         $request->validate([
             'file'   => 'required|file',
             'type'   => 'required|in:image,video,audio,document',
-            'bot_id' => 'required|integer|exists:bots,id',
         ]);
 
         $tenant = Tenant::current();
 
         // Ensure the bot belongs to the current tenant
-        $bot = Bot::where('id', $request->bot_id)
+        $bot = Bot::where('id', $botId)
             ->where('tenant_id', $tenant->id)
             ->firstOrFail();
 
-        $file      = $request->file('file');
-        $type      = $request->input('type');
-        $mime      = $file->getMimeType() ?? '';
-        $size      = $file->getSize();
+        $file = $request->file('file');
+        $type = $request->input('type');
+        $mime = $file->getMimeType() ?? '';
+        $size = $file->getSize();
 
         // ── MIME validation ───────────────────────────────────────────────────
         $allowed = self::ALLOWED_MIMES[$type] ?? [];
@@ -110,7 +103,9 @@ class MediaUploadController extends Controller
         $extension        = $file->getClientOriginalExtension();
         $storedFilename   = Str::uuid() . '.' . $extension;
         $storagePath      = "bot-media/{$bot->id}/{$storedFilename}";
-        $disk             = config('filesystems.default', 'public');
+
+        // Always use the public disk so files are physically accessible on disk.
+        $disk = 'public';
 
         Storage::disk($disk)->putFileAs(
             "bot-media/{$bot->id}",
@@ -118,7 +113,7 @@ class MediaUploadController extends Controller
             $storedFilename
         );
 
-        $url = Storage::disk($disk)->url($storagePath);
+        $url = $this->mediaServeUrl($storedFilename);
 
         // ── Persist record ────────────────────────────────────────────────────
         $media = BotMediaFile::create([
@@ -129,51 +124,40 @@ class MediaUploadController extends Controller
             'stored_filename'   => $storedFilename,
             'disk'              => $disk,
             'path'              => $storagePath,
-            'url'               => $url,
+            'url'               => $url,  // ← absolute serve-route URL, saved into dialog config
             'media_type'        => $type,
             'mime_type'         => $mime,
             'size'              => $size,
         ]);
 
         return response()->json([
-            'id'       => $media->id,
-            'url'      => $url,
-            'filename' => $originalFilename,  // ← auto-populates "Document Filename" on the frontend
-            'type'     => $type,
-            'size'     => $size,
-            'mime'     => $mime,
+            'id'        => $media->id,    // ← save as node.mediaFileId — used by executor to load fresh URL + mime_type
+            'url'       => $url,          // ← absolute URL, ready to save into node config
+            'filename'  => $originalFilename,
+            'type'      => $type,
+            'mime_type' => $mime,         // ← consistent key name matching DB column
+            'size'      => $size,
         ], 201);
     }
 
-    // =========================================================================
-    // DELETE /api/media/{media}
-    // Soft-deletes the record and removes the file from disk.
-    // =========================================================================
 
     public function destroy(BotMediaFile $media): JsonResponse
     {
         $tenant = Tenant::current();
 
-        // Double-check tenant ownership (route model binding already fetches by PK)
         if ($media->tenant_id !== $tenant->id) {
             abort(403, 'Unauthorized');
         }
 
-        // Remove the physical file
         if (Storage::disk($media->disk)->exists($media->path)) {
             Storage::disk($media->disk)->delete($media->path);
         }
 
-        $media->delete(); // soft-delete keeps the audit trail
+        $media->delete();
 
         return response()->json(['message' => 'Media deleted.']);
     }
 
-    // =========================================================================
-    // GET /api/bots/{bot}/media
-    // Lists all media files for a bot under the current tenant.
-    // Useful for a reusable media library picker later.
-    // =========================================================================
 
     public function index(Bot $bot): JsonResponse
     {
@@ -187,8 +171,21 @@ class MediaUploadController extends Controller
             ->where('bot_id', $bot->id)
             ->whereNull('deleted_at')
             ->orderByDesc('created_at')
-            ->get(['id', 'original_filename', 'url', 'media_type', 'mime_type', 'size', 'created_at']);
+            ->get(['id', 'original_filename', 'stored_filename', 'url', 'media_type', 'mime_type', 'size', 'created_at'])
+            ->map(function ($file) {
+                // Re-generate the serve URL so old records (which may have stored
+                // a raw storage path) are also returned with the correct URL.
+                $file->url = $this->mediaServeUrl($file->stored_filename);
+                return $file;
+            });
 
         return response()->json(['files' => $files]);
+    }
+
+
+    private function mediaServeUrl(string $storedFilename): string
+    {
+        $base = rtrim(config('app.url', ''), '/');
+        return $base . '/media/bot/' . $storedFilename;
     }
 }

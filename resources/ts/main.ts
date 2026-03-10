@@ -1,28 +1,18 @@
 import "vuetify/styles";
-// Global CSS has to be imported
 import { createApp } from "vue";
 import { PerfectScrollbarPlugin } from "vue3-perfect-scrollbar";
 import "vue3-perfect-scrollbar/style.css";
-
-// import "./plugins/axios-interceptor";
-
-// i18
+import "./echo"; // ← replaces the empty import ""
 import { createI18n } from "vue-i18n";
-// Table
 import Vue3EasyDataTable from "vue3-easy-data-table";
-// icons
 import VueTablerIcons from "vue-tabler-icons";
 import print from "vue3-print-nb";
 import vuetify from "./plugins/vuetify";
 import VueSignaturePad from "vue-signature-pad";
-// Styles
 import "@styles/styles.scss";
 import App from "./App.vue";
-// print
 import messages from "@/utils/i18n/locales/messages";
 import { registerPlugins } from "@core/utils/plugins";
-
-// google-fonts
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/300.css";
@@ -48,10 +38,7 @@ const i18n = createI18n({
 });
 
 const app = createApp(App);
-
-// Register plugins (this includes router)
 registerPlugins(app);
-
 app.use(PerfectScrollbarPlugin);
 app.component("EasyDataTable", Vue3EasyDataTable);
 app.use(VueTablerIcons);

@@ -323,11 +323,6 @@ function setDefaultActions(actions: any[]) {
               </template>
             </div>
           </div>
-
-          <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary"
-            @click="setBranchActions(bIdx, addNested(branch.actions ?? []))">
-            Add action
-          </VBtn>
         </div>
 
       </div>

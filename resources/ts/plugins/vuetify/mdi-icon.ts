@@ -323,6 +323,12 @@ import {
   mdiTimerOutline,
   mdiLoading,
   mdiImageBrokenVariant,
+  mdiReplyOutline,
+  mdiFileWordOutline,
+  mdiFilePowerpointOutline,
+  mdiFileOutline,
+  mdiPlayCircle,
+  mdiEarth,
 } from "@mdi/js";
 
 export const icons = {
@@ -650,4 +656,10 @@ export const icons = {
   timerOutline: mdiTimerOutline,
   loading: mdiLoading,
   imageBrokenVariant: mdiImageBrokenVariant,
+  replyOutline: mdiReplyOutline,
+  fileWordOutline: mdiFileWordOutline,
+  filePowerpointOutline: mdiFilePowerpointOutline,
+  fileOutline: mdiFileOutline,
+  playCircle: mdiPlayCircle,
+  earth: mdiEarth,
 };

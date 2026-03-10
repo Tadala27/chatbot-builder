@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Bot extends Model
@@ -13,10 +14,17 @@ class Bot extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'tenant_id', 'user_id', 'whatsapp_account_id',
-        'name', 'description', 'is_active',
-        'fallback_message', 'welcome_message',
-        'default_language', 'supported_languages', 'settings',
+        'tenant_id',
+        'user_id',
+        'whatsapp_account_id',
+        'name',
+        'description',
+        'is_active',
+        'fallback_message',
+        'welcome_message',
+        'default_language',
+        'supported_languages',
+        'settings',
     ];
 
     protected $casts = [
@@ -63,5 +71,9 @@ class Bot extends Model
     public function activeFlows(): HasMany
     {
         return $this->hasMany(Flow::class)->where('is_active', true);
+    }
+    public function configuration(): HasOne
+    {
+        return $this->hasOne(BotConfiguration::class);
     }
 }

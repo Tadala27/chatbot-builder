@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CustomFunctionController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FlowBuilderController;
 use App\Http\Controllers\Api\FlowController;
+use App\Http\Controllers\Api\InboxController;
 use App\Http\Controllers\Api\MediaUploadController;
 use App\Http\Controllers\Api\MessageTemplateController;
 use App\Http\Controllers\Api\SettingsController;
@@ -17,16 +18,18 @@ use App\Http\Controllers\Api\TenantController;
 use App\Http\Controllers\Api\VariableController;
 use App\Http\Controllers\Api\WebhookController;
 use App\Http\Controllers\Api\WhatsAppAccountController;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Route;
 
 // =============================================================================
 // PUBLIC — No authentication required
 // =============================================================================
+Broadcast::routes(['middleware' => ['auth:sanctum']]);
 
 // WhatsApp webhook (Facebook calls these directly)
-Route::prefix('webhook')->group(function () {
-    Route::get('whatsapp',  [WebhookController::class, 'verifyWhatsApp']);
-    Route::post('whatsapp', [WebhookController::class, 'handleWhatsApp']);
+Route::prefix('webhooks')->group(function () {
+    Route::get('/whatsapp',  [WebhookController::class, 'verifyWhatsApp']);
+    Route::post('/whatsapp', [WebhookController::class, 'handleWhatsApp']);
 });
 
 // Auth — unauthenticated endpoints
@@ -41,7 +44,6 @@ Route::prefix('auth')->group(function () {
 // =============================================================================
 
 Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
-
     // -------------------------------------------------------------------------
     // Auth / Session
     // -------------------------------------------------------------------------
@@ -109,6 +111,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
         Route::delete('flows/{flow}',               [FlowController::class, 'destroy']);
         Route::post('flows/{flow}/unpublish',       [FlowController::class, 'unpublish']);
         Route::post('flows/{flow}/duplicate',       [FlowController::class, 'duplicate']);
+        Route::post('/media',              [MediaUploadController::class, 'upload']);
         Route::get('/media',           [MediaUploadController::class, 'index']);
 
         // Flow Builder
@@ -116,7 +119,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
             Route::get('/',                         [FlowBuilderController::class, 'show']);
             Route::post('save',                     [FlowBuilderController::class, 'autoSave']);
             Route::post('publish',                  [FlowBuilderController::class, 'publish']);
-            Route::get('variables',                 [FlowBuilderController::class, 'getVariables']);
+            Route::get('/variables',                 [FlowBuilderController::class, 'getVariables']);
             Route::get('versions',                  [FlowBuilderController::class, 'getVersions']);
             Route::post('versions',                 [FlowBuilderController::class, 'createVersion']);
             Route::get('versions/{version}',        [FlowBuilderController::class, 'getVersion']);
@@ -142,7 +145,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
         Route::put('functions/{function}',          [CustomFunctionController::class, 'update']);
         Route::delete('functions/{function}',       [CustomFunctionController::class, 'destroy']);
         Route::post('functions/{function}/test',    [CustomFunctionController::class, 'test']);
-
+        Route::post('functions/test-draft',      [CustomFunctionController::class, 'testDraft']);
         // Bot-scoped API Integrations
         Route::get('apis',                          [ApiIntegrationController::class, 'index']);
         Route::post('apis',                         [ApiIntegrationController::class, 'store']);
@@ -166,6 +169,15 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
         Route::delete('{conversation}',             [ConversationController::class, 'destroy']);
     });
 
+    Route::prefix('inbox')->group(function () {
+        Route::get('conversations',                          [InboxController::class, 'index']);
+        Route::get('conversations/{conversation}',           [InboxController::class, 'show']);
+        Route::post('conversations/{conversation}/media',   [InboxController::class, 'sendMedia']);
+        Route::post('conversations/{conversation}/messages', [InboxController::class, 'sendMessage']);
+        Route::post('conversations/{conversation}/read',     [InboxController::class, 'markRead']);
+        Route::post('conversations/{conversation}/typing',   [InboxController::class, 'typing']);
+        Route::get('accounts',                               [InboxController::class, 'accounts']);
+    });
     // -------------------------------------------------------------------------
     // Analytics (tenant-level overview + export)
     // -------------------------------------------------------------------------
@@ -203,7 +215,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     });
     Route::prefix('media')->group(function () {
         // ── Media uploads ─────────────────────────────────────────────────────────────
-        Route::post('/upload',              [MediaUploadController::class, 'upload']);
+
         Route::delete('/{media}',           [MediaUploadController::class, 'destroy']);
     });
 });

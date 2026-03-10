@@ -11,8 +11,7 @@ return new class extends Migration
         Schema::create('conversation_contexts', function (Blueprint $table) {
             $table->id();
             $table->foreignId('conversation_id')->constrained()->cascadeOnDelete();
-            $table->json('variables');
-            // Points to the last dialog the user was on (no FK — dialogs can be versioned)
+            $table->json('variables')->nullable();
             $table->unsignedBigInteger('last_dialog_id')->nullable();
             $table->timestamp('expires_at')->nullable();
             $table->timestamps();

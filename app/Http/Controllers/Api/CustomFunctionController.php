@@ -147,6 +147,42 @@ class CustomFunctionController extends Controller
         return response()->json($result);
     }
 
+    // POST /api/bots/{bot}/functions/test-draft
+    // Test an unsaved (draft) function without persisting it.
+    // Must be registered BEFORE the {function} wildcard route.
+    public function testDraft(Request $request, Bot $bot): JsonResponse
+    {
+        $this->authorizeBot($bot);
+
+        $data = $request->validate([
+            'name'             => 'required|string',
+            'slug'             => 'required|string',
+            'function_type'    => 'required|in:javascript,webhook,built_in',
+            'code'             => 'required|string',
+            'parameters'       => 'nullable|array',
+            'return_type'      => 'nullable|string',
+            'timeout_seconds'  => 'nullable|integer|min:1|max:300',
+            'test_parameters'  => 'nullable|array',
+        ]);
+
+        // Build a temporary (unsaved) CustomFunction instance for the executor
+        $draft = new CustomFunction([
+            'bot_id'          => $bot->id,
+            'name'            => $data['name'],
+            'slug'            => $data['slug'],
+            'function_type'   => $data['function_type'],
+            'code'            => $data['code'],
+            'parameters'      => $data['parameters'] ?? [],
+            'return_type'     => $data['return_type'] ?? 'string',
+            'timeout_seconds' => $data['timeout_seconds'] ?? 30,
+            'is_active'       => true,
+        ]);
+
+        $result = $this->executor->test($draft, $data['test_parameters'] ?? []);
+
+        return response()->json($result);
+    }
+
     // GET /api/built-in-functions
     public function builtInFunctions(Request $request): JsonResponse
     {

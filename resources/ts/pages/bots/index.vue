@@ -173,7 +173,7 @@ const openFlows = (bot: any) =>
   router.push({ name: 'bots-id', params: { id: bot.id } })
 
 const openBuilder = (bot: any) => {
-  router.push({ name: 'bots-id-flowbuilder', params: { botId: bot.id } })
+  router.push({ name: 'bots-bot-id-flowbuilder', params: { botId: bot.id } })
 }
 
 

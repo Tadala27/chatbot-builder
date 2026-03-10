@@ -3,9 +3,20 @@
 namespace App\Services;
 
 use App\Models\Conversation;
-use App\Models\FlowNode;
+use App\Models\Dialog;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Executes individual action configs produced by the flow builder.
+ *
+ * Schema changes from old version:
+ *  - Takes Dialog instead of FlowNode
+ *  - $conversation->setVariable() does NOT exist; variable persistence is
+ *    delegated back to ChatbotFlowExecutor::setVariable() via a callback,
+ *    or handled directly here via ConversationVariable.
+ *  - Delay: resolves next dialog via $dialog->flowVersion->dialogs()->where('config->id', ...)
+ *    NOT ->where('uuid', ...) and dispatches ContinueChatbotFlow with Dialog.
+ */
 class ActionExecutorService
 {
     public function __construct(
@@ -20,73 +31,66 @@ class ActionExecutorService
     /**
      * Execute a single action config array.
      *
-     * @return string|null  UUID of the next node to navigate to, or null (side-effect only)
+     * @return string|null  config.id of the next dialog to navigate to, or null (side-effect only)
      */
     public function execute(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action,
         array        $variables
     ): ?string {
-        $kind = $action['kind'] ?? null;
+        $kind = $action['kind'] ?? $action['action_type'] ?? null;
 
         if (!$kind) {
-            Log::warning('ActionExecutorService: action missing kind', [
-                'node_id' => $node->id,
-                'action'  => $action,
+            Log::warning('ActionExecutorService: action missing kind/action_type', [
+                'dialog_id' => $dialog->id,
+                'action'    => $action,
             ]);
             return null;
         }
 
         return match ($kind) {
             'navigation' => $this->executeNavigation($action),
-            'condition'  => $this->executeCondition($conversation, $node, $action, $variables),
+            'condition'  => $this->executeCondition($conversation, $dialog, $action, $variables),
             'variable'   => $this->executeVariable($conversation, $action, $variables),
-            'api'        => $this->executeApiCall($conversation, $node, $action, $variables),
+            'api'        => $this->executeApiCall($conversation, $dialog, $action, $variables),
             'function'   => $this->executeFunction($conversation, $action, $variables),
-            'delay'      => $this->executeDelay($conversation, $node, $action),
-            'handoff'    => $this->executeHandoff($conversation, $node, $action),
+            'delay'      => $this->executeDelay($conversation, $dialog, $action),
+            'handoff'    => $this->executeHandoff($conversation, $dialog, $action),
             default      => null,
         };
     }
 
-    // =========================================================================
-    // ACTION HANDLERS
-    // =========================================================================
-
-    // ── Navigation ────────────────────────────────────────────────────────────
 
     private function executeNavigation(array $action): ?string
     {
         return $action['goTo'] ?? null;
     }
 
-    // ── Handoff ───────────────────────────────────────────────────────────────
 
-    private function executeHandoff(Conversation $conversation, FlowNode $node, array $action): ?string
+    private function executeHandoff(Conversation $conversation, Dialog $dialog, array $action): ?string
     {
         $conversation->update([
             'status'   => 'handed_off',
             'metadata' => array_merge($conversation->metadata ?? [], [
-                'handoff_source_node' => $node->id,
-                'handoff_resume_at'   => $action['resumeAt'] ?? null,
+                'handoff_source_dialog' => $dialog->id,
+                'handoff_resume_at'     => $action['resumeAt'] ?? null,
             ]),
         ]);
 
         Log::info('Conversation handed off', [
             'conversation_id' => $conversation->id,
-            'node_id'         => $node->id,
+            'dialog_id'       => $dialog->id,
             'resume_at'       => $action['resumeAt'] ?? null,
         ]);
 
         return null;
     }
 
-    // ── Multi-Branch Condition ────────────────────────────────────────────────
 
     private function executeCondition(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action,
         array        $variables
     ): ?string {
@@ -105,7 +109,7 @@ class ActionExecutorService
 
             if ($matched) {
                 foreach ($branch['actions'] ?? [] as $branchAction) {
-                    $target = $this->execute($conversation, $node, $branchAction, $variables);
+                    $target = $this->execute($conversation, $dialog, $branchAction, $variables);
                     if ($target) return $target;
                 }
                 return null; // branch matched but had no navigation
@@ -137,7 +141,6 @@ class ActionExecutorService
         return $this->compareValues($actualValue, $expectedValue, $operator);
     }
 
-    // ── Variable ──────────────────────────────────────────────────────────────
 
     private function executeVariable(
         Conversation $conversation,
@@ -156,9 +159,16 @@ class ActionExecutorService
             default   => $resolved,
         };
 
-        $conversation->setVariable($varName, $typed);
+        // Persist via ConversationVariable model
+        \App\Models\ConversationVariable::updateOrCreate(
+            [
+                'conversation_id' => $conversation->id,
+                'key'             => $varName,
+            ],
+            ['value' => is_array($typed) ? json_encode($typed) : (string) $typed]
+        );
 
-        Log::info('Variable set', [
+        Log::info('Variable set via action', [
             'conversation_id' => $conversation->id,
             'variable'        => $varName,
             'value'           => $typed,
@@ -171,21 +181,28 @@ class ActionExecutorService
 
     private function executeApiCall(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action,
         array        $variables
     ): ?string {
         try {
             $client   = new \GuzzleHttp\Client(['timeout' => 30]);
-            $method   = $action['method']   ?? 'GET';
+            $method   = strtoupper($action['method']   ?? 'GET');
             $endpoint = $this->variableResolver->resolve($action['endpoint'] ?? '', $variables);
 
             $options = [];
-            if (in_array($method, ['POST', 'PUT', 'PATCH']) && !empty($action['bodyRaw'])) {
+
+            if (in_array($method, ['POST', 'PUT', 'PATCH'], true) && !empty($action['bodyRaw'])) {
                 $options['json'] = json_decode(
                     $this->variableResolver->resolve($action['bodyRaw'], $variables),
                     true
                 );
+            } elseif (!in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
+                $options['query'] = $variables; // pass resolved vars as query params for GET
+            }
+
+            if (!empty($action['headers'])) {
+                $options['headers'] = $action['headers'];
             }
 
             $response     = $client->request($method, $endpoint, $options);
@@ -193,7 +210,10 @@ class ActionExecutorService
             $responseBody = json_decode($response->getBody()->getContents(), true);
 
             if (!empty($action['apiResultVar'])) {
-                $conversation->setVariable($action['apiResultVar'], $responseBody);
+                \App\Models\ConversationVariable::updateOrCreate(
+                    ['conversation_id' => $conversation->id, 'key' => $action['apiResultVar']],
+                    ['value' => is_array($responseBody) ? json_encode($responseBody) : (string) $responseBody]
+                );
             }
 
             $conversation->update([
@@ -203,26 +223,21 @@ class ActionExecutorService
                 ]),
             ]);
 
-            return $this->executeResponseHandlers(
-                $conversation,
-                $node,
-                $action,
-                $responseBody,
-                $variables
-            );
+            return $this->executeResponseHandlers($conversation, $dialog, $action, $responseBody, $variables);
         } catch (\GuzzleHttp\Exception\RequestException $e) {
-            Log::error('API call failed', [
-                'endpoint' => $action['endpoint'] ?? '',
-                'error'    => $e->getMessage(),
+            Log::error('API call action failed', [
+                'dialog_id' => $dialog->id,
+                'endpoint'  => $action['endpoint'] ?? '',
+                'error'     => $e->getMessage(),
             ]);
 
-            return $this->executeDefaultActions($conversation, $node, $action, $variables);
+            return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
         }
     }
 
     private function executeResponseHandlers(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action,
         array        $responseBody,
         array        $variables
@@ -239,24 +254,24 @@ class ActionExecutorService
 
             if ($allMatch) {
                 foreach ($handler['actions'] ?? [] as $handlerAction) {
-                    $target = $this->execute($conversation, $node, $handlerAction, $variables);
+                    $target = $this->execute($conversation, $dialog, $handlerAction, $variables);
                     if ($target) return $target;
                 }
                 return null;
             }
         }
 
-        return $this->executeDefaultActions($conversation, $node, $action, $variables);
+        return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
     }
 
     private function executeDefaultActions(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action,
         array        $variables
     ): ?string {
         foreach ($action['defaultActions'] ?? [] as $defaultAction) {
-            $target = $this->execute($conversation, $node, $defaultAction, $variables);
+            $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
             if ($target) return $target;
         }
         return null;
@@ -286,16 +301,19 @@ class ActionExecutorService
             $result     = $this->functionExecutor->execute($fnId, $params);
 
             if ($resultVar) {
-                $conversation->setVariable($resultVar, $result);
+                \App\Models\ConversationVariable::updateOrCreate(
+                    ['conversation_id' => $conversation->id, 'key' => $resultVar],
+                    ['value' => is_array($result) ? json_encode($result) : (string) $result]
+                );
             }
 
-            Log::info('Function executed', [
+            Log::info('Function action executed', [
                 'conversation_id' => $conversation->id,
                 'function_id'     => $fnId,
                 'result_var'      => $resultVar,
             ]);
         } catch (\Exception $e) {
-            Log::error('Function execution failed', [
+            Log::error('Function action failed', [
                 'function_id' => $fnId,
                 'error'       => $e->getMessage(),
             ]);
@@ -308,26 +326,32 @@ class ActionExecutorService
 
     private function executeDelay(
         Conversation $conversation,
-        FlowNode     $node,
+        Dialog       $dialog,
         array        $action
     ): ?string {
-        $seconds      = $action['seconds'] ?? 3;
-        $nextNodeUuid = $action['goTo']    ?? null;
+        $seconds        = $action['seconds'] ?? 3;
+        $nextDialogId   = $action['goTo']    ?? null; // config.id (frontend UUID)
 
-        if ($nextNodeUuid) {
-            $nextNode = $node->flowVersion
-                ->nodes()
-                ->where('uuid', $nextNodeUuid)
+        if ($nextDialogId) {
+            // Resolve next dialog via config->id (NOT uuid column)
+            $nextDialog = $dialog->flowVersion
+                ->dialogs()
+                ->where('config->id', $nextDialogId)
                 ->first();
 
-            if ($nextNode) {
-                \App\Jobs\ContinueChatbotFlow::dispatch($conversation, $nextNode)
+            if ($nextDialog) {
+                \App\Jobs\ContinueChatbotFlow::dispatch($conversation, $nextDialog)
                     ->delay(now()->addSeconds($seconds));
 
                 Log::info('Delay scheduled', [
                     'conversation_id' => $conversation->id,
                     'delay_seconds'   => $seconds,
-                    'next_node_id'    => $nextNode->id,
+                    'next_dialog_id'  => $nextDialog->id,
+                ]);
+            } else {
+                Log::warning('Delay: next dialog not found', [
+                    'conversation_id'    => $conversation->id,
+                    'next_dialog_config_id' => $nextDialogId,
                 ]);
             }
         }
@@ -339,10 +363,6 @@ class ActionExecutorService
     // HELPERS
     // =========================================================================
 
-    /**
-     * Navigate a dot-notation path into a nested array.
-     * e.g. 'data.user.name' into ['data' => ['user' => ['name' => 'Alice']]] → 'Alice'
-     */
     private function getNestedValue(array $data, string $path): mixed
     {
         if (empty($path)) return null;
@@ -390,7 +410,8 @@ class ActionExecutorService
             'starts_with'  => is_string($left) && str_starts_with($left, (string) $right),
             'ends_with'    => is_string($left) && str_ends_with($left, (string) $right),
             'is_empty'     => empty($left),
-            'is_not_empty', 'not_empty' => !empty($left),
+            'is_not_empty',
+            'not_empty'    => !empty($left),
             'in_array'     => is_array($left) && in_array($right, $left),
             'not_in_array' => is_array($left) && !in_array($right, $left),
             default        => false,

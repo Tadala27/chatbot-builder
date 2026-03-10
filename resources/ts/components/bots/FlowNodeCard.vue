@@ -13,6 +13,7 @@ import EndNode from "./nodes/EndNode.vue";
 
 const props = defineProps<{
   node: FlowNode;
+  botId: botId;
   index: number;
   totalNodes: number;
   availableVariables: string[];
@@ -144,7 +145,7 @@ const nodeComponent = computed(() => {
       <div v-show="expanded">
         <v-divider />
         <v-card-text>
-          <component :is="nodeComponent" :node="node" :available-variables="availableVariables"
+          <component :is="nodeComponent" :bot-id="botId" :node="node" :available-variables="availableVariables"
             :node-options="nodeOptions" :saved-responses="savedResponses" :api-integrations="apiIntegrations ?? []"
             :custom-functions="customFunctions ?? []" />
 

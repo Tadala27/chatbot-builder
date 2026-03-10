@@ -55,7 +55,7 @@
     .v-application__wrap {
       > header.v-toolbar {
         width: calc(100% - 279px) !important;
-        left: 279px !important;
+        left: 250px !important;
         [dir="rtl"] & {
           left: unset !important;
           right: 279px !important;

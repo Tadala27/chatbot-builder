@@ -8,6 +8,7 @@ const props = defineProps<{
   node: FlowNode;
   availableVariables: string[];
   nodeOptions: any[];
+  botId: string;
 }>();
 
 if (!props.node.mediaType) props.node.mediaType = "image";
@@ -54,20 +55,21 @@ async function processFile(file: File) {
   uploadProgress.value = 0;
   imagePreview.value = null;
 
-  // Show local blob preview instantly for images
+  // Instant local blob preview for images (before the upload finishes)
   if (file.type.startsWith("image/")) {
     imagePreview.value = URL.createObjectURL(file);
   }
 
-  // Auto-populate filename immediately so the user sees it right away
+  // Optimistically populate the filename field
   props.node.mediaFilename = file.name;
 
   try {
     const form = new FormData();
     form.append("file", file);
     form.append("type", props.node.mediaType ?? "image");
+    // No bot_id body param — it's in the route: /api/bots/{botId}/media/upload
 
-    const res = await axios.post("/api/media/upload", form, {
+    const res = await axios.post(`/api/bots/${props.botId}/media`, form, {
       headers: { "Content-Type": "multipart/form-data" },
       onUploadProgress: (evt) => {
         uploadProgress.value = Math.round((evt.loaded / (evt.total ?? 1)) * 100);
@@ -75,12 +77,13 @@ async function processFile(file: File) {
     });
 
     props.node.mediaUrl = res.data.url;
-    // Only overwrite filename with server value if user hasn't edited it
+
+    // Only overwrite filename if user hasn't manually changed it since we set it above
     if (props.node.mediaFilename === file.name) {
       props.node.mediaFilename = res.data.filename ?? file.name;
     }
   } catch (err: any) {
-    uploadError.value = err.response?.data?.message ?? "Upload failed";
+    uploadError.value = err.response?.data?.message ?? "Upload failed. Please try again.";
     imagePreview.value = null;
     props.node.mediaFilename = "";
   } finally {
@@ -116,6 +119,7 @@ function openFilePicker() {
 function clearMedia() {
   props.node.mediaUrl = "";
   props.node.mediaFilename = "";
+  props.node.mediaFileId = null;
   uploadError.value = "";
   imagePreview.value = null;
 }
@@ -142,7 +146,7 @@ function onMediaTypeChange() {
 
       <!-- ── URL tab ─────────────────────────────────────────────────────── -->
       <VWindowItem value="url">
-        <VTextField v-model="node.mediaUrl" label="Media URL" placeholder="https://example.com/file.jpg"
+        <VTextField v-model="node.mediaUrl" class="mt-2" label="Media URL" placeholder="https://example.com/file.jpg"
           variant="outlined" density="compact" hint="Direct public URL to the media file" persistent-hint
           :clearable="hasUrl" @click:clear="clearMedia">
           <template #prepend-inner>
@@ -160,7 +164,8 @@ function onMediaTypeChange() {
 
         <!-- ── Drop zone ────────────────────────────────────────────────── -->
         <div
-          class="d-flex flex-column align-center justify-center  border-dashed border-primary border-thin rounded-lg overflow-hidden bg-lightsecondary"
+          class="d-flex flex-column align-center justify-center border-dashed rounded-lg overflow-hidden bg-lightsecondary"
+          :class="isDragOver ? 'border-primary' : 'border-thin'"
           style="width:100%; min-height:200px; cursor:pointer; position:relative;" @click="openFilePicker"
           @drop.prevent="handleDrop" @dragover.prevent="handleDragOver" @dragleave="handleDragLeave">
           <!-- Image preview fills the box -->
@@ -271,9 +276,41 @@ function onMediaTypeChange() {
       </VCardText>
     </VCard>
 
-    <!-- ── Then go to ────────────────────────────────────────────────────────── -->
-    <VSelect v-model="node.goTo" label="Then go to" :items="nodeOptions.filter(o => o.value !== node.id)"
-      variant="outlined" density="compact">
+    <!-- ── After sending ─────────────────────────────────────────────────────── -->
+    <VCard variant="outlined" rounded="lg" class="mb-3">
+      <VCardText class="pa-3">
+        <div class="d-flex align-center justify-space-between mb-1">
+          <div>
+            <div class="text-body-2 font-weight-medium">Wait for user reply</div>
+            <div class="text-caption text-medium-emphasis">
+              Pause the flow after sending — continue only when the user responds
+            </div>
+          </div>
+          <VSwitch v-model="node.waitForReply" hide-details density="compact" color="primary" inset />
+        </div>
+
+        <!-- Optional: save whatever the user replies into a variable -->
+        <VExpandTransition>
+          <div v-if="node.waitForReply">
+            <VDivider class="my-2" />
+            <VCombobox v-model="node.replyVariable" :items="availableVariables"
+              label="Save reply to variable (optional)" placeholder="e.g. user_confirmation" variant="outlined"
+              density="compact" hide-details clearable class="mt-2">
+              <template #prepend-inner>
+                <VIcon icon="$variable" size="small" />
+              </template>
+            </VCombobox>
+            <div class="text-caption text-medium-emphasis mt-1 px-1">
+              The user's next message will be stored in this variable before the flow continues.
+            </div>
+          </div>
+        </VExpandTransition>
+      </VCardText>
+    </VCard>
+
+    <!-- ── Then go to (shown when NOT waiting, or always for context) ─────── -->
+    <VSelect v-model="node.goTo" :label="node.waitForReply ? 'After reply, go to' : 'Then go to'"
+      :items="nodeOptions.filter(o => o.value !== node.id)" variant="outlined" density="compact">
       <template #prepend-inner>
         <VIcon icon="$navigationVariantOutline" size="small" />
       </template>

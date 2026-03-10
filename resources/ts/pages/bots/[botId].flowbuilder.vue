@@ -1,6 +1,6 @@
 <!-- FlowBuilder.vue -->
 <script setup lang="ts">
-import { ref, computed, provide, onMounted, watch, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter, onBeforeRouteLeave } from "vue-router";
 import axios from "axios";
 import FlowNodeCard from "@/components/bots/FlowNodeCard.vue";
@@ -26,6 +26,7 @@ const actionEditorStore = useActionEditorStore();
 const { canEdit, isReadOnly } = useEditGuard();
 const { cleanDanglingReferences } = useNodeHelpers();
 
+// ── State ─────────────────────────────────────────────────────────────────────
 const bot = ref<any>(null);
 const flows = ref<any[]>([]);
 const flow = ref<any>(null);
@@ -38,7 +39,6 @@ const isLoading = ref(true);
 const isLoadingFlows = ref(true);
 const saveStatus = ref<"saved" | "saving" | "unsaved">("saved");
 const hasUnsavedChanges = ref(false);
-const sidebarOpen = ref(true);
 const availableVariables = ref<string[]>([]);
 const customFunctions = ref<any[]>([]);
 const apiIntegrations = ref<any[]>([]);
@@ -49,10 +49,6 @@ const newFlow = ref({ name: "", description: "" });
 const isCreatingFlow = ref(false);
 const flowSearch = ref("");
 const addMenuState = ref({ show: false, afterIndex: -1, x: 0, y: 0 });
-
-// ── Media upload state (shared with child nodes via provide) ──────────────────
-const mediaUploading = ref(false);
-const mediaUploadProgress = ref(0);
 
 // Auto-save timers
 const EDIT_DEBOUNCE = 30_000;
@@ -111,26 +107,19 @@ const saveIndicatorText = computed(() =>
 );
 
 // ── Smart version picker ──────────────────────────────────────────────────────
-// Rule: prefer the newest draft that is AFTER the latest published version.
-// If no such draft exists, fall back to the latest published version.
-// If no published version exists either, pick the newest version overall.
+
 function pickBestVersion(versions: any[]): any | null {
   if (!versions.length) return null;
-
   const sorted = [...versions].sort((a, b) => b.version_number - a.version_number);
   const published = sorted.filter(v => v.status === "published");
   const drafts = sorted.filter(v => v.status === "draft");
-
   const latestPublished = published[0] ?? null;
-
-  // Drafts with a higher version_number than the latest published (i.e. branched after it)
   const newerDrafts = latestPublished
     ? drafts.filter(d => d.version_number > latestPublished.version_number)
     : drafts;
-
-  if (newerDrafts.length) return newerDrafts[0]; // highest draft number first
+  if (newerDrafts.length) return newerDrafts[0];
   if (latestPublished) return latestPublished;
-  return sorted[0]; // fallback: just the newest
+  return sorted[0];
 }
 
 // ── Auto-save ─────────────────────────────────────────────────────────────────
@@ -173,36 +162,7 @@ function loadNodesFromData(data: any) {
 
 watch(nodes, () => { if (!isLoading.value) scheduleEditSave(); }, { deep: true });
 
-
-async function uploadMedia(file: File, mediaType: string): Promise<{ url: string; filename: string }> {
-  mediaUploading.value = true;
-  mediaUploadProgress.value = 0;
-  try {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("type", mediaType);
-    form.append("bot_id", botId.value);
-
-    console.log('Uploading media file:', form);
-    const res = await axios.post("/api/media/upload", form, {
-      headers: { "Content-Type": "multipart/form-data" },
-      onUploadProgress: (e) => {
-        mediaUploadProgress.value = Math.round((e.loaded / (e.total ?? 1)) * 100);
-      },
-    });
-
-    return { url: res.data.url, filename: res.data.filename ?? file.name };
-  } finally {
-    mediaUploading.value = false;
-  }
-}
-
-
-provide("uploadMedia", uploadMedia);
-provide("mediaUploading", mediaUploading);
-provide("mediaUploadProgress", mediaUploadProgress);
-
-// ── Data loading ─────────────────────────────────────────────────────────────
+// ── Data loading ──────────────────────────────────────────────────────────────
 
 async function loadBotFlows() {
   isLoadingFlows.value = true;
@@ -221,12 +181,9 @@ async function loadBotFlows() {
 async function loadFlow(flowId: string) {
   isLoading.value = true;
   try {
-    // 1. Fetch versions list first so we can pick the right one
     await loadVersions(flowId);
     const best = pickBestVersion(flowVersions.value);
 
-    // 2. Fetch builder data — always hit the default endpoint for flow/version metadata,
-    //    then if the best version isn't what the default returns, fetch that version's dialogs.
     const [defaultRes, varsRes] = await Promise.all([
       axios.get(`/api/bots/${botId.value}/flows/${flowId}/builder`),
       axios.get(`/api/bots/${botId.value}/flows/${flowId}/builder/variables`),
@@ -235,7 +192,6 @@ async function loadFlow(flowId: string) {
     flow.value = defaultRes.data.flow;
     availableVariables.value = (varsRes.data.variables ?? []).map((v: any) => v.name);
 
-    // 3. If the best version differs from what the default endpoint returned, load it
     const defaultVersionId = defaultRes.data.version?.id;
     if (best && best.id !== defaultVersionId) {
       const vRes = await axios.get(
@@ -273,7 +229,9 @@ async function switchFlow(flowId: string) {
   if (hasUnsavedChanges.value) {
     const r = await Swal.fire({
       title: "Unsaved Changes", text: "Switch flow? Unsaved changes will be lost.",
-      icon: "warning", showCancelButton: true, confirmButtonText: "Switch", cancelButtonText: "Stay",
+      icon: "warning", showCancelButton: true,
+      confirmButtonText: "Switch", cancelButtonText: "Stay",
+      confirmButtonColor: "rgb(var(--v-theme-primary))",
     });
     if (!r.isConfirmed) return;
   }
@@ -337,7 +295,6 @@ async function createNewVersion() {
     );
     toast("New version created!");
     await loadVersions(activeFlowId.value);
-    // Auto-switch into the new draft
     const newVerId = res.data.version.id;
     suppressVersionWatch = true;
     selectedVersionId.value = newVerId;
@@ -352,6 +309,7 @@ async function publish() {
   const r = await Swal.fire({
     title: "Publish Flow", text: "This makes this version live for all users.",
     icon: "warning", showCancelButton: true, confirmButtonText: "Publish",
+    confirmButtonColor: "rgb(var(--v-theme-primary))",
   });
   if (!r.isConfirmed) return;
   try {
@@ -422,7 +380,9 @@ onBeforeRouteLeave((to, from, next) => {
   if (!hasUnsavedChanges.value) { next(); return; }
   Swal.fire({
     title: "Unsaved Changes", text: "Leave without saving?",
-    icon: "warning", showCancelButton: true, confirmButtonText: "Leave", cancelButtonText: "Stay",
+    icon: "warning", showCancelButton: true,
+    confirmButtonText: "Leave", cancelButtonText: "Stay",
+    confirmButtonColor: "rgb(var(--v-theme-primary))",
   }).then(r => r.isConfirmed ? next() : next(false));
 });
 
@@ -442,9 +402,8 @@ onMounted(async () => {
   <VLayout class="fill-height" style="overflow: hidden;">
 
     <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
-    <VNavigationDrawer permanent width="240" location="left" border="end" elevation="0" :scrim="false"
-      :temporary="false" class="d-flex flex-column" style="height:100vh;">
-      <!-- Header -->
+    <VNavigationDrawer permanent width="240" location="left" border="end" elevation="0" class="d-flex flex-column"
+      style="height:100vh;">
       <div class="shrink-0">
         <VListItem prepend-icon="$robot" :title="bot?.name ?? 'Bot'" density="compact" class="py-3" />
         <VDivider />
@@ -464,7 +423,6 @@ onMounted(async () => {
         <VDivider />
       </div>
 
-      <!-- Scrollable flow list -->
       <div class="flex-grow-1 min-h-0">
         <PerfectScrollbar class="h-100">
           <div v-if="isLoadingFlows" class="d-flex justify-center pa-8">
@@ -493,10 +451,10 @@ onMounted(async () => {
         </PerfectScrollbar>
       </div>
 
-      <!-- Footer -->
       <div class="shrink-0">
         <VDivider />
-        <VListItem class="text-medium-emphasis" @click="router.push({ name: 'bots-id', params: { id: botId } })">
+        <VListItem class="text-medium-emphasis"
+          @click="router.push({ name: 'bots-id-settings', params: { id: botId } })">
           <template #prepend>
             <VChip color="primary" variant="text" size="small" rounded="lg">
               <VIcon icon="$cogOutline" size="18" />
@@ -510,29 +468,23 @@ onMounted(async () => {
     <!-- ── Main ───────────────────────────────────────────────────────────── -->
     <VMain class="d-flex flex-column" style="height:100vh; overflow:hidden;">
 
-      <!-- Toolbar -->
       <FlowBuilderToolbar :flow="flow" :flow-version="flowVersion" :flow-versions="flowVersions"
         :selected-version-id="selectedVersionId" :save-status="saveStatus" :save-indicator-color="saveIndicatorColor"
         :save-indicator-icon="saveIndicatorIcon" :save-indicator-text="saveIndicatorText" :version-color="versionColor"
         @update:selectedVersionId="v => { suppressVersionWatch = false; selectedVersionId = v; }"
         @createNewVersion="createNewVersion" @publish="publish" />
 
-      <!-- Media upload global progress bar (shown whenever a MediaNode is uploading) -->
-      <VProgressLinear v-if="mediaUploading" :model-value="mediaUploadProgress" color="primary" height="3"
-        style="position:sticky;top:0;z-index:10;" />
-
       <!-- Scrollable canvas -->
       <PerfectScrollbar class="flex-grow-1">
         <div style="background:rgb(var(--v-theme-background));" :style="readOnly ? { cursor: 'not-allowed' } : {}">
           <div :style="readOnly ? { pointerEvents: 'none', userSelect: 'none', opacity: '0.85' } : {}"
             style="min-height:100vh; padding-bottom:80px;">
-            <!-- Loading -->
+
             <div v-if="isLoading" class="d-flex flex-column align-center justify-center" style="height:70vh;">
               <VProgressCircular size="56" indeterminate color="primary" />
               <p class="mt-4 text-medium-emphasis">Loading flow…</p>
             </div>
 
-            <!-- Empty -->
             <div v-else-if="nodes.length === 0" class="d-flex flex-column align-center justify-center text-center"
               style="height:70vh;">
               <VIcon icon="$plusCircleOutline" size="64" color="grey-lighten-1" class="mb-4" />
@@ -542,7 +494,6 @@ onMounted(async () => {
               </VBtn>
             </div>
 
-            <!-- Node list -->
             <div v-else class="mx-auto py-8 px-6" style="max-width:720px;">
               <template v-for="(node, idx) in nodes" :key="node.id">
                 <div v-if="idx > 0" class="d-flex flex-column align-center py-2">
@@ -555,13 +506,12 @@ onMounted(async () => {
                 <FlowNodeCard :node="node" :index="idx" :total-nodes="nodes.length"
                   :available-variables="availableVariables" :saved-responses="savedResponses"
                   :node-options="nodeOptions" :expanded="expandedNodes[node.id]" :disabled="readOnly"
-                  :api-integrations="apiIntegrations" :custom-functions="customFunctions"
+                  :api-integrations="apiIntegrations" :custom-functions="customFunctions" :bot-id="botId"
                   @update:expanded="expandedNodes[node.id] = $event" @set-first-node="setFirstNode"
                   @delete-node="deleteNode" @move-node="moveNode" @open-action-editor="openActionEditor"
                   @toggle-handoff="toggleHandoff" />
               </template>
 
-              <!-- Append connector -->
               <div class="d-flex flex-column align-center mt-6">
                 <div class="connector-line" />
                 <VBtn icon="$plus" variant="outlined" rounded="circle" @click="openAddMenu(nodes.length - 1, $event)" />

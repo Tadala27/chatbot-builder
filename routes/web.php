@@ -1,9 +1,13 @@
 <?php
 
 // routes/web.php
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\MediaServeController;
+use Illuminate\Support\Facades\Route;
 
-// Catch-all for Vue Router (must be last)
+Route::get('/media/bot/{storedFilename}', [MediaServeController::class, 'serve'])
+    ->name('media.bot.serve')
+    ->where('storedFilename', '[a-zA-Z0-9\-\.]+');
+
 Route::get('/{any?}', [HomeController::class, 'show'])
     ->where('any', '^(?!api\/)(?!auth\/microsoft)[\/\w\.-]*');

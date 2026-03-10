@@ -146,26 +146,16 @@ class FlowBuilderController extends Controller
     // =========================================================================
     // POST /api/bots/{bot}/flows/{flow}/builder/publish
     // =========================================================================
-
     public function publish(Bot $bot, Flow $flow): JsonResponse
     {
         $this->authorizeFlow($bot, $flow);
 
-        // If the flow is already published, we might want to handle it differently
-        if ($flow->status === 'published') {
-            // Option: Republish the same flow (update version)
-            $version = $flow->draftVersion();
-            if (!$version) {
-                return response()->json(['message' => 'No draft version to publish.'], 422);
-            }
-        } else {
-            $version = $flow->draftVersion();
-            if (!$version) {
-                return response()->json(['message' => 'No draft version to publish.'], 422);
-            }
+        $version = $flow->draftVersion();
+
+        if (!$version) {
+            return response()->json(['message' => 'No draft version to publish.'], 422);
         }
 
-        // Validation
         if (!$version->dialogs()->where('is_entry_point', true)->exists()) {
             return response()->json([
                 'message' => 'Flow validation failed.',
@@ -174,31 +164,27 @@ class FlowBuilderController extends Controller
         }
 
         DB::transaction(function () use ($bot, $flow, $version) {
-            // Archive all currently published flows EXCEPT the current one
-            // (if it's already published, we're just updating its version)
-            Flow::where('bot_id', $bot->id)
+            // Archive all OTHER currently-published flows for this bot in bulk
+            $otherPublishedIds = Flow::where('bot_id', $bot->id)
                 ->where('status', 'published')
-                ->where('is_active', true)
                 ->where('id', '!=', $flow->id)
-                ->each(function ($otherFlow) {
-                    $otherFlow->update([
-                        'status'    => 'archived',
-                        'is_active' => false,
-                    ]);
+                ->pluck('current_published_version_id', 'id'); // [flow_id => version_id]
 
-                    if ($otherFlow->current_published_version_id) {
-                        $otherFlow->versions()
-                            ->where('id', $otherFlow->current_published_version_id)
-                            ->update(['status' => 'archived']);
-                    }
-                });
+            if ($otherPublishedIds->isNotEmpty()) {
+                Flow::whereIn('id', $otherPublishedIds->keys())
+                    ->update(['status' => 'archived', 'is_active' => false]);
 
-            // Publish the new version
+                FlowVersion::whereIn('id', $otherPublishedIds->values()->filter())
+                    ->update(['status' => 'archived']);
+            }
+
+            // Publish the draft version
             $version->update([
                 'status'       => 'published',
                 'published_at' => now(),
             ]);
 
+            // Mark the flow as published
             $flow->update([
                 'status'                       => 'published',
                 'current_published_version_id' => $version->id,
@@ -208,11 +194,10 @@ class FlowBuilderController extends Controller
         });
 
         return response()->json([
-            'message' => 'Flow published successfully. Previous flows archived.',
-            'flow' => $flow->fresh()
+            'message' => 'Flow published successfully.',
+            'flow'    => $flow->fresh(['currentPublishedVersion']),
         ]);
     }
-
     // =========================================================================
     // GET /api/bots/{bot}/flows/{flow}/builder/versions
     // =========================================================================
@@ -270,7 +255,7 @@ class FlowBuilderController extends Controller
 
         $validated = $request->validate([
             'source_version_id' => 'required|integer|exists:flow_versions,id',
-            'changelog'         => 'nullable|string',
+            'changelog'         => 'nullable',
         ]);
 
         $source          = $flow->versions()->findOrFail($validated['source_version_id']);

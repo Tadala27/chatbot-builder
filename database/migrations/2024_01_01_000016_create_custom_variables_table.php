@@ -19,10 +19,12 @@ return new class extends Migration
             $table->id();
             $table->foreignId('bot_id')->constrained()->cascadeOnDelete();
             $table->string('name');
-            $table->string('key')->index(); // the {{key}} used in flow expressions
+            $table->string('key')->index();
             $table->enum('data_type', ['string', 'number', 'boolean', 'json', 'date'])->default('string');
             $table->text('default_value')->nullable();
-            $table->boolean('is_sensitive')->default(false); // mask in logs
+            $table->enum('save_in', ['conversation', 'user_property', 'global'])->default('conversation');
+            $table->boolean('use_in_js')->default(false);
+            $table->boolean('is_sensitive')->default(false);
             $table->text('description')->nullable();
             $table->timestamps();
             $table->unique(['bot_id', 'key']);

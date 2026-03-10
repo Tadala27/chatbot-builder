@@ -13,10 +13,19 @@ class Conversation extends Model
     use HasFactory;
 
     protected $fillable = [
-        'tenant_id', 'flow_id', 'flow_version_id', 'whatsapp_account_id',
-        'whatsapp_user_phone', 'whatsapp_user_name', 'status',
-        'assigned_agent_id', 'started_at', 'ended_at',
-        'last_message_at', 'message_count', 'metadata',
+        'tenant_id',
+        'flow_id',
+        'flow_version_id',
+        'whatsapp_account_id',
+        'whatsapp_user_phone',
+        'whatsapp_user_name',
+        'status',
+        'assigned_agent_id',
+        'started_at',
+        'ended_at',
+        'last_message_at',
+        'message_count',
+        'metadata',
     ];
 
     protected $casts = [
@@ -85,6 +94,11 @@ class Conversation extends Model
     public function analyticsEvents(): HasMany
     {
         return $this->hasMany(AnalyticsEvent::class);
+    }
+
+    public function latestMessage(): HasOne
+    {
+        return $this->hasOne(Message::class)->latest('sent_at');
     }
 
     public function isActive(): bool

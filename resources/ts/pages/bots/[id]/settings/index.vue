@@ -5,27 +5,15 @@
         <VCardText class="px-0 pb-0">
           <VTabs v-model="activeTab" color="primary" class="mx-6" grow>
             <VTab value="tab-variables">
-              <SvgSprite
-                name="custom-level-1"
-                class="v-icon--start"
-                style="width: 18px; height: 18px"
-              />
+              <SvgSprite name="custom-level-1" class="v-icon--start" style="width: 18px; height: 18px" />
               Custom Variables
             </VTab>
             <VTab value="tab-functions">
-              <SvgSprite
-                name="custom-level"
-                class="v-icon--start"
-                style="width: 18px; height: 18px"
-              />
+              <SvgSprite name="custom-level" class="v-icon--start" style="width: 18px; height: 18px" />
               Functions
             </VTab>
             <VTab value="tab-apis">
-              <SvgSprite
-                name="custom-code"
-                class="v-icon--start"
-                style="width: 18px; height: 18px"
-              />
+              <SvgSprite name="custom-code" class="v-icon--start" style="width: 18px; height: 18px" />
               API Integrations
             </VTab>
           </VTabs>
@@ -34,24 +22,17 @@
           <VTabsWindow v-model="activeTab" class="px-6 pb-6 pt-6">
             <!-- Custom Variables Tab -->
             <VTabsWindowItem value="tab-variables">
-              <CustomVariablesLibrary
-                :flow-id="flowId"
-                :is-read-only="isReadOnly"
-                @variables-updated="handleVariablesUpdated"
-              />
+              <CustomVariablesLibrary :bot-id="botId" @variables-updated="handleVariablesUpdated" />
             </VTabsWindowItem>
 
             <!-- Functions Tab -->
             <VTabsWindowItem value="tab-functions">
-              <FunctionsLibrary
-                :flow-id="flowId"
-                @functions-updated="handleFunctionsUpdated"
-              />
+              <FunctionsLibrary :bot-id="botId" @functions-updated="handleFunctionsUpdated" />
             </VTabsWindowItem>
 
             <!-- API Integrations Tab -->
             <VTabsWindowItem value="tab-apis">
-              <ApiLibrary :flow-id="flowId" @apis-updated="handleApisUpdated" />
+              <ApiLibrary :bot-id="botId" @apis-updated="handleApisUpdated" />
             </VTabsWindowItem>
           </VTabsWindow>
         </VCardText>
@@ -69,11 +50,8 @@ import ApiLibrary from "@/components/settings/apis.vue";
 
 const route = useRoute();
 const router = useRouter();
-const flowId = computed(() => route.params.id as string);
+const botId = computed(() => route.params.id as string);
 
-const props = defineProps<{
-  isReadOnly: boolean;
-}>();
 
 const emit = defineEmits<{
   (e: "variablesUpdated", variables: any[]): void;
