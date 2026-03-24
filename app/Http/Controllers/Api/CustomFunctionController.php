@@ -19,32 +19,131 @@ class CustomFunctionController extends Controller
 {
     public function __construct(protected FunctionExecutor $executor) {}
 
-    // GET /api/bots/{bot}/functions
     public function index(Request $request, Bot $bot): JsonResponse
     {
         $this->authorizeBot($bot);
 
-        $query = CustomFunction::where('bot_id', $bot->id);
+        // Get custom functions with filters
+        $customQuery = CustomFunction::where('bot_id', $bot->id);
 
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where(fn($q) => $q
-                ->where('name', 'like', "%{$s}%")
-                ->orWhere('slug', 'like', "%{$s}%")
-                ->orWhere('description', 'like', "%{$s}%"));
+            $customQuery->where(function ($q) use ($s) {
+                $q->where('name', 'like', "%{$s}%")
+                    ->orWhere('slug', 'like', "%{$s}%")
+                    ->orWhere('description', 'like', "%{$s}%");
+            });
         }
 
-        if ($request->filled('function_type')) {
-            $query->where('function_type', $request->function_type);
+        if ($request->filled('function_type') && $request->function_type !== 'built_in') {
+            $customQuery->where('function_type', $request->function_type);
         }
 
         if ($request->filled('is_active')) {
-            $query->where('is_active', $request->boolean('is_active'));
+            $customQuery->where('is_active', $request->boolean('is_active'));
         }
 
-        $query->orderBy($request->get('sort', 'created_at'), $request->get('direction', 'desc'));
+        // Get built-in functions (only if not filtering by custom function_type)
+        $builtInFunctions = collect();
+        if (!$request->filled('function_type') || $request->function_type === 'built_in') {
+            $builtInQuery = BuiltInFunction::where('is_active', true);
 
-        return response()->json($query->paginate($request->get('per_page', 20)));
+            if ($request->filled('search')) {
+                $s = $request->search;
+                $builtInQuery->where(function ($q) use ($s) {
+                    $q->where('name', 'like', "%{$s}%")
+                        ->orWhere('description', 'like', "%{$s}%");
+                });
+            }
+
+            $builtInFunctions = $builtInQuery->orderBy('name')->get()->map(function ($f) {
+                return [
+                    'id' => $f->id,
+                    'name' => $f->name,
+                    'slug' => $f->name,
+                    'description' => $f->description,
+                    'parameters' => $f->parameters,
+                    'return_type' => $f->return_type,
+                    'category' => $f->category,
+                    'syntax' => $f->syntax,
+                    'examples' => $f->examples,
+                    'function_type' => 'built_in',
+                    'is_system' => true,
+                    'is_active' => true,
+                    'timeout_seconds' => 30, // Default timeout for built-in
+                ];
+            });
+        }
+
+        // Get custom functions and format them
+        $customFunctions = $customQuery->orderBy('name')->get()->map(function ($f) {
+            return [
+                'id' => $f->id,
+                'name' => $f->name,
+                'slug' => $f->slug,
+                'description' => $f->description,
+                'parameters' => $f->parameters,
+                'return_type' => $f->return_type,
+                'function_type' => $f->function_type,
+                'is_system' => false,
+                'is_active' => $f->is_active,
+                'timeout_seconds' => $f->timeout_seconds ?? 30,
+                'code' => $f->code,
+            ];
+        });
+
+        // Combine all functions
+        $allFunctions = $customFunctions->concat($builtInFunctions)->values();
+
+        // Apply sorting to the combined collection
+        $sortBy = $request->get('sort', 'name');
+        $sortDirection = $request->get('direction', 'asc');
+
+        $allFunctions = $allFunctions->sortBy(function ($item) use ($sortBy) {
+            return $item[$sortBy] ?? '';
+        });
+
+        if ($sortDirection === 'desc') {
+            $allFunctions = $allFunctions->reverse();
+        }
+
+        $allFunctions = $allFunctions->values();
+
+        // Handle pagination
+        if ($request->has('per_page') || $request->has('page')) {
+            $perPage = $request->get('per_page', 20);
+            $page = $request->get('page', 1);
+
+            // Slice the collection for the current page
+            $items = $allFunctions->forPage($page, $perPage)->values();
+
+            // Create paginator
+            $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+                $items,
+                $allFunctions->count(),
+                $perPage,
+                $page,
+                ['path' => $request->url(), 'query' => $request->query()]
+            );
+
+            return response()->json([
+                'data' => $paginator->items(),
+                'pagination' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                    'from' => $paginator->firstItem(),
+                    'to' => $paginator->lastItem(),
+                ]
+            ]);
+        }
+
+        // Return all functions without pagination
+        return response()->json([
+            'data' => $allFunctions,
+            'pagination' => null
+        ]);
     }
 
     // GET /api/bots/{bot}/functions/{function}

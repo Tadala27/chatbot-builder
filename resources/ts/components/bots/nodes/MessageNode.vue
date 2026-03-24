@@ -8,6 +8,8 @@ const actionEditor = useActionEditorStore();
 const props = defineProps<{
   node: FlowNode;
   availableVariables: string[];
+  customFunctions?: any[];
+  apiIntegrations?: any[];
   savedResponses: any[];
   nodeOptions: any[];
 }>();

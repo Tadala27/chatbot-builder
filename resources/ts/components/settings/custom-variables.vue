@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { watchDebounced } from '@vueuse/core'
 import axios from 'axios'
 import Swal from 'sweetalert2'
 
@@ -11,7 +12,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'variablesUpdated', variables: any[]): void
 }>()
-
+const pagination = ref({
+  total: 0,
+  per_page: 20,
+  current_page: 1,
+  last_page: 1,
+  from: 0,
+  to: 0,
+})
 // ── View state (slider) ───────────────────────────────────────────────────────
 const view = ref<'list' | 'form'>('list')
 const editingVariable = ref<any>(null)
@@ -37,14 +45,15 @@ const allVariables = ref<any[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const search = ref('')
+const hovered = ref('')
 
 const systemVars = computed(() => allVariables.value.filter(v => v.is_system))
 const customVars = computed(() => allVariables.value.filter(v => !v.is_system))
 
-const filteredVars = computed(() => {
+const filteredCustomVars = computed(() => {
   const q = search.value.toLowerCase()
-  if (!q) return allVariables.value
-  return allVariables.value.filter(v =>
+  if (!q) return customVars.value
+  return customVars.value.filter(v =>
     v.name.toLowerCase().includes(q) ||
     v.key.toLowerCase().includes(q) ||
     (v.description ?? '').toLowerCase().includes(q)
@@ -93,7 +102,6 @@ function blankForm() {
     is_sensitive: false,
     default_value: '',
     description: '',
-    // UI-only
     keyTouched: false,
   }
 }
@@ -114,25 +122,41 @@ function populateForm(v: any) {
   }
 }
 
-// Auto-generate key from name (snake_case) until user touches the key field
 function onNameInput() {
   if (form.value.keyTouched || editingVariable.value) return
   form.value.key = form.value.name
     .toLowerCase()
     .replace(/\s+/g, '_')
     .replace(/[^a-z0-9_]/g, '')
-    .replace(/^[^a-z]+/, '')     // must start with letter
+    .replace(/^[^a-z]+/, '')
     .slice(0, 100)
 }
 
 // ── Load / Save / Delete ──────────────────────────────────────────────────────
 async function loadVariables() {
   loading.value = true
+
+  const params = {
+    page: pagination.value.current_page,
+    per_page: pagination.value.per_page,
+    search: search.value || undefined,
+
+  }
   try {
-    const { data } = await axios.get(`/api/bots/${props.botId}/variables`)
-    allVariables.value = data.variables ?? []
+    const { data } = await axios.get(`/api/bots/${props.botId}/variables`, { params })
+    allVariables.value = data.data ?? []
+
+    pagination.value = {
+      total: data.pagination.total,
+      per_page: data.pagination.per_page,
+      current_page: data.pagination.current_page,
+      last_page: data.pagination.last_page,
+      from: data.pagination.from ?? 0,
+      to: data.pagination.to ?? 0,
+    }
     emit('variablesUpdated', customVars.value)
-  } catch {
+  } catch (err: any) {
+    console.error(err)
     Swal.fire({ icon: 'error', title: 'Failed to load variables', timer: 2000, showConfirmButton: false })
   } finally {
     loading.value = false
@@ -180,8 +204,8 @@ async function saveVariable() {
 
 async function deleteVariable(v: any) {
   const { isConfirmed } = await Swal.fire({
-    title: `Delete "{{${v.key}}}"?`,
-    html: `Any dialog text referencing <code>{{${v.key}}}</code> will stop resolving.<br/>This cannot be undone.`,
+    title: `Delete "$${v.key}"?`,
+    html: `Any dialog text referencing <code>$${v.key}</code> will stop resolving.<br/>This cannot be undone.`,
     icon: 'warning',
     showCancelButton: true,
     confirmButtonColor: '#ef4444',
@@ -210,6 +234,22 @@ async function deleteVariable(v: any) {
 const SAVE_IN_COLORS: Record<string, string> = { conversation: 'primary', user_property: 'success', global: 'warning' }
 const SAVE_IN_LABELS: Record<string, string> = { conversation: 'Session', user_property: 'Permanent', global: 'Global' }
 const DATA_TYPE_COLORS: Record<string, string> = { string: 'info', number: 'purple', boolean: 'orange', json: 'teal', date: 'pink' }
+const DATA_TYPE_ICONS: Record<string, string> = { string: 'custom-note-outline', number: 'custom-table', boolean: 'custom-check-circle-fill', json: 'custom-code', date: 'custom-calendar-2' }
+
+
+// ────────────────────────────────────────
+// Watchers
+// ────────────────────────────────────────
+watchDebounced(
+  [search,],
+  () => {
+    pagination.value.current_page = 1
+    loadVariables()
+  },
+  { debounce: 500, maxWait: 1000 }
+)
+
+watch(() => pagination.value.current_page, () => loadVariables())
 
 onMounted(loadVariables)
 defineExpose({ loadVariables })
@@ -228,10 +268,7 @@ defineExpose({ loadVariables })
         <div class="panel-header">
           <div>
             <h4 class="panel-title">Custom Variables</h4>
-            <p class="panel-subtitle">
-              Define variables that dialogs can collect
-
-            </p>
+            <p class="panel-subtitle">Define variables that dialogs can collect</p>
           </div>
           <VBtn color="primary" prepend-icon="$plus" @click="openCreateForm">
             Create Variable
@@ -244,7 +281,7 @@ defineExpose({ loadVariables })
 
         <VProgressLinear v-if="loading" indeterminate color="primary" class="mb-2" />
 
-        <!-- System variables — always shown, collapsed by default -->
+        <!-- System variables -->
         <VExpansionPanels variant="accordion" class="mb-3">
           <VExpansionPanel>
             <VExpansionPanelTitle class="py-2">
@@ -278,6 +315,8 @@ defineExpose({ loadVariables })
 
         <!-- Custom variables table -->
         <div class="var-table-wrap">
+
+          <!-- Empty state -->
           <div v-if="!loading && customVars.length === 0" class="empty-state">
             <VIcon icon="$variable" size="40" class="mb-3 text-medium-emphasis" />
             <p class="text-body-2 font-weight-medium">No custom variables yet</p>
@@ -289,59 +328,109 @@ defineExpose({ loadVariables })
             </VBtn>
           </div>
 
-          <VTable v-else density="compact" class="var-table">
-            <thead>
-              <tr>
-                <th>Placeholder</th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Stored in</th>
-                <th>JS</th>
-                <th>Sensitive</th>
-                <th width="72">Actions</th>
+          <VTable v-else class="bordered-table" density="comfortable">
+            <thead class="bg-gray text-uppercase">
+              <tr class="text-secondary">
+                <th class="text-left pa-4 cursor-pointer" @mouseenter="hovered = 'name'" @mouseleave="hovered = ''">
+                  Variable
+                  <SvgSprite v-if="hovered === 'name'" name="custom-chevron-up" class="me-2"
+                    style="width: 15px; height: 15px" />
+                </th>
+                <th class="text-center pa-4">Type</th>
+                <th class="text-center pa-4">Stored In</th>
+                <th class="text-center pa-4">Default</th>
+                <th class="text-center pa-4">Flags</th>
+                <th class="text-center pa-4">Actions</th>
               </tr>
             </thead>
-            <tbody>
-              <tr v-for="v in filteredVars.filter(x => !x.is_system)" :key="v.id" class="var-row">
-                <td>
-                  <code class="var-code">{{ v.key }}</code>
-                </td>
-                <td>
-                  <div class="font-weight-medium text-body-2">{{ v.name }}</div>
-                  <div v-if="v.description" class="text-caption text-medium-emphasis text-truncate"
-                    style="max-width:180px">
-                    {{ v.description }}
-                  </div>
-                </td>
-                <td>
-                  <VChip size="x-small" :color="DATA_TYPE_COLORS[v.data_type] ?? 'grey'" variant="tonal">
-                    {{ v.data_type }}
-                  </VChip>
-                </td>
-                <td>
-                  <VChip size="x-small" :color="SAVE_IN_COLORS[v.save_in] ?? 'grey'" variant="flat">
-                    {{ SAVE_IN_LABELS[v.save_in] ?? v.save_in }}
-                  </VChip>
-                </td>
-                <td>
-                  <VIcon :icon="v.use_in_js ? '$checkCircle' : '$minus'"
-                    :color="v.use_in_js ? 'success' : 'grey-lighten-2'" size="18" />
-                </td>
-                <td>
-                  <VIcon :icon="v.is_sensitive ? '$lock' : '$lockOpenOutline'"
-                    :color="v.is_sensitive ? 'warning' : 'grey-lighten-2'" size="18" />
-                </td>
-                <td>
-                  <div class="d-flex align-center ga-1">
-                    <VBtn icon="$pencil" size="x-small" variant="text" @click="openEditForm(v)" />
-                    <VBtn icon="$delete" size="x-small" variant="text" color="error" @click="deleteVariable(v)" />
+
+            <!-- Loading -->
+            <tbody v-if="loading">
+              <tr>
+                <td colspan="6" class="py-12">
+                  <div class="d-flex justify-center">
+                    <VProgressCircular indeterminate color="primary" size="48" />
                   </div>
                 </td>
               </tr>
             </tbody>
-          </VTable>
-        </div>
 
+            <tbody v-else class="bg-containerBg">
+              <tr v-for="v in filteredCustomVars" :key="v.id" class="var-row">
+
+                <!-- Variable name + key -->
+                <td class="pa-4">
+                  <div class="d-flex align-center gap-3">
+                    <div>
+                      <div class="text-subtitle-2 font-weight-medium">{{ v.name }}</div>
+                      <code class="var-code">$\{{ v.key }}</code>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Data type -->
+                <td class="pa-4 text-center">
+                  <VChip size="small" :color="DATA_TYPE_COLORS[v.data_type] ?? 'grey'" variant="tonal">
+                    <SvgSprite :name="DATA_TYPE_ICONS[v.data_type]" class="me-2" style="width: 15px; height: 15px" />
+                    {{ v.data_type }}
+                  </VChip>
+                </td>
+
+                <!-- Stored in -->
+                <td class="pa-4 text-center">
+                  <VChip size="small" :color="SAVE_IN_COLORS[v.save_in] ?? 'grey'" variant="flat">
+                    {{ SAVE_IN_LABELS[v.save_in] ?? v.save_in }}
+                  </VChip>
+                </td>
+
+                <!-- Default value -->
+                <td class="pa-4 text-center">
+                  <span v-if="v.default_value" class="text-body-2">{{ v.default_value }}</span>
+                  <span v-else class="text-caption text-medium-emphasis">—</span>
+                </td>
+
+                <!-- Flags: JS + Sensitive -->
+                <td class="pa-4 text-center">
+                  <VTooltip location="top" text="Used in JS functions">
+                    <template #activator="{ props: tp }">
+                      <VIcon v-bind="tp" :icon="v.use_in_js ? '$checkCircle' : '$minus'"
+                        :color="v.use_in_js ? 'success' : 'grey-lighten-2'" size="18" class="me-2" />
+                    </template>
+                  </VTooltip>
+                  <VTooltip location="top" :text="v.is_sensitive ? 'Sensitive — masked in logs' : 'Not sensitive'">
+                    <template #activator="{ props: tp }">
+                      <SvgSprite v-bind="tp" :name="v.is_sensitive ? 'custom-lock' : 'custom-unlock'"
+                        style="width: 18px; height: 18px"
+                        :class="v.is_sensitive ? 'text-warning' : 'text-grey-lighten-2'" />
+                    </template>
+                  </VTooltip>
+                </td>
+
+                <!-- Actions -->
+                <td class="pa-4 text-center">
+                  <SvgSprite name="custom-edit-outline" class="text-primary me-2" @click="openEditForm(v)"
+                    style="width: 18px; height: 18px" />
+                  <SvgSprite name="custom-trash-fill" class="text-error" @click="deleteVariable(v)"
+                    style="width: 18px; height: 18px" />
+                </td>
+              </tr>
+            </tbody>
+          </VTable>
+          <!-- ── Pagination ──────────────────────────────────────────── -->
+          <v-card-text v-if="pagination.total > 0" class="pt-4">
+            <VRow class="align-center text-center text-sm-start" justify="space-between">
+              <VCol cols="12" sm="6" class="d-flex justify-center justify-sm-start">
+                <span class="text-medium-emphasis">
+                  Showing {{ pagination.from }}–{{ pagination.to }} of {{ pagination.total }} bots
+                </span>
+              </VCol>
+              <VCol cols="12" sm="6" class="d-flex justify-center justify-sm-end">
+                <v-pagination v-model="pagination.current_page" :length="pagination.last_page" :total-visible="5"
+                  rounded="circle" density="comfortable" variant="outlined" color="primary" />
+              </VCol>
+            </VRow>
+          </v-card-text>
+        </div>
       </div><!-- /list panel -->
 
       <!-- ══════════════════════════════════ FORM ════════════════════════════ -->
@@ -377,10 +466,10 @@ defineExpose({ loadVariables })
               <VCol cols="12" md="6">
                 <VTextField v-model="form.key" label="Variable Key *" variant="outlined" density="compact"
                   :readonly="!!editingVariable"
-                  :hint="editingVariable ? 'Key is locked after creation to prevent breaking existing dialogs' : 'Lowercase, underscores only. Used as {{key}} in dialog text.'"
+                  :hint="editingVariable ? 'Key is locked after creation to prevent breaking existing dialogs' : 'Lowercase, underscores only. Used as $key in dialog text.'"
                   persistent-hint @input="form.keyTouched = true">
                   <template #prepend-inner>
-                    <span class="text-caption text-medium-emphasis mr-n1">{{}}</span>
+                    <span class="text-caption text-medium-emphasis mr-n1">$</span>
                   </template>
                   <template #append-inner>
                     <VIcon v-if="editingVariable" icon="$lock" size="14" color="grey" />
@@ -425,8 +514,6 @@ defineExpose({ loadVariables })
                 </div>
               </VCol>
             </VRow>
-
-            <!-- Global: warn that key must match a tenant global variable -->
             <VAlert v-if="form.save_in === 'global'" type="warning" variant="tonal" density="compact" rounded="lg"
               class="mt-3">
               <div class="text-caption">
@@ -481,12 +568,12 @@ defineExpose({ loadVariables })
             <div class="preview-block">
               <div class="preview-row">
                 <span class="preview-label">Placeholder</span>
-                <code class="var-code var-code--lg">{{ form.key }}</code>
+                <code class="var-code var-code--lg">${{ form.key }}</code>
               </div>
               <div class="preview-row">
                 <span class="preview-label">Example dialog text</span>
                 <span class="text-body-2">
-                  "Hello <code class="var-code">{{ form.key }}</code>, how can I help you today?"
+                  "Hello <code class="var-code">${{ form.key }}</code>, how can I help you today?"
                 </span>
               </div>
               <div class="preview-row">
@@ -528,8 +615,7 @@ defineExpose({ loadVariables })
 
 .panel {
   width: 100%;
-  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.25s ease;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
   will-change: transform, opacity;
 
   &--visible {
@@ -581,23 +667,24 @@ defineExpose({ loadVariables })
   margin: 0;
 }
 
-// ── Placeholder hint ──────────────────────────────────────────────────────────
-.placeholder-hint {
-  background: rgba(var(--v-theme-primary), 0.12);
-  color: rgb(var(--v-theme-primary));
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 0.78rem;
-}
-
-// ── Tables ────────────────────────────────────────────────────────────────────
+// ── Table ─────────────────────────────────────────────────────────────────────
 .var-table-wrap {
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 10px;
   overflow: hidden;
 }
 
-.var-table,
+.bordered-table {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.bg-gray {
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.bg-containerBg {
+  background-color: rgb(var(--v-theme-surface));
+}
+
 .system-table {
   th {
     font-size: 0.68rem !important;
@@ -636,6 +723,14 @@ defineExpose({ loadVariables })
   color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
+.gap-2 {
+  gap: 8px;
+}
+
+.gap-3 {
+  gap: 12px;
+}
+
 // ── Form ──────────────────────────────────────────────────────────────────────
 .form-body {
   display: flex;
@@ -659,7 +754,6 @@ defineExpose({ loadVariables })
   margin-bottom: 12px;
 }
 
-// ── Save-in cards ─────────────────────────────────────────────────────────────
 .save-in-card {
   padding: 14px;
   border: 2px solid rgba(var(--v-border-color), var(--v-border-opacity));
@@ -679,7 +773,6 @@ defineExpose({ loadVariables })
   }
 }
 
-// ── Flag cards ────────────────────────────────────────────────────────────────
 .flag-card {
   padding: 12px 14px;
   border: 2px solid rgba(var(--v-border-color), var(--v-border-opacity));
@@ -702,7 +795,6 @@ defineExpose({ loadVariables })
   }
 }
 
-// ── Preview block ─────────────────────────────────────────────────────────────
 .preview-block {
   background: rgba(var(--v-theme-surface-variant), 0.5);
   border-radius: 8px;
@@ -727,7 +819,6 @@ defineExpose({ loadVariables })
   min-width: 140px;
 }
 
-// ── Form actions ──────────────────────────────────────────────────────────────
 .form-actions {
   display: flex;
   justify-content: flex-end;

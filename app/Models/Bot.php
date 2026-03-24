@@ -76,4 +76,21 @@ class Bot extends Model
     {
         return $this->hasOne(BotConfiguration::class);
     }
+    public function botDialogs(): HasMany
+    {
+        return $this->hasMany(BotDialog::class);
+    }
+
+    public function botDialogForPurpose(string $purpose): ?BotDialog
+    {
+        return $this->botDialogs()->where('purpose', $purpose)->first();
+    }
+
+    public function getConfigOrCreate(): BotConfiguration
+    {
+        return $this->configuration()->firstOrCreate(
+            ['bot_id' => $this->id],
+            ['tenant_id' => $this->tenant_id]
+        );
+    }
 }

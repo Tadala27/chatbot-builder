@@ -10,22 +10,15 @@ use App\Models\Dialog;
 use App\Models\Message;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Executes the chatbot flow for a conversation.
- *
- * Schema changes from old version:
- *  - FlowNode  → Dialog  (table: dialogs, model: Dialog)
- *  - $version->nodes() → $version->dialogs()
- *  - Dialog has .kind (not .type); config['kind'] is still respected for legacy data
- *  - $conversation->setVariable() does NOT exist → use setVariable() helper here
- *  - Message has NO flow_node_id column → position tracked via ConversationContext.last_dialog_id
- *  - AnalyticsEvent has NO node_id column → dialog reference stored in metadata JSON
- *  - DB Actions: Action model has action_type + config; no trigger_event / execution_order columns.
- *    Actions are always post-send side-effects configured in config['actions'] on the Dialog config.
- */
 class ChatbotFlowExecutor
 {
     private Conversation $conversation;
+
+    /**
+     * Stores a navigation target UUID produced by processUserInput's action chain.
+     * Consumed once by resolveNextDialogFromMessage to avoid double-executing actions.
+     */
+    private ?string $pendingNavigationTarget = null;
 
     public function __construct(
         private WhatsAppMessageService $messageService,
@@ -34,16 +27,13 @@ class ChatbotFlowExecutor
     ) {}
 
     // =========================================================================
-    // MAIN ENTRY POINTS
+    // MAIN ENTRY POINT
     // =========================================================================
 
-    /**
-     * Handle an inbound WhatsApp message.
-     * Called by ProcessChatbotMessage job.
-     */
     public function processMessage(Conversation $conversation, Message $message): void
     {
-        $this->conversation = $conversation;
+        $this->conversation           = $conversation;
+        $this->pendingNavigationTarget = null;
 
         try {
             $flow    = $conversation->flow;
@@ -58,44 +48,57 @@ class ChatbotFlowExecutor
                 return;
             }
 
-            // ── Late-selection intercept ──────────────────────────────────────
-            // WhatsApp users can scroll back up and tap a button or list item
-            // from an earlier point in the conversation. When this happens the
-            // inbound message is an interactive reply whose button/row ID does
-            // NOT belong to the dialog the conversation is currently waiting on.
-            //
-            // Strategy: if the message is interactive, search ALL dialogs in the
-            // flow for one that owns that selection ID. If found, treat it as a
-            // fresh selection from that dialog — abandon the current position,
-            // save the variable (if configured), and execute the target dialog.
+            if ($message->message_type === 'interactive') {
+                $selId = $message->content['response']['id'] ?? null;
+                if ($selId) {
+                    $ownerDialog = $this->findDialogOwningSelection($version, $selId);
+                    if ($ownerDialog) {
+                        $sysAction = $this->detectSystemAction($ownerDialog, $selId);
+                        if ($sysAction !== null) {
+                            Log::info('System action intercepted', [
+                                'conversation_id' => $conversation->id,
+                                'action'          => $sysAction,
+                                'owner_dialog_id' => $ownerDialog->id,
+                                'selection_id'    => $selId,
+                            ]);
+                            $this->executeSystemAction($sysAction, $ownerDialog, $version);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // ── 2. Late-selection intercept ───────────────────────────────────
             if ($message->message_type === 'interactive') {
                 $selectionId = $message->content['response']['id'] ?? null;
 
                 if ($selectionId) {
-                    $ownerDialog = $this->findDialogOwningSelection($version, $selectionId);
+                    $ownerDialog   = $this->findDialogOwningSelection($version, $selectionId);
                     $currentDialog = $this->getCurrentDialog($version, $conversation);
 
-                    // Only intercept if the selection belongs to a DIFFERENT dialog
-                    // than the one we're currently waiting on.
                     if ($ownerDialog && (!$currentDialog || $ownerDialog->id !== $currentDialog->id)) {
-                        Log::info('Late-selection intercept: user tapped a button/row from a previous dialog', [
-                            'conversation_id'  => $conversation->id,
+                        Log::info('Late-selection intercept', [
+                            'conversation_id'   => $conversation->id,
                             'current_dialog_id' => $currentDialog?->id,
-                            'owner_dialog_id'  => $ownerDialog->id,
+                            'owner_dialog_id'   => $ownerDialog->id,
                             'owner_dialog_kind' => $ownerDialog->kind,
-                            'selection_id'     => $selectionId,
+                            'selection_id'      => $selectionId,
                         ]);
 
-                        // Persist any saveVariable configured on this button/row
-                        $this->processUserInput($ownerDialog, $message);
-
-                        $variables  = $this->getVariables();
-                        $nextDialog = $this->resolveNextDialogFromMessage($version, $ownerDialog, $message, $variables);
+                        $actionsAlreadyRan = $this->processUserInput($ownerDialog, $message);
+                        $variables         = $this->getVariables();
+                        $nextDialog        = $this->resolveNextDialogFromMessage(
+                            $version,
+                            $ownerDialog,
+                            $message,
+                            $variables,
+                            $actionsAlreadyRan
+                        );
 
                         if ($nextDialog) {
                             $this->executeDialogFlow($nextDialog);
                         } else {
-                            Log::warning('Late-selection: no target dialog found for selection', [
+                            Log::warning('Late-selection: no target dialog found', [
                                 'conversation_id' => $conversation->id,
                                 'owner_dialog_id' => $ownerDialog->id,
                                 'selection_id'    => $selectionId,
@@ -106,7 +109,7 @@ class ChatbotFlowExecutor
                 }
             }
 
-            // ── Normal flow: process against current dialog position ──────────
+            // ── 3. Normal flow ────────────────────────────────────────────────
             $currentDialog = $this->getCurrentDialog($version, $conversation);
 
             if ($currentDialog) {
@@ -116,10 +119,15 @@ class ChatbotFlowExecutor
                     'dialog_kind'       => $currentDialog->kind,
                 ]);
 
-                $this->processUserInput($currentDialog, $message);
-
-                $variables  = $this->getVariables();
-                $nextDialog = $this->resolveNextDialogFromMessage($version, $currentDialog, $message, $variables);
+                $actionsAlreadyRan = $this->processUserInput($currentDialog, $message);
+                $variables         = $this->getVariables();
+                $nextDialog        = $this->resolveNextDialogFromMessage(
+                    $version,
+                    $currentDialog,
+                    $message,
+                    $variables,
+                    $actionsAlreadyRan
+                );
 
                 if ($nextDialog) {
                     $this->executeDialogFlow($nextDialog);
@@ -146,18 +154,128 @@ class ChatbotFlowExecutor
         }
     }
 
-    /**
-     * Search all dialogs in the flow version for the one that contains a button
-     * or list row with the given ID. Used for late-selection intercept.
-     *
-     * Returns the Dialog that owns the selection, or null if not found.
-     */
+    // =========================================================================
+    // SYSTEM NAVIGATION
+    // =========================================================================
+
+    private function detectSystemAction(Dialog $dialog, string $selectionId): ?string
+    {
+        foreach ($this->getActionsForSelection($dialog, $selectionId) as $action) {
+            $kind = $action['kind'] ?? $action['action_type'] ?? null;
+            if (in_array($kind, ['start_flow', 'go_home', 'go_back', 'talk_to_agent'], true)) {
+                return $kind;
+            }
+        }
+        return null;
+    }
+
+    private function executeSystemAction(string $kind, Dialog $sourceDialog, $version): void
+    {
+        match ($kind) {
+            'start_flow'    => $this->startFlow($this->conversation),
+            'go_home'       => $this->doGoHome($version),
+            'go_back'       => $this->doGoBack($version),
+            'talk_to_agent' => $this->doTalkToAgent($sourceDialog, $version),
+            default         => null,
+        };
+
+        $this->logAnalytics($sourceDialog, "system_action_{$kind}");
+    }
+
+    private function doGoHome($version): void
+    {
+        $home = $version->dialogs()->where('is_entry_point', true)->first();
+
+        if (!$home) {
+            Log::warning('go_home: no entry-point dialog found', [
+                'conversation_id' => $this->conversation->id,
+            ]);
+            return;
+        }
+
+        $this->getOrCreateContext()->update(['dialog_history' => []]);
+
+        Log::info('go_home: navigating to entry point', [
+            'conversation_id' => $this->conversation->id,
+            'home_dialog_id'  => $home->id,
+        ]);
+
+        $this->executeDialogFlow($home);
+    }
+
+    private function doGoBack($version): void
+    {
+        $ctx     = $this->getOrCreateContext();
+        $history = $ctx->dialog_history ?? [];
+
+        if (count($history) >= 2) {
+            array_pop($history);
+            $prevId = array_pop($history);
+            $ctx->update(['dialog_history' => $history]);
+
+            $prevDialog = $version->dialogs()->find((int) $prevId);
+            if ($prevDialog) {
+                Log::info('go_back: navigating to previous dialog', [
+                    'conversation_id' => $this->conversation->id,
+                    'prev_dialog_id'  => $prevDialog->id,
+                ]);
+                $this->executeDialogFlow($prevDialog);
+                return;
+            }
+        }
+
+        Log::info('go_back: history too shallow, falling back to home', [
+            'conversation_id' => $this->conversation->id,
+        ]);
+        $this->doGoHome($version);
+    }
+
+    private function doTalkToAgent(Dialog $sourceDialog, $version): void
+    {
+        $this->conversation->update([
+            'status'   => 'handed_off',
+            'metadata' => array_merge($this->conversation->metadata ?? [], [
+                'handoff_source_dialog' => $sourceDialog->id,
+                'handoff_reason'        => 'user_requested',
+                'handoff_at'            => now()->toISOString(),
+            ]),
+        ]);
+
+        $botConfig   = $this->conversation->flow?->bot?->configuration;
+        $agentDialog = null;
+
+        if ($botConfig && !empty($botConfig->agent_dialog_id)) {
+            $agentDialog = $version->dialogs()->find((int) $botConfig->agent_dialog_id);
+        }
+
+        if ($agentDialog) {
+            $this->executeDialog($agentDialog);
+        } else {
+            $this->messageService->sendTextMessage(
+                $this->conversation->whatsappAccount,
+                $this->conversation->whatsapp_user_phone,
+                'You are being connected to a live agent. Please wait…',
+                []
+            );
+        }
+
+        Log::info('talk_to_agent: handed off', [
+            'conversation_id'  => $this->conversation->id,
+            'source_dialog_id' => $sourceDialog->id,
+            'agent_dialog_id'  => $agentDialog?->id,
+        ]);
+    }
+
+    // =========================================================================
+    // DIALOG SEARCH
+    // =========================================================================
+
     private function findDialogOwningSelection($version, string $selectionId): ?Dialog
     {
-        $dialogs = $version->dialogs()->whereIn('kind', ['buttons', 'list'])->get();
+        $dialogs = $version->dialogs()->whereIn('kind', ['buttons', 'list', 'nav_buttons'])->get();
 
         foreach ($dialogs as $dialog) {
-            if ($dialog->kind === 'buttons') {
+            if (in_array($dialog->kind, ['buttons', 'nav_buttons'], true)) {
                 foreach ($dialog->config['buttons'] ?? [] as $btn) {
                     if (($btn['id'] ?? '') === $selectionId) {
                         return $dialog;
@@ -182,12 +300,10 @@ class ChatbotFlowExecutor
         return null;
     }
 
-    /**
-     * Execute a dialog and keep the flow moving.
-     * Called by ContinueChatbotFlow job (delayed resumption) and internally.
-     *
-     * Public so the job can call it directly.
-     */
+    // =========================================================================
+    // DIALOG FLOW EXECUTION
+    // =========================================================================
+
     public function executeDialogFlow(Dialog $dialog, ?Conversation $conversation = null): void
     {
         if ($conversation) {
@@ -204,7 +320,6 @@ class ChatbotFlowExecutor
                 'dialog_kind'     => $dialog->kind,
             ]);
 
-            // Send message / perform the dialog's primary action
             $result = $this->executeDialog($dialog);
 
             Log::info('Dialog execution result', [
@@ -214,7 +329,6 @@ class ChatbotFlowExecutor
             ]);
 
             if ($result['stop'] ?? false) {
-                // Interactive dialog (buttons/list) — wait for user reply
                 Log::info('Dialog waiting for user input', [
                     'conversation_id' => $this->conversation->id,
                     'dialog_id'       => $dialog->id,
@@ -223,12 +337,13 @@ class ChatbotFlowExecutor
             }
 
             if ($result['success'] ?? false) {
-                $variables = $this->getVariables();
+                $variables    = $this->getVariables();
+                $nextDialogId = $this->runConfigActions(
+                    $dialog,
+                    $this->getDialogActions($dialog),
+                    $variables
+                );
 
-                // Run any inline config actions (navigation, variable-set, etc.)
-                $nextDialogId = $this->runConfigActions($dialog, $dialog->config['actions'] ?? [], $variables);
-
-                // Fall back to direct config goTo
                 if (!$nextDialogId && !empty($dialog->config['goTo'])) {
                     $nextDialogId = $dialog->config['goTo'];
                 }
@@ -293,11 +408,20 @@ class ChatbotFlowExecutor
         $this->executeDialogFlow($startDialog);
     }
 
+    /**
+     * Resolve the next dialog to execute after the user has replied.
+     *
+     * @param bool $actionsAlreadyRan  True when processUserInput already ran this
+     *                                  dialog's DB actions (text-input dialogs with
+     *                                  variable actions). Prevents double-execution
+     *                                  and uses $pendingNavigationTarget instead.
+     */
     private function resolveNextDialogFromMessage(
         $version,
         Dialog  $currentDialog,
         Message $message,
-        array   $variables
+        array   $variables,
+        bool    $actionsAlreadyRan = false
     ): ?Dialog {
         $kind = $currentDialog->kind;
 
@@ -307,9 +431,9 @@ class ChatbotFlowExecutor
             default       => null,
         };
 
-        // ── Buttons ───────────────────────────────────────────────────────────
-        if ($kind === 'buttons' && $selectionId) {
-            // Look for a button-level goTo in config
+        // ── Buttons / nav_buttons ─────────────────────────────────────────────
+        if (in_array($kind, ['buttons', 'nav_buttons'], true) && $selectionId) {
+            // 1. Per-button direct goTo
             foreach ($currentDialog->config['buttons'] ?? [] as $btn) {
                 if (($btn['id'] ?? '') === $selectionId && !empty($btn['goTo'])) {
                     $dialog = $version->dialogs()->where('config->id', $btn['goTo'])->first();
@@ -317,10 +441,19 @@ class ChatbotFlowExecutor
                 }
             }
 
-            // Fall through to config-level actions
+            // 2. Per-button inline actions (embedded in config)
+            $selectionActions = $this->getActionsForSelection($currentDialog, $selectionId);
+            if (!empty($selectionActions)) {
+                $targetId = $this->runConfigActions($currentDialog, $selectionActions, $variables);
+                if ($targetId) {
+                    return $version->dialogs()->where('config->id', $targetId)->first();
+                }
+            }
+
+            // 3. Dialog-level DB actions
             $targetId = $this->runConfigActions(
                 $currentDialog,
-                $this->getActionsForSelection($currentDialog, $selectionId),
+                $this->getDialogActions($currentDialog),
                 $variables
             );
             if ($targetId) {
@@ -334,6 +467,7 @@ class ChatbotFlowExecutor
                 ?? $currentDialog->config['sections']
                 ?? [];
 
+            // 1. Per-row direct goTo
             foreach ($sections as $section) {
                 foreach ($section['rows'] ?? [] as $row) {
                     if (($row['id'] ?? '') === $selectionId && !empty($row['goTo'])) {
@@ -343,9 +477,19 @@ class ChatbotFlowExecutor
                 }
             }
 
+            // 2. Per-row inline actions
+            $selectionActions = $this->getActionsForSelection($currentDialog, $selectionId);
+            if (!empty($selectionActions)) {
+                $targetId = $this->runConfigActions($currentDialog, $selectionActions, $variables);
+                if ($targetId) {
+                    return $version->dialogs()->where('config->id', $targetId)->first();
+                }
+            }
+
+            // 3. Dialog-level DB actions
             $targetId = $this->runConfigActions(
                 $currentDialog,
-                $this->getActionsForSelection($currentDialog, $selectionId),
+                $this->getDialogActions($currentDialog),
                 $variables
             );
             if ($targetId) {
@@ -353,12 +497,26 @@ class ChatbotFlowExecutor
             }
         }
 
-        // ── Fallback: dialog-level config actions → direct goTo ───────────────
-        $targetId = $this->runConfigActions(
-            $currentDialog,
-            $currentDialog->config['actions'] ?? [],
-            $variables
-        );
+        // ── message / other kinds ─────────────────────────────────────────────
+        // If processUserInput already ran this dialog's actions (text-input dialog
+        // with variable action), use the navigation target it produced instead of
+        // re-running actions — which would overwrite the variable with stale input.
+        if ($actionsAlreadyRan) {
+            $targetId = $this->pendingNavigationTarget;
+            $this->pendingNavigationTarget = null; // consume once
+
+            Log::info('Using pending navigation target from processUserInput', [
+                'conversation_id' => $this->conversation->id,
+                'dialog_id'       => $currentDialog->id,
+                'target_id'       => $targetId,
+            ]);
+        } else {
+            $targetId = $this->runConfigActions(
+                $currentDialog,
+                $this->getDialogActions($currentDialog),
+                $variables
+            );
+        }
 
         if (!$targetId && !empty($currentDialog->config['goTo'])) {
             $targetId = $currentDialog->config['goTo'];
@@ -369,12 +527,9 @@ class ChatbotFlowExecutor
             : null;
     }
 
-    /**
-     * Get the action list for a specific button/row selection from the dialog config.
-     */
     private function getActionsForSelection(Dialog $dialog, string $selectionId): array
     {
-        if ($dialog->kind === 'buttons') {
+        if (in_array($dialog->kind, ['buttons', 'nav_buttons'], true)) {
             foreach ($dialog->config['buttons'] ?? [] as $btn) {
                 if (($btn['id'] ?? '') === $selectionId) {
                     return $btn['actions'] ?? [];
@@ -396,23 +551,73 @@ class ChatbotFlowExecutor
         return [];
     }
 
-    /**
-     * Run an array of action config arrays.
-     * Returns the first navigation UUID produced, or null.
-     */
     private function runConfigActions(Dialog $dialog, array $actions, array $variables): ?string
     {
         foreach ($actions as $action) {
             if (!is_array($action)) continue;
 
-            $target = $this->actionExecutor->execute(
-                $this->conversation,
-                $dialog,
-                $action,
-                $variables
-            );
+            $result = $this->executeSingleAction($dialog, $action, $variables);
+            $variables = $this->getVariables(); // re-fetch after every action
 
-            if ($target) return $target;
+            if ($result !== null && !str_starts_with((string) $result, '__system:')) {
+                return $result; // navigation found — stop chain
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Execute one action and then follow its 'then' chain recursively.
+     * Returns a navigation UUID if any action in the chain produces one, else null.
+     */
+    private function executeSingleAction(Dialog $dialog, array $action, array $variables): ?string
+    {
+        $target = $this->actionExecutor->execute(
+            $this->conversation,
+            $dialog,
+            $action,
+            $variables
+        );
+
+        $variables = $this->getVariables();
+
+        // If this action produced a navigation, return it immediately (don't follow then)
+        if ($target !== null && !str_starts_with((string) $target, '__system:')) {
+            return $target;
+        }
+
+        // Follow the 'then' chain — either from config or from DB then_action_id
+        $thenAction = $this->resolveThenAction($dialog, $action);
+
+        if ($thenAction !== null) {
+            return $this->executeSingleAction($dialog, $thenAction, $variables);
+        }
+
+        return $target; // null or system sentinel
+    }
+
+
+    private function resolveThenAction(Dialog $dialog, array $action): ?array
+    {
+        // Config-embedded 'then' (from frontend tree structure)
+        if (!empty($action['then']) && is_array($action['then'])) {
+            return $action['then'];
+        }
+
+        // DB then_action_id (set during syncActions)
+        $actionId = $action['_db_action_id'] ?? null;
+        if ($actionId) {
+            $thenAction = \App\Models\Action::find($actionId)?->thenAction;
+            if ($thenAction) {
+                $config = is_array($thenAction->config)
+                    ? $thenAction->config
+                    : (json_decode($thenAction->config, true) ?? []);
+                return array_merge($config, [
+                    'kind'           => $thenAction->action_type,
+                    '_db_action_id'  => $thenAction->then_action_id,
+                ]);
+            }
         }
 
         return null;
@@ -426,9 +631,9 @@ class ChatbotFlowExecutor
     {
         if ($dialog->flow_version_id !== $this->conversation->flow_version_id) {
             Log::error('Version mismatch executing dialog', [
-                'dialog_id'       => $dialog->id,
-                'dialog_version'  => $dialog->flow_version_id,
-                'conv_version'    => $this->conversation->flow_version_id,
+                'dialog_id'      => $dialog->id,
+                'dialog_version' => $dialog->flow_version_id,
+                'conv_version'   => $this->conversation->flow_version_id,
             ]);
             return ['success' => false, 'error' => 'Version mismatch'];
         }
@@ -442,19 +647,18 @@ class ChatbotFlowExecutor
         ]);
 
         return match ($kind) {
-            'trigger'  => ['success' => true,  'stop' => false],
-            'message'  => $this->executeMessageDialog($dialog),
-            'buttons'  => $this->executeButtonsDialog($dialog),
-            'list'     => $this->executeListDialog($dialog),
-            'media'    => $this->executeMediaDialog($dialog),
-            'location' => $this->executeLocationDialog($dialog),
-            'contact'  => $this->executeContactDialog($dialog),
-            'end'      => $this->executeEndDialog($dialog),
-            default    => ['success' => false, 'error' => "Unknown dialog kind: {$kind}"],
+            'trigger'     => ['success' => true, 'stop' => false],
+            'message'     => $this->executeMessageDialog($dialog),
+            'buttons'     => $this->executeButtonsDialog($dialog),
+            'list'        => $this->executeListDialog($dialog),
+            'media'       => $this->executeMediaDialog($dialog),
+            'location'    => $this->executeLocationDialog($dialog),
+            'contact'     => $this->executeContactDialog($dialog),
+            'end'         => $this->executeEndDialog($dialog),
+            'nav_buttons' => $this->executeNavButtonsDialog($dialog),
+            default       => ['success' => false, 'error' => "Unknown dialog kind: {$kind}"],
         };
     }
-
-    // ── Individual dialog senders ─────────────────────────────────────────────
 
     private function executeMessageDialog(Dialog $dialog): array
     {
@@ -471,8 +675,14 @@ class ChatbotFlowExecutor
         $this->stampDialog($dialog);
         $this->logAnalytics($dialog, 'dialog_entered');
 
-        // Stop and wait if collecting free-text input
-        $stop = !empty($dialog->config['inputVariable']) || !empty($dialog->input_variable);
+        // Stop and wait if the dialog has a variable DB action (collects user input)
+        $hasVariableAction = collect($this->getDialogActions($dialog))
+            ->contains(fn($a) => ($a['kind'] ?? $a['action_type'] ?? null) === 'variable');
+
+        $stop = !empty($dialog->config['inputVariable'])
+            || !empty($dialog->input_variable)
+            || $hasVariableAction;
+
         return ['success' => true, 'stop' => $stop];
     }
 
@@ -500,7 +710,7 @@ class ChatbotFlowExecutor
         $this->stampDialog($dialog);
         $this->logAnalytics($dialog, 'dialog_entered');
 
-        return ['success' => true, 'stop' => true]; // always wait for selection
+        return ['success' => true, 'stop' => true];
     }
 
     private function executeListDialog(Dialog $dialog): array
@@ -509,7 +719,7 @@ class ChatbotFlowExecutor
         $config     = $dialog->config;
 
         $header     = $this->variableResolver->resolve($config['listHeader'] ?? '', $variables);
-        $body       = $this->variableResolver->resolve($config['listBody']   ?? $config['text'] ?? '', $variables);
+        $body       = $this->variableResolver->resolve($config['listBody'] ?? $config['text'] ?? '', $variables);
         $footer     = $this->variableResolver->resolve($config['listFooter'] ?? '', $variables);
         $buttonText = $this->variableResolver->resolve(
             $config['action']['button'] ?? $config['buttonText'] ?? 'View Options',
@@ -546,7 +756,70 @@ class ChatbotFlowExecutor
         $this->stampDialog($dialog);
         $this->logAnalytics($dialog, 'dialog_entered');
 
-        return ['success' => true, 'stop' => true]; // always wait for selection
+        return ['success' => true, 'stop' => true];
+    }
+
+    private function executeNavButtonsDialog(Dialog $dialog): array
+    {
+        $config  = $dialog->config;
+        $buttons = [];
+
+        if (!empty($config['includeStartFlow'])) {
+            $buttons[] = [
+                'id'      => "sys_start_flow_{$dialog->id}",
+                'title'   => $config['labelStartFlow'] ?? 'Start Flow',
+                'actions' => [['kind' => 'start_flow']],
+            ];
+        }
+        if (!empty($config['includeGoHome'])) {
+            $buttons[] = [
+                'id'      => "sys_go_home_{$dialog->id}",
+                'title'   => $config['labelGoHome'] ?? 'Main Menu',
+                'actions' => [['kind' => 'go_home']],
+            ];
+        }
+        if (!empty($config['includeGoBack'])) {
+            $buttons[] = [
+                'id'      => "sys_go_back_{$dialog->id}",
+                'title'   => $config['labelGoBack'] ?? 'Go Back',
+                'actions' => [['kind' => 'go_back']],
+            ];
+        }
+        if (!empty($config['includeTalkToAgent'])) {
+            $buttons[] = [
+                'id'      => "sys_talk_agent_{$dialog->id}",
+                'title'   => $config['labelTalkToAgent'] ?? 'Talk to Agent',
+                'actions' => [['kind' => 'talk_to_agent']],
+            ];
+        }
+
+        if (empty($buttons)) {
+            return ['success' => true, 'stop' => false];
+        }
+
+        $buttons   = array_slice($buttons, 0, 3);
+        $variables = $this->getVariables();
+        $text      = $this->variableResolver->resolve(
+            $config['text'] ?? 'What would you like to do?',
+            $variables
+        );
+
+        $this->messageService->sendButtonMessage(
+            $this->conversation->whatsappAccount,
+            $this->conversation->whatsapp_user_phone,
+            $text,
+            array_map(fn($b) => ['id' => $b['id'], 'title' => $b['title']], $buttons),
+            null,
+            null,
+            $variables
+        );
+
+        $dialog->config = array_merge($config, ['buttons' => $buttons]);
+
+        $this->stampDialog($dialog);
+        $this->logAnalytics($dialog, 'dialog_entered');
+
+        return ['success' => true, 'stop' => true];
     }
 
     private function executeMediaDialog(Dialog $dialog): array
@@ -557,9 +830,6 @@ class ChatbotFlowExecutor
         $mimeType  = null;
         $url       = '';
 
-        // ── Branch 1: uploaded file → BotMediaFile record ────────────────────
-        // MediaNode sets mediaFileId when a file is uploaded. We use the DB record
-        // to get the exact URL and mime_type — no guessing needed.
         if (!empty($config['mediaFileId'])) {
             $mediaFile = \App\Models\BotMediaFile::find($config['mediaFileId']);
         }
@@ -567,28 +837,15 @@ class ChatbotFlowExecutor
         if ($mediaFile) {
             $url      = $mediaFile->url;
             $mimeType = $mediaFile->mime_type;
-
-            Log::info('Media dialog: using BotMediaFile record', [
-                'dialog_id'     => $dialog->id,
-                'media_file_id' => $mediaFile->id,
-                'url'           => $url,
-                'mime_type'     => $mimeType,
-            ]);
         } else {
-            // ── Branch 2: URL entered manually in the flow builder ────────────
             $url = $this->variableResolver->resolve($config['mediaUrl'] ?? '', $variables);
         }
 
         if (empty($url)) {
-            Log::warning('Media dialog has no URL', [
-                'dialog_id'     => $dialog->id,
-                'media_file_id' => $config['mediaFileId'] ?? null,
-                'media_url_raw' => $config['mediaUrl'] ?? null,
-            ]);
+            Log::warning('Media dialog has no URL', ['dialog_id' => $dialog->id]);
             return ['success' => false, 'error' => 'Media URL is required'];
         }
 
-        // Ensure fully-qualified URL (uploaded files already have APP_URL prefix)
         if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
             $url = rtrim(config('app.url'), '/') . '/' . ltrim($url, '/');
         }
@@ -598,64 +855,28 @@ class ChatbotFlowExecutor
             return ['success' => false, 'error' => 'Invalid media URL.'];
         }
 
-        // ── Decide: send as media file OR as a plain text link ───────────────
-        //
-        // WhatsApp media messages require an actual downloadable file. If the URL
-        // has no recognisable media file extension it is almost certainly a webpage
-        // (YouTube, Vimeo, a product page, etc.) — WhatsApp will accept the API
-        // call but then report status=failed when it tries to fetch the content.
-        //
-        // Rule:
-        //   - Uploaded file (mediaFileId set)   → always send as media (mime_type known)
-        //   - URL with a media file extension   → send as media
-        //   - URL with no / non-media extension → send as text message containing the link
-        //
-        $mediaType = $config['mediaType'] ?? 'image';
-        $caption   = $this->variableResolver->resolve($config['mediaCaption']  ?? '', $variables);
-        $filename  = $this->variableResolver->resolve($config['mediaFilename'] ?? '', $variables);
-        $stop      = !empty($config['waitForReply']);
-
+        $mediaType      = $config['mediaType'] ?? 'image';
+        $caption        = $this->variableResolver->resolve($config['mediaCaption']  ?? '', $variables);
+        $filename       = $this->variableResolver->resolve($config['mediaFilename'] ?? '', $variables);
+        $stop           = !empty($config['waitForReply']);
         $isUploadedFile = $mediaFile !== null;
 
         if (!$isUploadedFile && !$this->urlLooksLikeMediaFile($url)) {
-            // ── Link mode: send as a text message so it renders as a clickable link ──
-            Log::info('Media dialog: URL has no media extension — sending as text link', [
-                'dialog_id' => $dialog->id,
-                'url'       => $url,
-            ]);
-
-            // Compose: optional caption on first line, then the link
             $body = trim(($caption ? $caption . "\n" : '') . $url);
-
             $this->messageService->sendTextMessage(
                 $this->conversation->whatsappAccount,
                 $this->conversation->whatsapp_user_phone,
                 $body,
                 $variables
             );
-
             $this->stampDialog($dialog);
             $this->logAnalytics($dialog, 'dialog_entered');
             return ['success' => true, 'stop' => $stop];
         }
 
-        // ── Media mode: URL points to an actual file ──────────────────────────
-        //
-        // mime_type rules:
-        //   - Uploaded file  → exact mime_type from BotMediaFile record
-        //   - URL, document  → infer from extension (WA needs it for the viewer)
-        //   - URL, image/video/audio → null (WA infers from Content-Type header;
-        //     sending mime_type on these causes "(#100) Unexpected key mime_type")
         if (!$isUploadedFile && $mediaType === 'document') {
             $mimeType = $this->inferMimeType($url, $mediaType);
         }
-
-        Log::info('Media dialog: sending as media', [
-            'dialog_id'  => $dialog->id,
-            'media_type' => $mediaType,
-            'url'        => $url,
-            'mime_type'  => $mimeType,
-        ]);
 
         try {
             $this->messageService->sendMediaMessage(
@@ -668,41 +889,26 @@ class ChatbotFlowExecutor
                 $variables,
                 $mimeType
             );
-
             $this->stampDialog($dialog);
             $this->logAnalytics($dialog, 'dialog_entered');
             return ['success' => true, 'stop' => $stop];
         } catch (\Exception $e) {
-            Log::error('Failed to send media dialog', [
-                'dialog_id' => $dialog->id,
-                'url'       => $url,
-                'error'     => $e->getMessage(),
-            ]);
+            Log::error('Failed to send media dialog', ['dialog_id' => $dialog->id, 'error' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
 
-    /**
-     * Returns true if the URL path ends with a recognised media file extension.
-     * Used to decide whether to send a WhatsApp media message or a plain text link.
-     *
-     * Uploaded files always bypass this check (mime_type is known from the DB).
-     */
     private function urlLooksLikeMediaFile(string $url): bool
     {
         $path = parse_url($url, PHP_URL_PATH) ?? '';
         $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-
         if (empty($ext)) return false;
-
-        $mediaExtensions = [
-            // Images
+        return in_array($ext, [
             'jpg',
             'jpeg',
             'png',
             'webp',
             'gif',
-            // Video
             'mp4',
             '3gp',
             '3gpp',
@@ -710,7 +916,6 @@ class ChatbotFlowExecutor
             'avi',
             'mkv',
             'webm',
-            // Audio
             'mp3',
             'aac',
             'amr',
@@ -720,7 +925,6 @@ class ChatbotFlowExecutor
             'm4a',
             'wav',
             'flac',
-            // Documents
             'pdf',
             'doc',
             'docx',
@@ -731,11 +935,7 @@ class ChatbotFlowExecutor
             'txt',
             'zip',
             'csv',
-            // Sticker
-            'webp',
-        ];
-
-        return in_array($ext, $mediaExtensions, true);
+        ], true);
     }
 
     private function executeLocationDialog(Dialog $dialog): array
@@ -758,7 +958,6 @@ class ChatbotFlowExecutor
                 $this->variableResolver->resolve($config['locationName']    ?? '', $variables),
                 $this->variableResolver->resolve($config['locationAddress'] ?? '', $variables)
             );
-
             $this->stampDialog($dialog);
             $this->logAnalytics($dialog, 'dialog_entered');
             return ['success' => true, 'stop' => false];
@@ -783,7 +982,6 @@ class ChatbotFlowExecutor
                 $this->conversation->whatsapp_user_phone,
                 $this->resolveContactVariables($contactData, $variables)
             );
-
             $this->stampDialog($dialog);
             $this->logAnalytics($dialog, 'dialog_entered');
             return ['success' => true, 'stop' => false];
@@ -819,10 +1017,14 @@ class ChatbotFlowExecutor
     // =========================================================================
 
     /**
-     * Persist the user's reply into conversation variables.
-     * Uses ConversationVariable (key/value) — NOT $conversation->setVariable().
+     * Process inbound user input against the current dialog.
+     *
+     * Returns TRUE if this method ran the dialog's DB actions (i.e. it's a
+     * text-input message dialog with a variable action). The caller uses this
+     * flag to avoid re-running actions in resolveNextDialogFromMessage, and
+     * reads $pendingNavigationTarget for the resulting navigation UUID.
      */
-    private function processUserInput(Dialog $dialog, Message $message): void
+    private function processUserInput(Dialog $dialog, Message $message): bool
     {
         $config = $dialog->config ?? [];
         $kind   = $dialog->kind;
@@ -841,13 +1043,13 @@ class ChatbotFlowExecutor
             default       => null,
         };
 
-        // Free-text variable capture (message / input nodes)
+        // ── 1. Save inputVariable ─────────────────────────────────────────────
         $inputVar = $config['inputVariable'] ?? $dialog->input_variable ?? null;
         if ($inputVar && $inputValue !== '') {
             $this->setVariable($inputVar, $inputValue);
         }
 
-        // Button saveVariable — save the label of the tapped button
+        // ── 2. Save button/row-level saveVariable ─────────────────────────────
         if ($kind === 'buttons' && $selectionId) {
             foreach ($config['buttons'] ?? [] as $btn) {
                 if (($btn['id'] ?? '') === $selectionId && !empty($btn['saveVariable'])) {
@@ -856,7 +1058,6 @@ class ChatbotFlowExecutor
             }
         }
 
-        // List row saveVariable — save the title of the selected row
         if ($kind === 'list' && $selectionId) {
             $sections = $config['action']['sections'] ?? $config['sections'] ?? [];
             foreach ($sections as $section) {
@@ -868,19 +1069,78 @@ class ChatbotFlowExecutor
             }
         }
 
-        // Log completion for analytics
+        // ── 3. Save save_response DialogOption selection ──────────────────────
+        // When a DialogOption has save_response=true, persist the selection keyed
+        // by dialog ID so condition actions can check it via __dialog_{id}_selection.
+        // Overwrites any previous selection for this dialog — only the latest is kept.
+        if (in_array($kind, ['buttons', 'list'], true) && $selectionId) {
+            $selectedOption = $dialog->options()
+                ->where('external_id', $selectionId)
+                ->first();
+
+            if ($selectedOption && $selectedOption->save_response) {
+                $this->setVariable("__dialog_{$dialog->id}_selection", $selectionId);
+                $this->setVariable("__dialog_{$dialog->id}_selection_title", $selectedOption->title ?? '');
+
+                Log::info('Saved response stored', [
+                    'conversation_id' => $this->conversation->id,
+                    'dialog_id'       => $dialog->id,
+                    'selection_id'    => $selectionId,
+                    'selection_title' => $selectedOption->title ?? '',
+                ]);
+            }
+        }
+
+        // ── 4. Run dialog-level DB actions for text-input dialogs ─────────────
+        // Only fires for message dialogs waiting for a text reply (has a variable
+        // action). Button/list dialogs handle routing via resolveNextDialogFromMessage.
+        $dialogActions     = $this->getDialogActions($dialog);
+        $hasVariableAction = collect($dialogActions)
+            ->contains(fn($a) => ($a['kind'] ?? $a['action_type'] ?? null) === 'variable');
+        $isTextReply = $message->message_type === 'text';
+
+        if (
+            $isTextReply &&
+            ($inputVar || $hasVariableAction) &&
+            !in_array($kind, ['buttons', 'list', 'nav_buttons'], true)
+        ) {
+            // Re-fetch so the variable action sees the just-stored inputVar
+            $variables = $this->getVariables();
+
+            // Inject current input text into variable actions to guarantee THIS
+            // message's value is used (not whatever getLastUserInput() would return)
+            $actionsWithInput = array_map(function ($action) use ($inputValue) {
+                if (($action['kind'] ?? $action['action_type'] ?? null) === 'variable') {
+                    $action['_resolvedInput'] = $inputValue;
+                }
+                return $action;
+            }, $dialogActions);
+
+            // Run actions in order; capture any navigation target produced
+            $navigationTarget = $this->runConfigActions($dialog, $actionsWithInput, $variables);
+
+            if ($navigationTarget) {
+                $this->pendingNavigationTarget = $navigationTarget;
+
+                Log::info('Navigation target captured from processUserInput actions', [
+                    'conversation_id'  => $this->conversation->id,
+                    'dialog_id'        => $dialog->id,
+                    'navigation_target' => $navigationTarget,
+                ]);
+            }
+
+            $this->logAnalytics($dialog, 'dialog_completed');
+            return true; // tell caller actions already ran
+        }
+
         $this->logAnalytics($dialog, 'dialog_completed');
+        return false;
     }
 
     // =========================================================================
     // HELPERS
     // =========================================================================
 
-    /**
-     * Set a conversation variable.
-     * ConversationVariable stores key/value pairs linked to the conversation.
-     * $conversation->setVariable() does NOT exist on the model.
-     */
     public function setVariable(string $key, mixed $value): void
     {
         ConversationVariable::updateOrCreate(
@@ -892,52 +1152,86 @@ class ChatbotFlowExecutor
         );
     }
 
-    /**
-     * Get all conversation variables as key → value array.
-     */
     private function getVariables(): array
     {
         return $this->conversation->variables()->pluck('value', 'key')->toArray();
     }
 
-    /**
-     * Get the current dialog by reading ConversationContext.last_dialog_id.
-     * Message.flow_node_id does NOT exist in the new schema.
-     */
     private function getCurrentDialog($version, Conversation $conversation): ?Dialog
     {
         $context = $conversation->context;
-
         if (!$context || !$context->last_dialog_id) {
             return null;
         }
-
         return $version->dialogs()->find($context->last_dialog_id);
     }
 
-    /**
-     * Record that the conversation is currently at this dialog.
-     * Uses ConversationContext.last_dialog_id — Message has no dialog FK column.
-     *
-     * 'variables' is provided on every upsert so the initial INSERT satisfies
-     * the NOT NULL column. Run migration 000030 to make it nullable as well.
-     */
-    private function stampDialog(Dialog $dialog): void
+    private function getOrCreateContext(): ConversationContext
     {
-        ConversationContext::updateOrCreate(
+        return ConversationContext::firstOrCreate(
             ['conversation_id' => $this->conversation->id],
             [
-                'last_dialog_id' => $dialog->id,
+                'variables'      => [],
+                'dialog_history' => [],
                 'expires_at'     => now()->addHours(24),
-                'variables'      => $this->getVariables(),
             ]
         );
     }
 
-    /**
-     * Log an analytics event.
-     * AnalyticsEvent has NO node_id column — dialog reference goes in metadata JSON.
-     */
+    private function getDialogActions(Dialog $dialog): array
+    {
+        return $dialog->actions()
+            ->with(['conditions.dialogOption', 'thenAction'])
+            ->where('is_active', true)
+            ->orderBy('action_order')
+            ->get()
+            ->map(function ($a) {
+                $config = is_array($a->config) ? $a->config : (json_decode($a->config, true) ?? []);
+
+                if ($a->action_type === 'condition' && $a->conditions->isNotEmpty()) {
+                    $branchCount = count($config['branches'] ?? []);
+                    if ($branchCount <= 1) {
+                        $config['_db_conditions'] = $a->conditions->map(fn($c) => [
+                            'type'            => $c->condition_type,
+                            'operator'        => $c->condition_operator,
+                            'source'          => $c->variable_key ?? $c->option_id,
+                            'value'           => $c->condition_value,
+                            'option_id'       => $c->option_id,
+                            'response_field'  => $c->response_field,
+                            'response_path'   => $c->response_path,
+                            'condition_order' => $c->condition_order,
+                        ])->toArray();
+                    }
+                }
+
+                // Inject DB action ID so resolveThenAction can look up then_action_id
+                $config['_db_action_id'] = $a->then_action_id;
+
+                return array_merge($config, ['kind' => $a->action_type]);
+            })
+            ->toArray();
+    }
+    private function stampDialog(Dialog $dialog): void
+    {
+        $ctx     = $this->getOrCreateContext();
+        $history = $ctx->dialog_history ?? [];
+
+        if (empty($history) || end($history) !== (string) $dialog->id) {
+            $history[] = (string) $dialog->id;
+        }
+
+        if (count($history) > 50) {
+            $history = array_slice($history, -50);
+        }
+
+        $ctx->fill([
+            'last_dialog_id' => $dialog->id,
+            'dialog_history' => $history,
+            'expires_at'     => now()->addHours(24),
+            'variables'      => $this->getVariables(),
+        ])->save();
+    }
+
     private function logAnalytics(Dialog $dialog, string $eventType, array $extra = []): void
     {
         try {
@@ -952,7 +1246,6 @@ class ChatbotFlowExecutor
                 ], $extra),
             ]);
         } catch (\Exception $e) {
-            // Non-fatal — never let analytics break the conversation
             Log::warning('Analytics event logging failed', [
                 'event_type' => $eventType,
                 'dialog_id'  => $dialog->id,
@@ -986,36 +1279,21 @@ class ChatbotFlowExecutor
         return $contactData;
     }
 
-    /**
-     * Infer a MIME type from a URL's file extension.
-     *
-     * WhatsApp requires the media object to include a correct mime_type when
-     * it cannot be determined from the response headers (CDN URLs, short links,
-     * redirects, etc.). Without it, WhatsApp may accept the API call (200 OK)
-     * but then fail to deliver the message (status → "failed").
-     *
-     * Falls back to sensible defaults per mediaType when the extension is
-     * unrecognised or missing.
-     */
     private function inferMimeType(string $url, string $mediaType): string
     {
-        // Extract the path component and get the lowercase extension
         $path = parse_url($url, PHP_URL_PATH) ?? '';
         $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
         $map = [
-            // Images
             'jpg'  => 'image/jpeg',
             'jpeg' => 'image/jpeg',
             'png'  => 'image/png',
             'webp' => 'image/webp',
             'gif'  => 'image/gif',
-            // Video
             'mp4'  => 'video/mp4',
             '3gp'  => 'video/3gpp',
             '3gpp' => 'video/3gpp',
             'mov'  => 'video/quicktime',
-            // Audio
             'ogg'  => 'audio/ogg',
             'oga'  => 'audio/ogg',
             'opus' => 'audio/ogg; codecs=opus',
@@ -1023,7 +1301,6 @@ class ChatbotFlowExecutor
             'aac'  => 'audio/aac',
             'amr'  => 'audio/amr',
             'm4a'  => 'audio/mp4',
-            // Documents
             'pdf'  => 'application/pdf',
             'doc'  => 'application/msword',
             'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1038,7 +1315,6 @@ class ChatbotFlowExecutor
             return $map[$ext];
         }
 
-        // No extension in URL — fall back to the most common type for this category
         return match ($mediaType) {
             'video'    => 'video/mp4',
             'audio'    => 'audio/mpeg',

@@ -22,40 +22,81 @@
       <!-- Field Content -->
       <editor-content :editor="editor" class="field-content" />
 
-      <!-- Variable Picker -->
-      <div v-if="editor && availableVariables?.length" class="variable-picker" @click.stop>
-        <v-menu v-model="variableMenu" :close-on-content-click="false">
-          <template #activator="{ props }">
-            <v-btn v-bind="props" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
-              title="Insert Variable">
-              <v-icon>$xml</v-icon>
-            </v-btn>
-          </template>
+      <!-- Pickers row — positioned at bottom-right like original variable picker -->
+      <div class="pickers-row" @click.stop>
 
-          <v-card min-width="250" max-width="300">
-            <v-card-text class="pa-2">
-              <v-text-field v-model="variableSearch" placeholder="Search variables..." density="compact"
-                variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
+        <!-- Variable Picker -->
+        <div v-if="editor && availableVariables?.length">
+          <v-menu v-model="variableMenu" :close-on-content-click="false">
+            <template #activator="{ props: menuProps }">
+              <v-btn v-bind="menuProps" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
+                title="Insert Variable">
+                <v-icon>$xml</v-icon>
+              </v-btn>
+            </template>
 
-              <v-list density="compact" style="max-height: 250px; overflow-y: auto">
-                <v-list-item v-for="variable in filteredVariables" :key="variable" @click="insertVariable(variable)"
-                  class="cursor-pointer">
-                  <v-list-item-title>
-                    <v-chip size="small" color="primary" variant="tonal">
-                      {{ formatVariable(variable) }}
-                    </v-chip>
-                  </v-list-item-title>
-                </v-list-item>
+            <v-card min-width="250" max-width="300">
+              <v-card-text class="pa-2">
+                <v-text-field v-model="variableSearch" placeholder="Search variables..." density="compact"
+                  variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
 
-                <v-list-item v-if="filteredVariables.length === 0">
-                  <v-list-item-title class="text-grey">
-                    No variables found
-                  </v-list-item-title>
-                </v-list-item>
-              </v-list>
-            </v-card-text>
-          </v-card>
-        </v-menu>
+                <v-list density="compact" style="max-height: 250px; overflow-y: auto">
+                  <v-list-item v-for="variable in filteredVariables" :key="variable" class="cursor-pointer"
+                    @click="insertVariable(variable)">
+                    <v-list-item-title>
+                      <v-chip size="small" color="primary" variant="tonal">
+                        ${{ variable }}
+                      </v-chip>
+                    </v-list-item-title>
+                  </v-list-item>
+
+                  <v-list-item v-if="filteredVariables.length === 0">
+                    <v-list-item-title class="text-grey">
+                      No variables found
+                    </v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-card-text>
+            </v-card>
+          </v-menu>
+        </div>
+
+        <!-- Function Picker -->
+        <div v-if="editor && availableFunctions?.length">
+          <v-menu v-model="functionMenu" :close-on-content-click="false">
+            <template #activator="{ props: menuProps }">
+              <v-btn v-bind="menuProps" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
+                title="Insert Function">
+                <v-icon>$function</v-icon>
+              </v-btn>
+            </template>
+
+            <v-card min-width="250" max-width="300">
+              <v-card-text class="pa-2">
+                <v-text-field v-model="functionSearch" placeholder="Search functions..." density="compact"
+                  variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
+
+                <v-list density="compact" style="max-height: 250px; overflow-y: auto">
+                  <v-list-item v-for="fn in filteredFunctions" :key="fn" class="cursor-pointer"
+                    @click="insertFunction(fn)">
+                    <v-list-item-title>
+                      <v-chip size="small" color="secondary" variant="tonal">
+                        f(x){{ fn }}
+                      </v-chip>
+                    </v-list-item-title>
+                  </v-list-item>
+
+                  <v-list-item v-if="filteredFunctions.length === 0">
+                    <v-list-item-title class="text-grey">
+                      No functions found
+                    </v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-card-text>
+            </v-card>
+          </v-menu>
+        </div>
+
       </div>
     </div>
 
@@ -107,6 +148,7 @@ const props = withDefaults(
     hint?: string;
     errorMessages?: string | string[];
     availableVariables?: string[];
+    availableFunctions?: string[];
     disabled?: boolean;
     hideDetails?: boolean;
     maxLength?: number;
@@ -142,25 +184,30 @@ const FIELD_LIMITS = {
   description: 72,
 } as const;
 
-// State
+// ── State ──────────────────────────────────────────────────────────────────
 const fieldContainer = ref<HTMLElement>();
 const editor = ref<Editor | null>(null);
 const isFocused = ref(false);
 const hasContent = ref(false);
 const variableMenu = ref(false);
 const variableSearch = ref("");
+const functionMenu = ref(false);
+const functionSearch = ref("");
 const characterCount = ref(0);
 
-// Computed
-const formatVariable = (variable: string) => `{{${variable}}}`;
-
+// ── Computed ───────────────────────────────────────────────────────────────
 const filteredVariables = computed(() => {
   if (!props.availableVariables) return [];
   const query = variableSearch.value.toLowerCase().trim();
   if (!query) return props.availableVariables;
-  return props.availableVariables.filter((v) =>
-    v.toLowerCase().includes(query),
-  );
+  return props.availableVariables.filter((v) => v.toLowerCase().includes(query));
+});
+
+const filteredFunctions = computed(() => {
+  if (!props.availableFunctions) return [];
+  const query = functionSearch.value.toLowerCase().trim();
+  if (!query) return props.availableFunctions;
+  return props.availableFunctions.filter((f) => f.toLowerCase().includes(query));
 });
 
 const effectiveMaxLength = computed(() => {
@@ -168,40 +215,33 @@ const effectiveMaxLength = computed(() => {
   return FIELD_LIMITS[props.fieldType] || 255;
 });
 
-const isOverLimit = computed(() => {
-  return characterCount.value > effectiveMaxLength.value;
-});
+const isOverLimit = computed(() => characterCount.value > effectiveMaxLength.value);
+const showCharacterCount = computed(() => !props.hideDetails && effectiveMaxLength.value > 0);
 
-const showCharacterCount = computed(() => {
-  return !props.hideDetails && effectiveMaxLength.value > 0;
-});
+// ── hasDocumentContent ─────────────────────────────────────────────────────
+// Recognises variable nodes, function nodes, and non-empty text so the
+// floating label stays raised whenever there is any real content.
+function hasDocumentContent(ed: Editor): boolean {
+  const doc = ed.state.doc;
 
-// Helper function to check if document has actual content
-function hasDocumentContent(editor: Editor): boolean {
-  const doc = editor.state.doc;
-
-  // Check if there's any content beyond just empty paragraphs
   for (let i = 0; i < doc.childCount; i++) {
-    const node = doc.child(i);
+    const block = doc.child(i);
 
-    // If it's not a paragraph, it has content
-    if (node.type.name !== 'paragraph') return true;
+    if (block.type.name !== "paragraph") return true;
 
-    // If it's a paragraph with content (including variable nodes)
-    if (node.content && node.content.childCount > 0) {
-      // Check if any child is not just empty text
-      for (let j = 0; j < node.content.childCount; j++) {
-        const child = node.content.child(j);
-        if (child.type.name === 'variable') return true;
-        if (child.text && child.text.trim().length > 0) return true;
-      }
+    for (let j = 0; j < block.content.childCount; j++) {
+      const child = block.content.child(j);
+      if (child.type.name === "variable") return true;
+      if (child.type.name === "function") return true;
+      if (child.text && child.text.trim().length > 0) return true;
     }
   }
 
   return false;
 }
 
-// Custom Variable Node Extension
+// ── TipTap nodes ───────────────────────────────────────────────────────────
+
 const VariableNode = Node.create({
   name: "variable",
   group: "inline",
@@ -209,19 +249,11 @@ const VariableNode = Node.create({
   atom: true,
 
   addAttributes() {
-    return {
-      name: {
-        default: "",
-      },
-    };
+    return { name: { default: "" } };
   },
 
   parseHTML() {
-    return [
-      {
-        tag: "span[data-variable]",
-      },
-    ];
+    return [{ tag: "span[data-variable]" }];
   },
 
   renderHTML({ node }) {
@@ -232,7 +264,7 @@ const VariableNode = Node.create({
         class: "variable-badge",
         contenteditable: "false",
       },
-      `{{${node.attrs.name}}}`,
+      `$${node.attrs.name}`,
     ];
   },
 
@@ -240,28 +272,22 @@ const VariableNode = Node.create({
     return {
       Backspace: () =>
         this.editor.commands.command(({ tr, state }) => {
-          const { selection } = state;
-          const { empty, $from } = selection;
-
+          const { empty, $from } = state.selection;
           if (!empty) return false;
-
-          const node = $from.nodeBefore;
-          if (node && node.type.name === "variable") {
-            tr.delete($from.pos - node.nodeSize, $from.pos);
+          const n = $from.nodeBefore;
+          if (n?.type.name === "variable") {
+            tr.delete($from.pos - n.nodeSize, $from.pos);
             return true;
           }
           return false;
         }),
       Delete: () =>
         this.editor.commands.command(({ tr, state }) => {
-          const { selection } = state;
-          const { empty, $from } = selection;
-
+          const { empty, $from } = state.selection;
           if (!empty) return false;
-
-          const node = $from.nodeAfter;
-          if (node && node.type.name === "variable") {
-            tr.delete($from.pos, $from.pos + node.nodeSize);
+          const n = $from.nodeAfter;
+          if (n?.type.name === "variable") {
+            tr.delete($from.pos, $from.pos + n.nodeSize);
             return true;
           }
           return false;
@@ -270,87 +296,128 @@ const VariableNode = Node.create({
   },
 });
 
-// Parse value to editor content
-function parseValue(value: string | null | undefined): any {
-  if (!value) {
+const FunctionNode = Node.create({
+  name: "function",
+  group: "inline",
+  inline: true,
+  atom: true,
+
+  addAttributes() {
+    return { name: { default: "" } };
+  },
+
+  parseHTML() {
+    return [{ tag: "span[data-function]" }];
+  },
+
+  renderHTML({ node }) {
+    return [
+      "span",
+      {
+        "data-function": node.attrs.name,
+        class: "function-badge",
+        contenteditable: "false",
+      },
+      `f(x)${node.attrs.name}`,
+    ];
+  },
+
+  addKeyboardShortcuts() {
     return {
-      type: "doc",
-      content: [{ type: "paragraph", content: [] }],
+      Backspace: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeBefore;
+          if (n?.type.name === "function") {
+            tr.delete($from.pos - n.nodeSize, $from.pos);
+            return true;
+          }
+          return false;
+        }),
+      Delete: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeAfter;
+          if (n?.type.name === "function") {
+            tr.delete($from.pos, $from.pos + n.nodeSize);
+            return true;
+          }
+          return false;
+        }),
     };
-  }
+  },
+});
 
-  const lines = value.split(/\r?\n/);
-
-  const content = lines.map((line) => {
-    const nodes: any[] = [];
-    let currentPos = 0;
-
-    // Match variables: {{variable_name}}
-    const variableRegex = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
-    const matches = Array.from(line.matchAll(variableRegex));
-
-    if (matches.length === 0 && line.length === 0) {
-      return { type: "paragraph", content: [] };
-    }
-
-    matches.forEach((match) => {
-      const [fullMatch, varName] = match;
-      const matchPos = match.index!;
-
-      // Add text before variable
-      if (matchPos > currentPos) {
-        const textBefore = line.slice(currentPos, matchPos);
-        nodes.push({ type: "text", text: textBefore });
-      }
-
-      // Add variable node
-      nodes.push({
-        type: "variable",
-        attrs: { name: varName },
-      });
-
-      currentPos = matchPos + fullMatch.length;
-    });
-
-    // Add remaining text
-    if (currentPos < line.length) {
-      const textAfter = line.slice(currentPos);
-      nodes.push({ type: "text", text: textAfter });
-    }
-
-    return {
-      type: "paragraph",
-      content: nodes,
-    };
-  });
-
-  return {
-    type: "doc",
-    content,
-  };
-}
-
-// Serialize editor content
-function serializeEditorState(editor: Editor): string {
-  const json = editor.getJSON();
-
-  return (json.content || [])
+// ── Serialise ──────────────────────────────────────────────────────────────
+// variable node → $varName
+// function node → f(x) funcName
+function serializeEditorState(ed: Editor): string {
+  return (ed.getJSON().content ?? [])
     .map((block: any) => {
-      if (!block || !block.content || block.content.length === 0) return "";
-
+      if (!block?.content?.length) return "";
       return block.content
         .map((node: any) => {
-          if (node.type === "variable") {
-            return `{{${node.attrs.name}}}`;
-          }
-          return node.text || "";
+          if (node.type === "variable") return `$${node.attrs.name}`;
+          if (node.type === "function") return `f(x)${node.attrs.name}`;
+          return node.text ?? "";
         })
         .join("");
     })
     .join("\n");
 }
 
-// Editor setup
+// ── Parse ──────────────────────────────────────────────────────────────────
+// Handles both $varName and f(x) funcName tokens in a single-line value.
+function parseValue(value: string | null | undefined): any {
+  if (!value) {
+    return { type: "doc", content: [{ type: "paragraph", content: [] }] };
+  }
+
+  const lines = value.split(/\r?\n/);
+
+  const content = lines.map((line) => {
+    if (!line.length) return { type: "paragraph", content: [] };
+
+    // Match $varName OR f(x) funcName
+    const tokenRe = /\$([a-zA-Z_][a-zA-Z0-9_]*)|f\(x\)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+    const matches = Array.from(line.matchAll(tokenRe));
+
+    if (!matches.length) {
+      return { type: "paragraph", content: [{ type: "text", text: line }] };
+    }
+
+    const nodes: any[] = [];
+    let pos = 0;
+
+    matches.forEach((m) => {
+      if (m.index! > pos) {
+        nodes.push({ type: "text", text: line.slice(pos, m.index) });
+      }
+
+      if (m[1] !== undefined) {
+        // $varName
+        nodes.push({ type: "variable", attrs: { name: m[1] } });
+      } else {
+        // f(x) funcName
+        nodes.push({ type: "function", attrs: { name: m[2] } });
+      }
+
+      pos = m.index! + m[0].length;
+    });
+
+    if (pos < line.length) {
+      nodes.push({ type: "text", text: line.slice(pos) });
+    }
+
+    return { type: "paragraph", content: nodes };
+  });
+
+  return { type: "doc", content };
+}
+
+// ── Editor setup ───────────────────────────────────────────────────────────
 onMounted(() => {
   editor.value = new Editor({
     content: parseValue(props.modelValue),
@@ -362,102 +429,74 @@ onMounted(() => {
         code: true,
         hardBreak: false,
         paragraph: {
-          HTMLAttributes: {
-            class: "field-paragraph",
-          },
+          HTMLAttributes: { class: "field-paragraph" },
         },
       }),
       VariableNode,
+      FunctionNode,
     ],
-    onUpdate: ({ editor }) => {
-      const plainText = editor.state.doc.textContent;
-      const newCharCount = plainText.length;
+    onUpdate: ({ editor: ed }) => {
+      const newCount = ed.state.doc.textContent.length;
 
-      // Check if we're over the limit
-      if (newCharCount <= effectiveMaxLength.value) {
-        const content = serializeEditorState(editor);
-        emit("update:modelValue", content);
-        characterCount.value = newCharCount;
+      if (newCount <= effectiveMaxLength.value) {
+        emit("update:modelValue", serializeEditorState(ed));
+        characterCount.value = newCount;
       } else {
-        // If over limit, revert to previous state
-        editor.commands.setContent(parseValue(props.modelValue));
+        ed.commands.setContent(parseValue(props.modelValue));
       }
 
-      hasContent.value = hasDocumentContent(editor);
+      hasContent.value = hasDocumentContent(ed);
     },
-    onFocus: () => {
-      isFocused.value = true;
-      emit("focus");
-    },
-    onBlur: () => {
-      isFocused.value = false;
-      emit("blur");
-    },
+    onFocus: () => { isFocused.value = true; emit("focus"); },
+    onBlur: () => { isFocused.value = false; emit("blur"); },
     editorProps: {
-      attributes: {
-        class: "prose prose-sm max-w-none focus:outline-none",
-      },
+      attributes: { class: "prose prose-sm max-w-none focus:outline-none" },
     },
     editable: !props.disabled,
   });
 
-  // Set initial state
   if (editor.value) {
     hasContent.value = hasDocumentContent(editor.value);
     characterCount.value = editor.value.state.doc.textContent.length;
   }
 });
 
-// Watch disabled prop
-watch(
-  () => props.disabled,
-  (disabled) => {
-    editor.value?.setEditable(!disabled);
-  },
-);
+// ── Watchers ───────────────────────────────────────────────────────────────
+watch(() => props.disabled, (d) => editor.value?.setEditable(!d));
 
-// Watch for external changes
 watch(
   () => props.modelValue,
-  (newValue) => {
-    if (editor.value) {
-      const currentContent = serializeEditorState(editor.value);
-      if (newValue !== currentContent) {
-        editor.value.commands.setContent(parseValue(newValue));
-        hasContent.value = hasDocumentContent(editor.value);
-        characterCount.value = editor.value.state.doc.textContent.length;
-      }
+  (newVal) => {
+    if (!editor.value) return;
+    const current = serializeEditorState(editor.value);
+    if (newVal !== current) {
+      editor.value.commands.setContent(parseValue(newVal));
+      hasContent.value = hasDocumentContent(editor.value);
+      characterCount.value = editor.value.state.doc.textContent.length;
     }
   },
 );
 
-// Methods
+onBeforeUnmount(() => editor.value?.destroy());
+
+// ── Methods ────────────────────────────────────────────────────────────────
 const focusEditor = () => {
-  if (!props.disabled && !isOverLimit.value) {
-    editor.value?.commands.focus();
-  }
+  if (!props.disabled && !isOverLimit.value) editor.value?.commands.focus();
 };
 
 const insertVariable = (variable: string) => {
-  if (!isOverLimit.value) {
-    editor.value
-      ?.chain()
-      .focus()
-      .insertContent({
-        type: "variable",
-        attrs: { name: variable },
-      })
-      .run();
-
-    variableMenu.value = false;
-    variableSearch.value = "";
-  }
+  if (isOverLimit.value) return;
+  editor.value?.chain().focus().insertContent({ type: "variable", attrs: { name: variable } }).run();
+  variableMenu.value = false;
+  variableSearch.value = "";
 };
 
-// Cleanup
-onBeforeUnmount(() => {
-  editor.value?.destroy();
-});
+const insertFunction = (fn: string) => {
+  if (isOverLimit.value) return;
+  editor.value?.chain().focus().insertContent({ type: "function", attrs: { name: fn } }).run();
+  functionMenu.value = false;
+  functionSearch.value = "";
+};
 </script>
 
 <style scoped>
@@ -467,11 +506,11 @@ onBeforeUnmount(() => {
 
 .field-container {
   position: relative;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgb(var(--v-theme-inputBorder));
   border-radius: 9px;
+  /* right padding reserves space for both picker buttons */
   padding-left: 12px;
-  padding-right: 32px;
-  border-color: rgb(var(--v-theme-inputBorder));
+  padding-right: 72px;
   min-height: max(var(--v-input-control-height, 56px),
       1.5rem + var(--v-field-input-padding-top) + var(--v-field-input-padding-bottom));
   transition: border-color 0.2s ease;
@@ -480,7 +519,6 @@ onBeforeUnmount(() => {
 
 .field-container.is-focused {
   border-color: rgb(var(--v-theme-inputBorder));
-  
 }
 
 .field-container.has-error {
@@ -493,6 +531,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+/* Floating label — identical to original */
 .field-label {
   position: absolute;
   top: 50%;
@@ -519,6 +558,7 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-error));
 }
 
+/* Editor area — same as original */
 .field-content {
   width: 100%;
   min-height: 24px;
@@ -526,10 +566,14 @@ onBeforeUnmount(() => {
   margin-bottom: 6px;
 }
 
-.variable-picker {
+/* Both pickers sit together at bottom-right */
+.pickers-row {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
   z-index: 5;
 }
 
@@ -537,8 +581,9 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+/* ── Badges ─────────────────────────────────────────────────────────────── */
 :deep(.variable-badge) {
-  background-color: rgb(var(--v-theme-primary), 0.1);
+  background-color: rgba(var(--v-theme-primary), 0.1);
   border: 1px solid rgb(var(--v-theme-primary));
   border-radius: 4px;
   padding: 2px 8px;
@@ -551,6 +596,21 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
+:deep(.function-badge) {
+  background-color: rgba(var(--v-theme-secondary), 0.1);
+  border: 1px solid rgb(var(--v-theme-secondary));
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin: 0 2px;
+  display: inline-block;
+  color: rgb(var(--v-theme-secondary));
+  font-weight: 600;
+  font-size: 0.9em;
+  cursor: default;
+  user-select: none;
+}
+
+/* ── ProseMirror ─────────────────────────────────────────────────────────── */
 :deep(.ProseMirror) {
   min-height: 24px;
   outline: none;
@@ -574,7 +634,7 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
-/* Dark mode support */
+/* Dark mode support — unchanged from original */
 :deep(.dark) .field-container {
   background: #1e1e1e;
   border-color: #404040;

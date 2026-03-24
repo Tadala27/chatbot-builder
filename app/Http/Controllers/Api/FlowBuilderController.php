@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Bot;
+use App\Models\BuiltInFunction;
+use App\Models\CustomFunction;
 use App\Models\CustomVariable;
 use App\Models\Dialog;
 use App\Models\Flow;
@@ -143,9 +145,7 @@ class FlowBuilderController extends Controller
         return response()->json(['message' => 'Auto-saved.', 'saved_at' => now()->toIso8601String()]);
     }
 
-    // =========================================================================
-    // POST /api/bots/{bot}/flows/{flow}/builder/publish
-    // =========================================================================
+
     public function publish(Bot $bot, Flow $flow): JsonResponse
     {
         $this->authorizeFlow($bot, $flow);
@@ -164,27 +164,32 @@ class FlowBuilderController extends Controller
         }
 
         DB::transaction(function () use ($bot, $flow, $version) {
-            // Archive all OTHER currently-published flows for this bot in bulk
+
             $otherPublishedIds = Flow::where('bot_id', $bot->id)
                 ->where('status', 'published')
                 ->where('id', '!=', $flow->id)
-                ->pluck('current_published_version_id', 'id'); // [flow_id => version_id]
+                ->pluck('current_published_version_id', 'id');
 
             if ($otherPublishedIds->isNotEmpty()) {
                 Flow::whereIn('id', $otherPublishedIds->keys())
                     ->update(['status' => 'archived', 'is_active' => false]);
 
                 FlowVersion::whereIn('id', $otherPublishedIds->values()->filter())
-                    ->update(['status' => 'archived']);
+                    ->update(['status' => 'locked']);
             }
 
-            // Publish the draft version
+            FlowVersion::where('flow_id', $flow->id)
+                ->where('id', '!=', $version->id)
+                ->where('status', 'published')
+                ->update(['status' => 'locked']);
+
+            // 3. Publish new version
             $version->update([
                 'status'       => 'published',
                 'published_at' => now(),
             ]);
 
-            // Mark the flow as published
+            // 4. Update flow
             $flow->update([
                 'status'                       => 'published',
                 'current_published_version_id' => $version->id,
@@ -198,9 +203,6 @@ class FlowBuilderController extends Controller
             'flow'    => $flow->fresh(['currentPublishedVersion']),
         ]);
     }
-    // =========================================================================
-    // GET /api/bots/{bot}/flows/{flow}/builder/versions
-    // =========================================================================
 
     public function getVersions(Bot $bot, Flow $flow): JsonResponse
     {
@@ -222,10 +224,6 @@ class FlowBuilderController extends Controller
         return response()->json(['versions' => $versions]);
     }
 
-    // =========================================================================
-    // GET /api/bots/{bot}/flows/{flow}/builder/versions/{version}
-    // =========================================================================
-
     public function getVersion(Bot $bot, Flow $flow, int $versionId): JsonResponse
     {
         $this->authorizeFlow($bot, $flow);
@@ -244,10 +242,6 @@ class FlowBuilderController extends Controller
         ]);
     }
 
-    // =========================================================================
-    // POST /api/bots/{bot}/flows/{flow}/builder/versions
-    // Branch a new draft from an existing version.
-    // =========================================================================
 
     public function createVersion(Request $request, Bot $bot, Flow $flow): JsonResponse
     {
@@ -323,10 +317,6 @@ class FlowBuilderController extends Controller
         return response()->json(['message' => 'Version created.', 'version' => $newVersion], 201);
     }
 
-    // =========================================================================
-    // GET /api/bots/{bot}/flows/{flow}/builder/variables
-    // Returns bot-scoped custom variables + system variables
-    // =========================================================================
 
     public function getVariables(Bot $bot, Flow $flow): JsonResponse
     {
@@ -338,14 +328,59 @@ class FlowBuilderController extends Controller
             ->map(fn($v) => array_merge($v->toArray(), ['is_system' => false]));
 
         $system = collect([
-            ['id' => null, 'name' => 'phone_number', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'user_name',    'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'current_date', 'data_type' => 'date',   'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'current_time', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'phone_number', 'key' => 'phoneNumber', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'user_name', 'key' => 'userName',    'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'current_date', 'key' => 'currentDate', 'data_type' => 'date',   'is_sensitive' => false, 'is_system' => true],
+            ['id' => null, 'name' => 'current_time', 'key' => 'currentTime', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
         ]);
 
         return response()->json([
             'variables' => $custom->concat($system)->values(),
+        ]);
+    }
+
+    public function getFunctions(Bot $bot, Flow $flow): JsonResponse
+    {
+        $this->authorizeFlow($bot, $flow);
+
+        // Get all custom functions for this bot
+        $customFunctions = CustomFunction::where('bot_id', $bot->id)
+            ->orderBy('name')
+            ->get()
+            ->map(function ($f) {
+                return [
+                    'id' => $f->id,
+                    'name' => $f->name,
+                    'slug' => $f->slug,
+                    'description' => $f->description,
+                    'function_type' => $f->function_type,
+                    'source' => 'custom', // Add source indicator
+                ];
+            });
+
+        // Get all built-in functions
+        $builtInFunctions = BuiltInFunction::where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->map(function ($f) {
+                return [
+                    'id' => $f->id,
+                    'name' => $f->name,
+                    'slug' => $f->name,
+                    'description' => $f->description,
+                    'function_type' => 'built_in',
+                    'source' => 'built_in', // Add source indicator
+                    'category' => $f->category ?? null,
+                    'syntax' => $f->syntax ?? null,
+                    'examples' => $f->examples ?? null,
+                ];
+            });
+
+        // Combine both collections into one array
+        $allFunctions = $customFunctions->concat($builtInFunctions)->values();
+
+        return response()->json([
+            'functions' => $allFunctions,
         ]);
     }
 
@@ -418,27 +453,43 @@ class FlowBuilderController extends Controller
 
     private function syncActions(Dialog $dialog, array $actions): void
     {
-        $keepIds = [];
-
+        $keepIds    = [];
+        $createdMap = [];
         foreach ($actions as $index => $act) {
-            $existing = $dialog->actions()
-                ->where('action_order', $index)
-                ->first();
+            $actionType  = $act['action_type'] ?? $act['kind'] ?? 'navigation';
+            $storedConfig = collect($act['config'] ?? $act)
+                ->except(['_resolvedInput', '_db_conditions', 'then'])
+                ->toArray();
+
+            $existing = $dialog->actions()->where('action_order', $index)->first();
 
             $data = [
-                'action_type'  => $act['action_type'],
+                'action_type'  => $actionType,
                 'action_order' => $index,
-                'config'       => $act['config'] ?? [],
+                'config'       => $storedConfig,
                 'is_active'    => $act['is_active'] ?? true,
+                'then_action_id' => null,
             ];
 
-            if ($existing) {
-                $existing->update($data);
-                $keepIds[] = $existing->id;
-            } else {
-                $created   = $dialog->actions()->create($data);
-                $keepIds[] = $created->id;
+            $action = $existing
+                ? tap($existing, fn($a) => $a->update($data))
+                : $dialog->actions()->create($data);
+
+            $keepIds[]              = $action->id;
+            $createdMap[$index]     = $action;
+
+            if ($actionType === 'condition') {
+                $this->syncActionConditions($action, $storedConfig);
             }
+        }
+
+        $orders = array_keys($createdMap);
+        sort($orders);
+
+        foreach ($orders as $i => $order) {
+            $nextOrder  = $orders[$i + 1] ?? null;
+            $thenId     = $nextOrder !== null ? $createdMap[$nextOrder]->id : null;
+            $createdMap[$order]->update(['then_action_id' => $thenId]);
         }
 
         $dialog->actions()->whereNotIn('id', $keepIds)->delete();

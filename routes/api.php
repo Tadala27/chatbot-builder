@@ -3,7 +3,9 @@
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiIntegrationController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BotConfigurationController;
 use App\Http\Controllers\Api\BotController;
+use App\Http\Controllers\Api\BotDialogController;
 use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\CustomFunctionController;
 use App\Http\Controllers\Api\DashboardController;
@@ -113,13 +115,19 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
         Route::post('flows/{flow}/duplicate',       [FlowController::class, 'duplicate']);
         Route::post('/media',              [MediaUploadController::class, 'upload']);
         Route::get('/media',           [MediaUploadController::class, 'index']);
+        Route::apiResource('/bot-dialogs', BotDialogController::class)
+            ->parameters(['bot-dialogs' => 'botDialog']);
 
+        // Bot configuration (upsert via POST)
+        Route::get('/configuration',  [BotConfigurationController::class, 'show']);
+        Route::post('/configuration', [BotConfigurationController::class, 'upsert']);
         // Flow Builder
         Route::prefix('flows/{flow}/builder')->group(function () {
             Route::get('/',                         [FlowBuilderController::class, 'show']);
             Route::post('save',                     [FlowBuilderController::class, 'autoSave']);
             Route::post('publish',                  [FlowBuilderController::class, 'publish']);
             Route::get('/variables',                 [FlowBuilderController::class, 'getVariables']);
+            Route::get('/functions',                 [FlowBuilderController::class, 'getFunctions']);
             Route::get('versions',                  [FlowBuilderController::class, 'getVersions']);
             Route::post('versions',                 [FlowBuilderController::class, 'createVersion']);
             Route::get('versions/{version}',        [FlowBuilderController::class, 'getVersion']);

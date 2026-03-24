@@ -146,8 +146,8 @@ const nodeComponent = computed(() => {
         <v-divider />
         <v-card-text>
           <component :is="nodeComponent" :bot-id="botId" :node="node" :available-variables="availableVariables"
-            :node-options="nodeOptions" :saved-responses="savedResponses" :api-integrations="apiIntegrations ?? []"
-            :custom-functions="customFunctions ?? []" />
+            :node-options="nodeOptions" :saved-responses="savedResponses" :api-integrations="apiIntegrations"
+            :custom-functions="customFunctions" />
 
           <!-- Handoff settings -->
           <template v-if="node.triggersHandoff">

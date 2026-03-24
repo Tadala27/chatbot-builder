@@ -80,8 +80,8 @@ function configureRow(row: Row) {
   <div>
     <!-- Header / Body / Footer -->
     <RichTextField v-model="node.listHeader" label="List Header (optional)" placeholder="Menu"
-      :available-variables="availableVariables" field-type="header" :max-length="60" show-variable-picker
-      density="compact" />
+      :available-variables="availableVariables" field-type="header" :available-functions="customFunctions"
+      :max-length="60" show-variable-picker density="compact" />
 
     <RichTextEditor class="mt-3" v-model="node.listBody" label="List Body" placeholder="Please choose an option..."
       :available-variables="availableVariables" field-type="body" :max-length="4096" :show-formatting="true" />
@@ -94,8 +94,9 @@ function configureRow(row: Row) {
 
     <!-- CTA button label -->
     <RichTextField v-if="node.action" v-model="node.action.button" label="Call to Action Button"
-      placeholder="View Options" :available-variables="availableVariables" field-type="button" :max-length="20"
-      show-variable-picker density="compact" hint="Button text that opens the list" persistent-hint />
+      placeholder="View Options" :available-variables="availableVariables" :available-functions="customFunctions"
+      field-type="button" :max-length="20" show-variable-picker density="compact" hint="Button text that opens the list"
+      persistent-hint />
 
     <v-divider class="my-4" />
 

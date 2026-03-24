@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { useActionEditorStore } from "@/stores/actionEditor";
 import { v4 as uuidv4 } from "uuid";
-import ConditionBranchBuilder from "@/components/bots/actions/ConditionBranchBuilder.vue";
+import ActionBranch from "@/components/bots/actions/ActionBranch.vue";
 
 const store = useActionEditorStore();
 
@@ -16,8 +16,6 @@ const ACTION_TYPES = [
   { value: "delay", title: "Delay", icon: "$timerOutline", color: "#6b7280" },
   { value: "handoff", title: "Handoff to Agent", icon: "$headset", color: "#ef4444" },
 ];
-
-const NESTED_TYPES = ACTION_TYPES.filter(t => t.value !== "condition"); // no nested conditions
 
 const DATA_TYPES = [
   { value: "string", title: "Text" },
@@ -38,39 +36,84 @@ const API_OPERATORS = [
   { value: "not_equals", title: "≠" },
   { value: "greater_than", title: ">" },
   { value: "less_than", title: "<" },
+  { value: "greater_than_or_equal", title: "≥" },
+  { value: "less_than_or_equal", title: "≤" },
   { value: "contains", title: "contains" },
   { value: "starts_with", title: "starts with" },
   { value: "is_empty", title: "is empty" },
   { value: "is_not_empty", title: "is not empty" },
 ];
 
+const COND_TYPES = [
+  { value: "variable", title: "Variable", icon: "$variable" },
+  { value: "saved_response", title: "User Selected", icon: "$cursorDefaultClick" },
+  { value: "api_response", title: "API Response", icon: "$api" },
+];
+
+const COND_OPERATORS = [
+  { value: "equals", title: "=" },
+  { value: "not_equals", title: "≠" },
+  { value: "greater_than", title: ">" },
+  { value: "less_than", title: "<" },
+  { value: "greater_than_or_equal", title: "≥" },
+  { value: "less_than_or_equal", title: "≤" },
+  { value: "contains", title: "contains" },
+  { value: "starts_with", title: "starts with" },
+  { value: "ends_with", title: "ends with" },
+  { value: "is_empty", title: "has no value / no input" },
+  { value: "is_not_empty", title: "has any value / any input" },
+];
+
 // ── Shape factories ───────────────────────────────────────────────────────────
-function makeAction(kind: string, id?: string): any {
-  const _id = id ?? uuidv4();
-  const shapes: Record<string, any> = {
-    navigation: { id: _id, kind, goTo: "" },
-    condition: { id: _id, kind, branches: [], defaultBranch: null },
-    variable: { id: _id, kind, varName: "", varValue: "", dataType: "string" },
-    api: { id: _id, kind, apiConfigId: "", apiResultVar: "", responseHandlers: [], defaultActions: undefined },
-    function: { id: _id, kind, fnId: "", paramsRaw: "{}", resultVar: "" },
-    delay: { id: _id, kind, seconds: 3 },
-    handoff: { id: _id, kind, resumeAt: "" },
+function makeCondition() {
+  return {
+    id: uuidv4(), type: "variable", source: "",
+    responsePath: "status", fieldPath: "", operator: "equals", value: "",
   };
-  return shapes[kind] ?? { id: _id, kind };
 }
 
-function makeNestedAction(kind: string): any {
-  const id = uuidv4();
-  return makeAction(kind, id);
+function makeBranch() {
+  return {
+    id: uuidv4(), conditionLogic: "AND",
+    conditions: [makeCondition()],
+    actions: [] as any[],
+  };
 }
 
 function makeApiHandler() {
   return {
     id: uuidv4(),
     conditions: [{ id: uuidv4(), responseField: "status", responsePath: "", operator: "equals", value: "200" }],
-    actions: [],
+    actions: [] as any[],
   };
 }
+
+function makeAction(kind: string, id?: string): any {
+  const _id = id ?? uuidv4();
+  const base = { id: _id, kind, then: null };  // ← always include then: null
+  if (kind === "condition") return {
+    ...base,
+    branches: [makeBranch()],
+    defaultBranch: { id: uuidv4(), actions: [] },
+  };
+  if (kind === "api") return {
+    ...base,
+    apiConfigId: "",
+    apiResultVar: "",
+    responseHandlers: [makeApiHandler()],
+    defaultActions: [],
+  };
+  const map: Record<string, any> = {
+    navigation: { ...base, goTo: "" },
+    variable: { ...base, varName: "" },
+    function: { ...base, fnId: "", paramsRaw: "{}", resultVar: "" },
+    delay: { ...base, seconds: 3 },
+    handoff: { ...base, resumeAt: "" },
+  };
+  return map[kind] ?? base;
+}
+
+function needsValue(op: string) { return !["is_empty", "is_not_empty"].includes(op); }
 
 // ── Reactive root actions ─────────────────────────────────────────────────────
 const actionsArray = computed({
@@ -102,7 +145,7 @@ function getActionMeta(kind: string) {
   return ACTION_TYPES.find(t => t.value === kind) ?? ACTION_TYPES[0];
 }
 
-// ── Root action mutations ─────────────────────────────────────────────────────
+// ── Root action list mutations ────────────────────────────────────────────────
 function addAction() {
   actionsArray.value = [...actionsArray.value, makeAction("navigation")];
 }
@@ -110,77 +153,101 @@ function removeAction(idx: number) {
   const a = [...actionsArray.value]; a.splice(idx, 1); actionsArray.value = a;
 }
 function moveAction(idx: number, dir: -1 | 1) {
-  const target = idx + dir;
-  if (target < 0 || target >= actionsArray.value.length) return;
-  const a = [...actionsArray.value];
-  [a[idx], a[target]] = [a[target], a[idx]];
-  actionsArray.value = a;
+  const t = idx + dir;
+  if (t < 0 || t >= actionsArray.value.length) return;
+  const a = [...actionsArray.value];[a[idx], a[t]] = [a[t], a[idx]]; actionsArray.value = a;
 }
 function changeKind(idx: number, kind: string) {
   const id = actionsArray.value[idx]?.id ?? uuidv4();
+  const a = [...actionsArray.value]; a[idx] = makeAction(kind, id); actionsArray.value = a;
+}
+function patchAction(idx: number, partial: any) {
   const a = [...actionsArray.value];
-  a[idx] = makeAction(kind, id);
+  a[idx] = { ...a[idx], ...partial };
   actionsArray.value = a;
 }
-function updateField(idx: number, field: string, value: any) {
-  const a = [...actionsArray.value];
-  a[idx] = { ...a[idx], [field]: value };
-  actionsArray.value = a;
+
+// ── Condition branch mutations ────────────────────────────────────────────────
+function addCondBranch(idx: number) {
+  patchAction(idx, { branches: [...(actionsArray.value[idx].branches ?? []), makeBranch()] });
 }
-function replaceAction(idx: number, action: any) {
-  const a = [...actionsArray.value]; a[idx] = action; actionsArray.value = a;
+function removeCondBranch(idx: number, bi: number) {
+  const a = actionsArray.value[idx];
+  if ((a.branches ?? []).length <= 1) return;
+  patchAction(idx, { branches: a.branches.filter((_: any, j: number) => j !== bi) });
+}
+function patchCondBranch(idx: number, bi: number, partial: any) {
+  const a = actionsArray.value[idx];
+  patchAction(idx, {
+    branches: a.branches.map((b: any, j: number) => j === bi ? { ...b, ...partial } : b),
+  });
+}
+function addCondCond(idx: number, bi: number) {
+  const b = actionsArray.value[idx].branches[bi];
+  patchCondBranch(idx, bi, { conditions: [...b.conditions, makeCondition()] });
+}
+function removeCondCond(idx: number, bi: number, ci: number) {
+  const b = actionsArray.value[idx].branches[bi];
+  patchCondBranch(idx, bi, { conditions: b.conditions.filter((_: any, j: number) => j !== ci) });
+}
+function updateCondCond(idx: number, bi: number, ci: number, field: string, val: any) {
+  const b = actionsArray.value[idx].branches[bi];
+  if (field === "type") {
+    const id = b.conditions[ci].id;
+    patchCondBranch(idx, bi, {
+      conditions: b.conditions.map((c: any, j: number) => j === ci ? { ...makeCondition(), id, type: val } : c),
+    });
+    return;
+  }
+  patchCondBranch(idx, bi, {
+    conditions: b.conditions.map((c: any, j: number) => j === ci ? { ...c, [field]: val } : c),
+  });
+}
+function setCondBranchActions(idx: number, bi: number, actions: any[]) {
+  patchCondBranch(idx, bi, { actions });
+}
+function setCondDefaultActions(idx: number, actions: any[]) {
+  const a = actionsArray.value[idx];
+  patchAction(idx, { defaultBranch: { ...(a.defaultBranch ?? { id: uuidv4() }), actions } });
+}
+function toggleCondElse(idx: number) {
+  const a = actionsArray.value[idx];
+  patchAction(idx, { defaultBranch: a.defaultBranch ? null : { id: uuidv4(), actions: [] } });
 }
 
-// ── Nested action helpers (used inside API handlers & condition branches) ─────
-function addNested(list: any[]): any[] {
-  return [...list, makeNestedAction("navigation")];
-}
-function removeNested(list: any[], idx: number): any[] {
-  return list.filter((_, i) => i !== idx);
-}
-function updateNested(list: any[], idx: number, field: string, val: any): any[] {
-  return list.map((a, i) => i === idx ? { ...a, [field]: val } : a);
-}
-function changeNestedKind(list: any[], idx: number, kind: string): any[] {
-  const id = list[idx]?.id ?? uuidv4();
-  return list.map((a, i) => i === idx ? { ...makeNestedAction(kind), id } : a);
-}
-
-// ── API block helpers ─────────────────────────────────────────────────────────
-function apiPatch(idx: number, partial: any) {
-  replaceAction(idx, { ...actionsArray.value[idx], ...partial });
-}
+// ── API handler mutations ─────────────────────────────────────────────────────
 function addApiHandler(idx: number) {
-  const action = actionsArray.value[idx];
-  apiPatch(idx, { responseHandlers: [...(action.responseHandlers ?? []), makeApiHandler()] });
+  patchAction(idx, { responseHandlers: [...(actionsArray.value[idx].responseHandlers ?? []), makeApiHandler()] });
 }
-function removeApiHandler(idx: number, hIdx: number) {
-  const action = actionsArray.value[idx];
-  apiPatch(idx, { responseHandlers: action.responseHandlers.filter((_: any, i: number) => i !== hIdx) });
+function removeApiHandler(idx: number, hi: number) {
+  const a = actionsArray.value[idx];
+  patchAction(idx, { responseHandlers: a.responseHandlers.filter((_: any, j: number) => j !== hi) });
 }
-function patchApiHandler(idx: number, hIdx: number, partial: any) {
-  const action = actionsArray.value[idx];
-  apiPatch(idx, {
-    responseHandlers: action.responseHandlers.map((h: any, i: number) =>
-      i === hIdx ? { ...h, ...partial } : h
-    ),
+function patchApiHandler(idx: number, hi: number, partial: any) {
+  const a = actionsArray.value[idx];
+  patchAction(idx, {
+    responseHandlers: a.responseHandlers.map((h: any, j: number) => j === hi ? { ...h, ...partial } : h),
   });
 }
-function addHandlerCond(idx: number, hIdx: number) {
-  const h = actionsArray.value[idx].responseHandlers[hIdx];
-  patchApiHandler(idx, hIdx, {
-    conditions: [...(h.conditions ?? []), { id: uuidv4(), responseField: "status", responsePath: "", operator: "equals", value: "" }],
+function addApiCond(idx: number, hi: number) {
+  const h = actionsArray.value[idx].responseHandlers[hi];
+  patchApiHandler(idx, hi, { conditions: [...h.conditions, { id: uuidv4(), responseField: "status", responsePath: "", operator: "equals", value: "" }] });
+}
+function removeApiCond(idx: number, hi: number, ci: number) {
+  const h = actionsArray.value[idx].responseHandlers[hi];
+  patchApiHandler(idx, hi, { conditions: h.conditions.filter((_: any, j: number) => j !== ci) });
+}
+function updateApiCond(idx: number, hi: number, ci: number, field: string, val: any) {
+  const h = actionsArray.value[idx].responseHandlers[hi];
+  patchApiHandler(idx, hi, {
+    conditions: h.conditions.map((c: any, j: number) => j === ci ? { ...c, [field]: val } : c),
   });
 }
-function removeHandlerCond(idx: number, hIdx: number, cIdx: number) {
-  const h = actionsArray.value[idx].responseHandlers[hIdx];
-  patchApiHandler(idx, hIdx, { conditions: h.conditions.filter((_: any, i: number) => i !== cIdx) });
+function setApiHandlerActions(idx: number, hi: number, actions: any[]) {
+  patchApiHandler(idx, hi, { actions });
 }
-function updateHandlerCond(idx: number, hIdx: number, cIdx: number, field: string, val: any) {
-  const h = actionsArray.value[idx].responseHandlers[hIdx];
-  patchApiHandler(idx, hIdx, {
-    conditions: h.conditions.map((c: any, i: number) => i === cIdx ? { ...c, [field]: val } : c),
-  });
+function setApiDefaultActions(idx: number, actions: any[]) {
+  patchAction(idx, { defaultActions: actions });
 }
 
 function save() { store.closeActionEditor(); }
@@ -201,16 +268,16 @@ function close() { store.closeActionEditor(); }
           <div class="ae-header__subtitle">{{ subtitle }}</div>
         </div>
       </div>
-      <VBtn icon="$plus" variant="text" size="small" @click="addAction">Add Action</VBtn>
-
-      <VBtn icon="$close" variant="text" size="small" @click="close" />
+      <div class="d-flex align-center gap-1">
+        <VBtn variant="text" size="small" prepend-icon="$plus" @click="addAction">Add Action</VBtn>
+        <VBtn icon="$close" variant="text" size="small" @click="close" />
+      </div>
     </div>
     <VDivider />
 
     <!-- ── Scrollable body ───────────────────────────────────────────────── -->
     <PerfectScrollbar class="ae-body">
 
-      <!-- Empty state -->
       <div v-if="actionsArray.length === 0" class="ae-empty">
         <div class="ae-empty__icon">
           <VIcon icon="$lightningBoltOutline" size="32" color="medium-emphasis" />
@@ -218,7 +285,7 @@ function close() { store.closeActionEditor(); }
         <p class="text-body-2 text-medium-emphasis mb-0">No actions yet. Add one below.</p>
       </div>
 
-      <!-- ── Action cards ────────────────────────────────────────────────── -->
+      <!-- ── Action cards ──────────────────────────────────────────────── -->
       <div v-for="(action, idx) in actionsArray" :key="action.id ?? idx" class="action-card">
 
         <!-- Card header -->
@@ -228,9 +295,7 @@ function close() { store.closeActionEditor(); }
               :style="{ background: getActionMeta(action.kind).color + '20', color: getActionMeta(action.kind).color }">
               <VIcon :icon="getActionMeta(action.kind).icon" size="15" />
             </div>
-            <span class="text-caption font-weight-semibold text-medium-emphasis">
-              ACTION {{ idx + 1 }}
-            </span>
+            <span class="text-caption font-weight-semibold text-medium-emphasis">ACTION {{ idx + 1 }}</span>
           </div>
           <div class="d-flex align-center gap-1">
             <VBtn icon="$arrowUp" size="x-small" variant="text" :disabled="idx === 0" @click="moveAction(idx, -1)" />
@@ -258,310 +323,69 @@ function close() { store.closeActionEditor(); }
         <!-- ── Action body ─────────────────────────────────────────────── -->
         <div class="action-card__body">
 
-          <!-- Navigate -->
+          <!-- NAVIGATE -->
           <template v-if="action.kind === 'navigation'">
             <div class="field-group">
               <label class="field-label">Destination Node</label>
-              <VSelect :model-value="action.goTo" :items="store.nodeOptions" variant="outlined" density="compact"
-                rounded="lg" hide-details placeholder="Select node to navigate to..." prepend-inner-icon="$arrowRight"
-                @update:model-value="updateField(idx, 'goTo', $event)" />
+              <VAutocomplete :model-value="action.goTo" :items="store.nodeOptions" variant="outlined" density="compact"
+                rounded="lg" hide-details placeholder="Select node to navigate to…" prepend-inner-icon="$arrowRight"
+                @update:model-value="patchAction(idx, { goTo: $event })" />
             </div>
           </template>
 
-          <!-- Condition — delegates to ConditionBranchBuilder -->
-          <template v-else-if="action.kind === 'condition'">
-            <ConditionBranchBuilder :branches="action.branches ?? []" :default-branch="action.defaultBranch ?? null"
-              :available-variables="store.availableVariables" :saved-responses="store.savedResponses"
-              :node-options="store.nodeOptions" :api-integrations="store.apiIntegrations"
-              :custom-functions="store.customFunctions" @update:branches="updateField(idx, 'branches', $event)"
-              @update:default-branch="updateField(idx, 'defaultBranch', $event)" />
-          </template>
-
-          <!-- Set Variable -->
+          <!-- SET VARIABLE -->
           <template v-else-if="action.kind === 'variable'">
-            <VRow dense>
-              <VCol cols="12" sm="4">
-                <div class="field-group">
-                  <label class="field-label">Variable Name</label>
-                  <VCombobox :model-value="action.varName" :items="store.availableVariables" variant="outlined"
-                    density="compact" rounded="lg" hide-details placeholder="district, user_age..."
-                    prepend-inner-icon="$variable" @update:model-value="updateField(idx, 'varName', $event)" />
-                </div>
-              </VCol>
-              <VCol cols="12" sm="2">
-                <div class="field-group">
-                  <label class="field-label">Type</label>
-                  <VSelect :model-value="action.dataType" :items="DATA_TYPES" variant="outlined" density="compact"
-                    rounded="lg" hide-details @update:model-value="updateField(idx, 'dataType', $event)" />
-                </div>
-              </VCol>
-              <VCol cols="12" sm="6">
-                <div class="field-group">
-                  <label class="field-label">
-                    Value
-                    <span class="text-caption text-medium-emphasis">— &#123;&#123;variable&#125;&#125; for
-                      dynamic</span>
-                  </label>
-                  <VTextField :model-value="action.varValue" variant="outlined" density="compact" rounded="lg"
-                    hide-details placeholder="e.g. Blantyre or {{city}}"
-                    @update:model-value="updateField(idx, 'varValue', $event)" />
-                </div>
-              </VCol>
-            </VRow>
-          </template>
-
-          <!-- ── API Call (inlined ApiActionBlock) ──────────────────────── -->
-          <template v-else-if="action.kind === 'api'">
-            <VRow dense class="mb-3">
-              <VCol cols="12" sm="7">
-                <div class="field-group">
-                  <label class="field-label">API Integration</label>
-                  <VSelect :model-value="action.apiConfigId" :items="store.apiIntegrations" item-title="name"
-                    item-value="id" variant="outlined" density="compact" rounded="lg" hide-details clearable
-                    placeholder="Select configured API..." no-data-text="No APIs configured yet"
-                    prepend-inner-icon="$api" @update:model-value="updateField(idx, 'apiConfigId', $event)" />
-                </div>
-              </VCol>
-              <VCol cols="12" sm="5">
-                <div class="field-group">
-                  <label class="field-label">Save Response To</label>
-                  <VCombobox :model-value="action.apiResultVar" :items="store.availableVariables" variant="outlined"
-                    density="compact" rounded="lg" hide-details clearable placeholder="variable name..."
-                    @update:model-value="updateField(idx, 'apiResultVar', $event)" />
-                </div>
-              </VCol>
-            </VRow>
-
-            <!-- Response handlers -->
-            <div class="handlers-section">
-              <div class="handlers-section__header">
-                <span class="text-caption font-weight-semibold text-medium-emphasis">RESPONSE HANDLERS</span>
-                <div class="d-flex gap-2">
-                  <VBtn variant="outlined" size="x-small" rounded="lg" prepend-icon="$plus" @click="addApiHandler(idx)">
-                    Add Handler
-                  </VBtn>
-                  <VBtn v-if="action.defaultActions === undefined" variant="outlined" size="x-small" rounded="lg"
-                    color="grey" prepend-icon="$plus" @click="updateField(idx, 'defaultActions', [])">
-                    Add Default
-                  </VBtn>
-                </div>
-              </div>
-
-              <!-- Handler cards -->
-              <div v-for="(handler, hIdx) in action.responseHandlers ?? []" :key="handler.id" class="handler-card">
-                <div class="handler-card__header">
-                  <VChip size="x-small" color="success" variant="tonal">Handler {{ hIdx + 1 }}</VChip>
-                  <VBtn icon="$trashCan" size="x-small" variant="text" color="error"
-                    @click="removeApiHandler(idx, hIdx)" />
-                </div>
-                <div class="handler-card__body">
-                  <div class="text-caption font-weight-semibold text-medium-emphasis mb-2">WHEN RESPONSE MATCHES</div>
-
-                  <div v-for="(hc, cIdx) in handler.conditions ?? []" :key="hc.id" class="handler-cond">
-                    <VSelect :model-value="hc.responseField" :items="RESPONSE_FIELDS" item-title="title"
-                      item-value="value" variant="outlined" density="compact" rounded="lg" hide-details
-                      style="flex:1.2;"
-                      @update:model-value="updateHandlerCond(idx, hIdx, cIdx, 'responseField', $event)" />
-                    <VTextField v-if="hc.responseField === 'body'" :model-value="hc.responsePath" variant="outlined"
-                      density="compact" rounded="lg" hide-details placeholder="data.status" style="flex:1.5;"
-                      @update:model-value="updateHandlerCond(idx, hIdx, cIdx, 'responsePath', $event)" />
-                    <VSelect :model-value="hc.operator" :items="API_OPERATORS" item-title="title" item-value="value"
-                      variant="outlined" density="compact" rounded="lg" hide-details style="flex:0.9;"
-                      @update:model-value="updateHandlerCond(idx, hIdx, cIdx, 'operator', $event)" />
-                    <VTextField v-if="!['is_empty', 'is_not_empty'].includes(hc.operator)" :model-value="hc.value"
-                      variant="outlined" density="compact" rounded="lg" hide-details placeholder="200" style="flex:1.2;"
-                      @update:model-value="updateHandlerCond(idx, hIdx, cIdx, 'value', $event)" />
-                    <VBtn icon="$close" size="x-small" variant="text" :disabled="handler.conditions.length === 1"
-                      @click="removeHandlerCond(idx, hIdx, cIdx)" />
-                  </div>
-
-                  <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary" class="mt-1"
-                    @click="addHandlerCond(idx, hIdx)">
-                    Add condition
-                  </VBtn>
-
-                  <div class="text-caption font-weight-semibold text-medium-emphasis mt-3 mb-2">THEN RUN</div>
-
-                  <!-- Inline nested actions for handler -->
-                  <div class="nested-actions">
-                    <div v-for="(na, nIdx) in handler.actions ?? []" :key="na.id ?? nIdx" class="na-row">
-                      <div class="na-row__header">
-                        <div class="na-type-pills">
-                          <button v-for="t in NESTED_TYPES" :key="t.value" class="na-pill"
-                            :class="{ 'na-pill--active': na.kind === t.value }"
-                            :style="na.kind === t.value ? { borderColor: t.color, background: t.color + '15', color: t.color } : {}"
-                            @click="patchApiHandler(idx, hIdx, { actions: changeNestedKind(handler.actions, nIdx, t.value) })">
-                            <VIcon :icon="t.icon" size="12" />{{ t.title }}
-                          </button>
-                        </div>
-                        <VBtn icon="$close" size="x-small" variant="text" color="error"
-                          @click="patchApiHandler(idx, hIdx, { actions: removeNested(handler.actions, nIdx) })" />
-                      </div>
-                      <div class="na-row__fields">
-                        <template v-if="na.kind === 'navigation'">
-                          <VSelect :model-value="na.goTo" :items="store.nodeOptions" variant="outlined"
-                            density="compact" rounded="lg" hide-details placeholder="Navigate to..." class="flex-1"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'goTo', $event) })" />
-                        </template>
-                        <template v-else-if="na.kind === 'variable'">
-                          <VCombobox :model-value="na.varName" :items="store.availableVariables" variant="outlined"
-                            density="compact" rounded="lg" hide-details placeholder="Variable..." class="flex-1"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'varName', $event) })" />
-                          <VTextField :model-value="na.varValue" variant="outlined" density="compact" rounded="lg"
-                            hide-details placeholder="Value or {{var}}" class="flex-1"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'varValue', $event) })" />
-                        </template>
-                        <template v-else-if="na.kind === 'delay'">
-                          <VTextField :model-value="na.seconds" type="number" variant="outlined" density="compact"
-                            rounded="lg" hide-details suffix="seconds" style="max-width:180px;"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'seconds', $event) })" />
-                        </template>
-                        <template v-else-if="na.kind === 'handoff'">
-                          <span class="text-body-2 text-medium-emphasis flex-1">Handoff to agent</span>
-                          <VSelect :model-value="na.resumeAt" :items="store.nodeOptions" variant="outlined"
-                            density="compact" rounded="lg" hide-details clearable placeholder="Resume at... (optional)"
-                            style="max-width:220px;"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'resumeAt', $event) })" />
-                        </template>
-                        <template v-else-if="na.kind === 'api'">
-                          <VSelect :model-value="na.apiConfigId" :items="store.apiIntegrations" item-title="name"
-                            item-value="id" variant="outlined" density="compact" rounded="lg" hide-details
-                            placeholder="Select API..." class="flex-1"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'apiConfigId', $event) })" />
-                        </template>
-                        <template v-else-if="na.kind === 'function'">
-                          <VSelect :model-value="na.fnId" :items="store.customFunctions" item-title="name"
-                            item-value="id" variant="outlined" density="compact" rounded="lg" hide-details
-                            placeholder="Select function..." class="flex-1"
-                            @update:model-value="patchApiHandler(idx, hIdx, { actions: updateNested(handler.actions, nIdx, 'fnId', $event) })" />
-                        </template>
-                      </div>
-                    </div>
-                    <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary"
-                      @click="patchApiHandler(idx, hIdx, { actions: addNested(handler.actions ?? []) })">
-                      Add action
-                    </VBtn>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Default handler -->
-              <div v-if="action.defaultActions !== undefined" class="handler-card handler-card--default">
-                <div class="handler-card__header">
-                  <VChip size="x-small" color="grey" variant="tonal">Default (no match)</VChip>
-                  <VBtn icon="$close" size="x-small" variant="text" color="error"
-                    @click="updateField(idx, 'defaultActions', undefined)" />
-                </div>
-                <div class="handler-card__body">
-                  <div class="nested-actions">
-                    <div v-for="(na, nIdx) in action.defaultActions ?? []" :key="na.id ?? nIdx" class="na-row">
-                      <div class="na-row__header">
-                        <div class="na-type-pills">
-                          <button v-for="t in NESTED_TYPES" :key="t.value" class="na-pill"
-                            :class="{ 'na-pill--active': na.kind === t.value }"
-                            :style="na.kind === t.value ? { borderColor: t.color, background: t.color + '15', color: t.color } : {}"
-                            @click="updateField(idx, 'defaultActions', changeNestedKind(action.defaultActions, nIdx, t.value))">
-                            <VIcon :icon="t.icon" size="12" />{{ t.title }}
-                          </button>
-                        </div>
-                        <VBtn icon="$close" size="x-small" variant="text" color="error"
-                          @click="updateField(idx, 'defaultActions', removeNested(action.defaultActions, nIdx))" />
-                      </div>
-                      <div class="na-row__fields">
-                        <template v-if="na.kind === 'navigation'">
-                          <VSelect :model-value="na.goTo" :items="store.nodeOptions" variant="outlined"
-                            density="compact" rounded="lg" hide-details placeholder="Navigate to..." class="flex-1"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'goTo', $event))" />
-                        </template>
-                        <template v-else-if="na.kind === 'variable'">
-                          <VCombobox :model-value="na.varName" :items="store.availableVariables" variant="outlined"
-                            density="compact" rounded="lg" hide-details placeholder="Variable..." class="flex-1"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'varName', $event))" />
-                          <VTextField :model-value="na.varValue" variant="outlined" density="compact" rounded="lg"
-                            hide-details placeholder="Value or {{var}}" class="flex-1"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'varValue', $event))" />
-                        </template>
-                        <template v-else-if="na.kind === 'delay'">
-                          <VTextField :model-value="na.seconds" type="number" variant="outlined" density="compact"
-                            rounded="lg" hide-details suffix="seconds" style="max-width:180px;"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'seconds', $event))" />
-                        </template>
-                        <template v-else-if="na.kind === 'handoff'">
-                          <span class="text-body-2 text-medium-emphasis flex-1">Handoff to agent</span>
-                          <VSelect :model-value="na.resumeAt" :items="store.nodeOptions" variant="outlined"
-                            density="compact" rounded="lg" hide-details clearable placeholder="Resume at... (optional)"
-                            style="max-width:220px;"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'resumeAt', $event))" />
-                        </template>
-                        <template v-else-if="na.kind === 'function'">
-                          <VSelect :model-value="na.fnId" :items="store.customFunctions" item-title="name"
-                            item-value="id" variant="outlined" density="compact" rounded="lg" hide-details
-                            placeholder="Select function..." class="flex-1"
-                            @update:model-value="updateField(idx, 'defaultActions', updateNested(action.defaultActions, nIdx, 'fnId', $event))" />
-                        </template>
-                      </div>
-                    </div>
-                    <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary"
-                      @click="updateField(idx, 'defaultActions', addNested(action.defaultActions ?? []))">
-                      Add action
-                    </VBtn>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="(action.responseHandlers?.length ?? 0) === 0 && action.defaultActions === undefined"
-                class="handlers-empty">
-                <VIcon icon="mdi-transit-connection-variant" size="24" color="medium-emphasis" class="mb-2" />
-                <p class="text-caption text-medium-emphasis mb-0">Add handlers to run actions based on the API response
-                </p>
-              </div>
+            <div class="field-group">
+              <label class="field-label">Variable to Set</label>
+              <VCombobox :model-value="action.varName" :items="store.availableVariables" variant="outlined"
+                density="compact" rounded="lg" hide-details placeholder="e.g. district, user_age, city…"
+                prepend-inner-icon="$variable" @update:model-value="patchAction(idx, { varName: $event })" />
             </div>
           </template>
 
-          <!-- Run Function -->
+          <!-- RUN FUNCTION -->
           <template v-else-if="action.kind === 'function'">
             <VRow dense>
               <VCol cols="12" sm="5">
                 <div class="field-group">
                   <label class="field-label">Function</label>
-                  <VSelect :model-value="action.fnId" :items="store.customFunctions" item-title="name" item-value="id"
-                    variant="outlined" density="compact" rounded="lg" hide-details placeholder="Select function..."
-                    prepend-inner-icon="$functionVariant" @update:model-value="updateField(idx, 'fnId', $event)" />
+                  <VAutocomplete :model-value="action.fnId" :items="store.customFunctions" item-title="name"
+                    item-value="id" variant="outlined" density="compact" rounded="lg" hide-details
+                    placeholder="Select function…" prepend-inner-icon="$functionVariant"
+                    @update:model-value="patchAction(idx, { fnId: $event })" />
                 </div>
               </VCol>
               <VCol cols="12" sm="3">
                 <div class="field-group">
                   <label class="field-label">Save Result To</label>
                   <VCombobox :model-value="action.resultVar" :items="store.availableVariables" variant="outlined"
-                    density="compact" rounded="lg" hide-details clearable placeholder="variable name..."
-                    @update:model-value="updateField(idx, 'resultVar', $event)" />
+                    density="compact" rounded="lg" hide-details clearable placeholder="variable name…"
+                    @update:model-value="patchAction(idx, { resultVar: $event })" />
                 </div>
               </VCol>
               <VCol cols="12">
                 <div class="field-group">
-                  <label class="field-label">
-                    Parameters (JSON)
-                    <span class="text-caption text-medium-emphasis">— &#123;&#123;variable&#125;&#125; supported</span>
-                  </label>
+                  <label class="field-label">Parameters (JSON) <span class="text-caption text-medium-emphasis">—
+                      &#123;&#123;variable&#125;&#125; supported</span></label>
                   <VTextarea :model-value="action.paramsRaw" variant="outlined" density="compact" rounded="lg"
                     hide-details rows="2" placeholder='{"key": "{{variable}}"}'
-                    @update:model-value="updateField(idx, 'paramsRaw', $event)" />
+                    @update:model-value="patchAction(idx, { paramsRaw: $event })" />
                 </div>
               </VCol>
             </VRow>
           </template>
 
-          <!-- Delay -->
+          <!-- DELAY -->
           <template v-else-if="action.kind === 'delay'">
-            <div class="field-group" style="max-width:240px;">
+            <div class="field-group" style="max-width:240px">
               <label class="field-label">Wait Duration (seconds)</label>
               <VTextField :model-value="action.seconds" type="number" variant="outlined" density="compact" rounded="lg"
                 hide-details min="1" max="3600" prepend-inner-icon="$timerOutline"
-                @update:model-value="updateField(idx, 'seconds', $event)" />
+                @update:model-value="patchAction(idx, { seconds: $event })" />
             </div>
           </template>
 
-          <!-- Handoff -->
+          <!-- HANDOFF -->
           <template v-else-if="action.kind === 'handoff'">
             <VAlert type="warning" variant="tonal" rounded="lg" density="compact" class="mb-4">
               <div class="d-flex align-center gap-2">
@@ -569,25 +393,263 @@ function close() { store.closeActionEditor(); }
                 <span class="text-body-2">Conversation will be handed off to a live agent</span>
               </div>
             </VAlert>
-            <div class="field-group" style="max-width:360px;">
+            <div class="field-group" style="max-width:360px">
               <label class="field-label">Resume at Node (after agent closes)</label>
-              <VSelect :model-value="action.resumeAt" :items="store.nodeOptions" variant="outlined" density="compact"
-                rounded="lg" hide-details clearable placeholder="Optional — where to continue..."
-                @update:model-value="updateField(idx, 'resumeAt', $event)" />
+              <VAutocomplete :model-value="action.resumeAt" :items="store.nodeOptions" variant="outlined"
+                density="compact" rounded="lg" hide-details clearable placeholder="Optional — where to continue…"
+                @update:model-value="patchAction(idx, { resumeAt: $event })" />
             </div>
           </template>
 
-        </div>
-        <!-- /action-card__body -->
-      </div>
-      <!-- /action card loop -->
+          <!-- ════════════════════════════════════════════════════════════════
+               CONDITION — multiple IF branches + ELSE
+               Each THEN uses <ActionBranch> for full recursion
+          ════════════════════════════════════════════════════════════════ -->
+          <template v-else-if="action.kind === 'condition'">
+            <div class="cond-root">
 
-      <!-- Add action -->
+              <!-- IF branches -->
+              <div v-for="(branch, bi) in (action.branches ?? [])" :key="branch.id" class="cb-branch">
+                <div class="cb-branch__bar">
+                  <div class="d-flex align-center gap-2">
+                    <span class="cb-label cb-label--if">IF</span>
+                    <div v-if="branch.conditions.length > 1" class="logic-toggle">
+                      <button :class="{ active: branch.conditionLogic === 'AND' }"
+                        @click="patchCondBranch(idx, bi, { conditionLogic: 'AND' })">AND</button>
+                      <button :class="{ active: branch.conditionLogic === 'OR' }"
+                        @click="patchCondBranch(idx, bi, { conditionLogic: 'OR' })">OR</button>
+                    </div>
+                  </div>
+                  <VBtn v-if="(action.branches ?? []).length > 1" icon="$trashCan" size="x-small" variant="text"
+                    color="error" @click="removeCondBranch(idx, bi)" />
+                </div>
+
+                <div class="cb-branch__body">
+                  <!-- conditions -->
+                  <div v-for="(cond, ci) in branch.conditions" :key="cond.id" class="cb-condition">
+                    <div v-if="ci > 0" class="cb-logic-pill"><span>{{ branch.conditionLogic }}</span></div>
+                    <div class="cb-condition__row">
+                      <div class="ctype-tabs">
+                        <button v-for="ct in COND_TYPES" :key="ct.value" class="ctype-tab"
+                          :class="{ 'ctype-tab--active': cond.type === ct.value }"
+                          @click="updateCondCond(idx, bi, ci, 'type', ct.value)">
+                          <VIcon :icon="ct.icon" size="13" />{{ ct.title }}
+                        </button>
+                      </div>
+                      <!-- VARIABLE -->
+                      <template v-if="cond.type === 'variable'">
+                        <div class="cb-condition__fields">
+                          <VCombobox :model-value="cond.source" :items="store.availableVariables" variant="outlined"
+                            density="compact" rounded="lg" hide-details placeholder="e.g. district, user_age…"
+                            prepend-inner-icon="$variable" style="flex:1.5;min-width:140px"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'source', $event)" />
+                          <VAutocomplete :model-value="cond.operator" :items="COND_OPERATORS" item-title="title"
+                            item-value="value" variant="outlined" density="compact" rounded="lg" hide-details
+                            style="min-width:160px;flex:1.2"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'operator', $event)" />
+                          <VTextField v-if="needsValue(cond.operator)" :model-value="cond.value" variant="outlined"
+                            density="compact" rounded="lg" hide-details placeholder="e.g. Blantyre, 42…"
+                            style="flex:1.5;min-width:120px"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'value', $event)" />
+                        </div>
+                      </template>
+                      <!-- SAVED RESPONSE -->
+                      <template v-else-if="cond.type === 'saved_response'">
+                        <div class="cb-condition__fields">
+                          <VAutocomplete :model-value="cond.source"
+                            :items="(store.savedResponses ?? []).map((r: any) => ({ title: r.label, value: r.optionId }))"
+                            variant="outlined" density="compact" rounded="lg" hide-details
+                            placeholder="Which option the user tapped…" style="flex:1"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'source', $event)" />
+                        </div>
+                      </template>
+                      <!-- API RESPONSE -->
+                      <template v-else-if="cond.type === 'api_response'">
+                        <div class="cb-condition__fields">
+                          <VAutocomplete :model-value="cond.responsePath" :items="RESPONSE_FIELDS" item-title="title"
+                            item-value="value" variant="outlined" density="compact" rounded="lg" hide-details
+                            style="flex:1.2"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'responsePath', $event)" />
+                          <VTextField v-if="cond.responsePath === 'body'" :model-value="cond.fieldPath"
+                            variant="outlined" density="compact" rounded="lg" hide-details
+                            placeholder="data.user.status" style="flex:1.5"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'fieldPath', $event)" />
+                          <VAutocomplete :model-value="cond.operator" :items="COND_OPERATORS" item-title="title"
+                            item-value="value" variant="outlined" density="compact" rounded="lg" hide-details
+                            style="flex:1" @update:model-value="updateCondCond(idx, bi, ci, 'operator', $event)" />
+                          <VTextField v-if="needsValue(cond.operator)" :model-value="cond.value" variant="outlined"
+                            density="compact" rounded="lg" hide-details placeholder="200" style="flex:1.2"
+                            @update:model-value="updateCondCond(idx, bi, ci, 'value', $event)" />
+                        </div>
+                      </template>
+                      <VBtn icon="$close" size="x-small" variant="text" :disabled="branch.conditions.length === 1"
+                        @click="removeCondCond(idx, bi, ci)" />
+                    </div>
+                  </div>
+                  <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary" class="mb-1"
+                    @click="addCondCond(idx, bi)">Add
+                    condition</VBtn>
+
+                  <!-- THEN ─────────────────────────────────────────────── -->
+                  <div class="cb-section-label cb-section-label--then mt-3">THEN</div>
+                  <ActionBranch :actions="branch.actions ?? []" :node-options="store.nodeOptions"
+                    :available-variables="store.availableVariables" :api-integrations="store.apiIntegrations"
+                    :custom-functions="store.customFunctions" :saved-responses="store.savedResponses"
+                    @update:actions="setCondBranchActions(idx, bi, $event)" />
+                </div>
+              </div><!-- /branch loop -->
+
+              <!-- Add IF branch -->
+              <VBtn variant="outlined" rounded="lg" size="small" color="primary" prepend-icon="$plus" block class="mt-1"
+                @click="addCondBranch(idx)">
+                Add IF Branch
+              </VBtn>
+
+              <!-- ELSE -->
+              <div v-if="action.defaultBranch" class="cb-branch cb-branch--else mt-2">
+                <div class="cb-branch__bar">
+                  <div class="d-flex align-center gap-2">
+                    <span class="cb-label cb-label--else">ELSE</span>
+                    <span class="text-caption text-medium-emphasis">— runs when no IF matched</span>
+                  </div>
+                  <VBtn icon="$trashCan" size="x-small" variant="text" color="error" @click="toggleCondElse(idx)" />
+                </div>
+                <div class="cb-branch__body">
+                  <div class="cb-section-label cb-section-label--then">THEN</div>
+                  <ActionBranch :actions="action.defaultBranch.actions ?? []" :node-options="store.nodeOptions"
+                    :available-variables="store.availableVariables" :api-integrations="store.apiIntegrations"
+                    :custom-functions="store.customFunctions" :saved-responses="store.savedResponses"
+                    @update:actions="setCondDefaultActions(idx, $event)" />
+                </div>
+              </div>
+              <VBtn v-else variant="outlined" rounded="lg" size="small" color="grey-darken-1" prepend-icon="$plus" block
+                class="mt-2" @click="toggleCondElse(idx)">
+                Add Else (Default)
+              </VBtn>
+
+            </div>
+          </template>
+
+          <!-- ════════════════════════════════════════════════════════════════
+               API CALL — multiple IF handlers + ELSE
+               Each THEN uses <ActionBranch> for full recursion
+          ════════════════════════════════════════════════════════════════ -->
+          <template v-else-if="action.kind === 'api'">
+            <VRow dense class="mb-4">
+              <VCol cols="12" sm="7">
+                <div class="field-group">
+                  <label class="field-label">API Integration</label>
+                  <VAutocomplete :model-value="action.apiConfigId" :items="store.apiIntegrations" item-title="name"
+                    item-value="id" variant="outlined" density="compact" rounded="lg" hide-details clearable
+                    placeholder="Select configured API…" no-data-text="No APIs configured yet" prepend-inner-icon="$api"
+                    @update:model-value="patchAction(idx, { apiConfigId: $event })" />
+                </div>
+              </VCol>
+              <VCol cols="12" sm="5">
+                <div class="field-group">
+                  <label class="field-label">Save Response To <span
+                      class="text-medium-emphasis font-weight-regular">(optional)</span></label>
+                  <VCombobox :model-value="action.apiResultVar" :items="store.availableVariables" variant="outlined"
+                    density="compact" rounded="lg" hide-details clearable placeholder="variable name…"
+                    @update:model-value="patchAction(idx, { apiResultVar: $event })" />
+                </div>
+              </VCol>
+            </VRow>
+
+            <div class="response-handlers">
+              <div class="handlers-section__header">
+                <span class="text-caption font-weight-semibold text-medium-emphasis">RESPONSE HANDLERS</span>
+                <VBtn variant="outlined" size="x-small" rounded="lg" prepend-icon="$plus" @click="addApiHandler(idx)">
+                  Add IF Handler</VBtn>
+              </div>
+
+              <!-- IF handlers -->
+              <div v-for="(handler, hi) in (action.responseHandlers ?? [])" :key="handler.id" class="rh-card">
+                <div class="rh-card__bar">
+                  <div class="d-flex align-center gap-2">
+                    <span class="cb-label cb-label--if">IF</span>
+                    <span class="text-caption text-medium-emphasis">response matches</span>
+                  </div>
+                  <VBtn icon="$trashCan" size="x-small" variant="text" color="error"
+                    @click="removeApiHandler(idx, hi)" />
+                </div>
+                <div class="rh-card__body">
+                  <div v-for="(hc, ci) in handler.conditions" :key="hc.id" class="handler-cond">
+                    <VAutocomplete :model-value="hc.responseField" :items="RESPONSE_FIELDS" item-title="title"
+                      item-value="value" variant="outlined" density="compact" rounded="lg" hide-details style="flex:1.2"
+                      @update:model-value="updateApiCond(idx, hi, ci, 'responseField', $event)" />
+                    <VTextField v-if="hc.responseField === 'body'" :model-value="hc.responsePath" variant="outlined"
+                      density="compact" rounded="lg" hide-details placeholder="data.status" style="flex:1.5"
+                      @update:model-value="updateApiCond(idx, hi, ci, 'responsePath', $event)" />
+                    <VAutocomplete :model-value="hc.operator" :items="API_OPERATORS" item-title="title"
+                      item-value="value" variant="outlined" density="compact" rounded="lg" hide-details style="flex:0.9"
+                      @update:model-value="updateApiCond(idx, hi, ci, 'operator', $event)" />
+                    <VTextField v-if="needsValue(hc.operator)" :model-value="hc.value" variant="outlined"
+                      density="compact" rounded="lg" hide-details placeholder="200" style="flex:1.2"
+                      @update:model-value="updateApiCond(idx, hi, ci, 'value', $event)" />
+                    <VBtn icon="$close" size="x-small" variant="text" :disabled="handler.conditions.length === 1"
+                      @click="removeApiCond(idx, hi, ci)" />
+                  </div>
+                  <VBtn variant="text" size="x-small" prepend-icon="$plus" color="primary" class="mt-1 mb-3"
+                    @click="addApiCond(idx, hi)">Add condition</VBtn>
+
+                  <!-- THEN -->
+                  <div class="cb-section-label cb-section-label--then mb-2">THEN</div>
+                  <ActionBranch :actions="handler.actions ?? []" :node-options="store.nodeOptions"
+                    :available-variables="store.availableVariables" :api-integrations="store.apiIntegrations"
+                    :custom-functions="store.customFunctions" :saved-responses="store.savedResponses"
+                    @update:actions="setApiHandlerActions(idx, hi, $event)" />
+                </div>
+              </div>
+
+              <!-- ELSE — always visible -->
+              <div class="rh-card rh-card--else mt-2">
+                <div class="rh-card__bar">
+                  <div class="d-flex align-center gap-2">
+                    <span class="cb-label cb-label--else">ELSE</span>
+                    <span class="text-caption text-medium-emphasis">— runs when no IF matched</span>
+                  </div>
+                </div>
+                <div class="rh-card__body">
+                  <div class="cb-section-label cb-section-label--then mb-2">THEN</div>
+                  <ActionBranch :actions="action.defaultActions ?? []" :node-options="store.nodeOptions"
+                    :available-variables="store.availableVariables" :api-integrations="store.apiIntegrations"
+                    :custom-functions="store.customFunctions" :saved-responses="store.savedResponses"
+                    @update:actions="setApiDefaultActions(idx, $event)" />
+                </div>
+              </div>
+            </div>
+          </template>
+
+        </div><!-- /action-card__body -->
+        <!-- At the bottom of action-card__body, inside the v-for loop -->
+        <div class="then-chain mt-3">
+          <VDivider class="mb-2" />
+          <div class="d-flex align-center justify-space-between mb-2">
+            <span class="field-label" style="color: rgb(var(--v-theme-primary))">THEN (next action)</span>
+            <VBtn v-if="!action.then" variant="text" size="x-small" prepend-icon="$plus" color="primary"
+              @click="patchAction(idx, { then: makeAction('navigation') })">
+              Add next action
+            </VBtn>
+            <VBtn v-else icon="$close" size="x-small" variant="text" color="error"
+              @click="patchAction(idx, { then: null })" />
+          </div>
+          <div v-if="action.then" class="then-slot">
+            <!-- Recursively render a single action using ActionBranch with one item -->
+            <ActionBranch :actions="[action.then]" :node-options="store.nodeOptions"
+              :available-variables="store.availableVariables" :api-integrations="store.apiIntegrations"
+              :custom-functions="store.customFunctions" :saved-responses="store.savedResponses"
+              @update:actions="patchAction(idx, { then: $event[0] ?? null })" />
+          </div>
+        </div>
+      </div><!-- /action-card loop -->
+
       <div class="ae-add-btn">
         <VBtn variant="outlined" rounded="lg" prepend-icon="$plus" color="primary" block @click="addAction">
           Add Action
         </VBtn>
       </div>
+
     </PerfectScrollbar>
 
     <!-- ── Footer ────────────────────────────────────────────────────────── -->
@@ -637,7 +699,7 @@ function close() { store.closeActionEditor(); }
   margin-top: 1px;
 }
 
-/* Scrollable body — PerfectScrollbar fills remaining height */
+/* Body */
 .ae-body {
   flex: 1;
   min-height: 0;
@@ -647,7 +709,6 @@ function close() { store.closeActionEditor(); }
   gap: 12px;
 }
 
-/* Empty */
 .ae-empty {
   display: flex;
   flex-direction: column;
@@ -667,6 +728,22 @@ function close() { store.closeActionEditor(); }
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.ae-add-btn {
+  padding: 4px 0 8px;
+  flex-shrink: 0;
+}
+
+/* Footer */
+.ae-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  flex-shrink: 0;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
 }
 
 /* Action card */
@@ -721,7 +798,7 @@ function close() { store.closeActionEditor(); }
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
-  transition: all 0.15s;
+  transition: all .15s;
   color: rgba(var(--v-theme-on-surface), 0.7);
   user-select: none;
   background: rgba(var(--v-theme-on-surface), 0.02);
@@ -744,31 +821,172 @@ function close() { store.closeActionEditor(); }
   display: block;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: .04em;
   text-transform: uppercase;
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin-bottom: 5px;
 }
 
-/* Add button */
-.ae-add-btn {
-  padding: 4px 0 8px;
-  flex-shrink: 0;
+/* Condition builder */
+.cond-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* Footer */
-.ae-footer {
+.cb-branch {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cb-branch--else {
+  border-style: dashed;
+  border-color: rgba(var(--v-theme-on-surface), 0.2);
+}
+
+.cb-branch__bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 20px;
-  flex-shrink: 0;
-  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  background: rgb(var(--v-theme-surface));
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(var(--v-theme-on-surface), 0.025);
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-/* ── API handlers ──────────────────────────────────────────────────────────── */
-.handlers-section {
+.cb-branch__body {
+  padding: 12px;
+}
+
+.cb-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+.cb-label--if {
+  background: rgba(var(--v-theme-primary), 0.12);
+  color: rgb(var(--v-theme-primary));
+}
+
+.cb-label--else {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.logic-toggle {
+  display: flex;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.logic-toggle button {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  transition: all .15s;
+}
+
+.logic-toggle button.active {
+  background: rgb(var(--v-theme-primary));
+  color: white;
+}
+
+.cb-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  margin-bottom: 8px;
+}
+
+.cb-section-label--then {
+  color: rgb(var(--v-theme-primary));
+}
+
+.cb-condition {
+  margin-bottom: 6px;
+}
+
+.cb-logic-pill {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 0;
+}
+
+.cb-logic-pill span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-primary), 0.1);
+  color: rgb(var(--v-theme-primary));
+}
+
+.cb-condition__row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(var(--v-theme-on-surface), 0.02);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+}
+
+.cb-condition__fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ctype-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ctype-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 16px;
+  border: 1.5px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: none;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  transition: all .15s;
+}
+
+.ctype-tab:hover {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.ctype-tab--active {
+  background: rgba(var(--v-theme-primary), 0.1);
+  border-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
+}
+
+/* API handlers */
+.response-handlers {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 10px;
   overflow: hidden;
@@ -783,27 +1001,31 @@ function close() { store.closeActionEditor(); }
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-.handler-card {
+.rh-card {
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-.handler-card:last-child {
+.rh-card:last-child {
   border-bottom: none;
 }
 
-.handler-card--default {
-  background: rgba(var(--v-theme-on-surface), 0.015);
+.rh-card--else {
+  border-style: dashed;
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.2);
+  border-radius: 8px;
+  margin: 0 8px 8px;
 }
 
-.handler-card__header {
+.rh-card__bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 12px;
+  padding: 8px 12px;
+  background: rgba(var(--v-theme-on-surface), 0.025);
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-.handler-card__body {
+.rh-card__body {
   padding: 10px 12px;
 }
 
@@ -813,86 +1035,5 @@ function close() { store.closeActionEditor(); }
   gap: 6px;
   margin-bottom: 6px;
   flex-wrap: wrap;
-}
-
-.handlers-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 20px;
-  text-align: center;
-}
-
-/* ── Nested actions (inline) ──────────────────────────────────────────────── */
-.nested-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.na-row {
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-left: 3px solid rgba(var(--v-theme-primary), 0.4);
-  border-radius: 8px;
-  background: rgba(var(--v-theme-on-surface), 0.01);
-  overflow: hidden;
-}
-
-.na-row__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-
-.na-type-pills {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.na-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  border: 1.5px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  background: none;
-  color: rgba(var(--v-theme-on-surface), 0.55);
-  transition: all 0.15s;
-}
-
-.na-pill:hover {
-  background: rgba(var(--v-theme-on-surface), 0.05);
-}
-
-.na-pill--active {
-  font-weight: 600;
-}
-
-.na-row__fields {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px;
-  flex-wrap: wrap;
-}
-
-.flex-1 {
-  flex: 1;
-  min-width: 120px;
-}
-
-.gap-2 {
-  gap: 8px;
-}
-
-.gap-3 {
-  gap: 12px;
 }
 </style>

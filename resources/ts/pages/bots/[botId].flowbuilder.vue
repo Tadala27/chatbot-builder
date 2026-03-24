@@ -173,6 +173,7 @@ async function loadBotFlows() {
     ]);
     bot.value = botRes.data.bot;
     flows.value = flowsRes.data.data ?? flowsRes.data;
+    apiIntegrations.value = botRes.data.bot.apis ?? [];
   } finally {
     isLoadingFlows.value = false;
   }
@@ -184,13 +185,15 @@ async function loadFlow(flowId: string) {
     await loadVersions(flowId);
     const best = pickBestVersion(flowVersions.value);
 
-    const [defaultRes, varsRes] = await Promise.all([
+    const [defaultRes, varsRes, funcRes] = await Promise.all([
       axios.get(`/api/bots/${botId.value}/flows/${flowId}/builder`),
       axios.get(`/api/bots/${botId.value}/flows/${flowId}/builder/variables`),
+      axios.get(`/api/bots/${botId.value}/flows/${flowId}/builder/functions`),
     ]);
 
     flow.value = defaultRes.data.flow;
-    availableVariables.value = (varsRes.data.variables ?? []).map((v: any) => v.name);
+    availableVariables.value = (varsRes.data.variables ?? []).map((v: any) => v.key);
+    customFunctions.value = (varsRes.data.functions ?? []).map((f: any) => f.name);
 
     const defaultVersionId = defaultRes.data.version?.id;
     if (best && best.id !== defaultVersionId) {
@@ -367,9 +370,13 @@ async function toggleHandoff(node: FlowNode) {
 async function openActionEditor(node: FlowNode, button?: any, row?: any) {
   if (!(await canEdit(flowVersion, createNewVersion))) return;
   actionEditorStore.openActionEditor({
-    targetNode: node, targetButton: button, targetRow: row,
-    availableVariables: availableVariables.value, savedResponses: savedResponses.value,
-    customFunctions: customFunctions.value, apiIntegrations: apiIntegrations.value,
+    targetNode: node,
+    targetButton: button,
+    targetRow: row,
+    availableVariables: availableVariables.value,
+    savedResponses: savedResponses.value,
+    customFunctions: customFunctions.value,
+    apiIntegrations: apiIntegrations.value,
     nodeOptions: nodeOptions.value,
   });
 }

@@ -9,6 +9,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     '[id].index': typeof import('./resources/ts/components/settings/[id].index.vue')['default']
     2: typeof import('./resources/ts/components/dashboards/AdminDashboard copy 2.vue')['default']
+    ActionBranch: typeof import('./resources/ts/components/bots/actions/ActionBranch.vue')['default']
     ActionEditor: typeof import('./resources/ts/components/bots/ActionEditor.vue')['default']
     AddNodeMenu: typeof import('./resources/ts/components/bots/AddNodeMenu.vue')['default']
     AdminDashboard: typeof import('./resources/ts/components/dashboards/AdminDashboard.vue')['default']
@@ -35,6 +36,7 @@ declare module 'vue' {
     ComponentTitle: typeof import('./resources/ts/@core/components/ComponentTitle.vue')['default']
     ConditionBranchBuilder: typeof import('./resources/ts/components/bots/actions/ConditionBranchBuilder.vue')['default']
     ConditionBranchesBuilder: typeof import('./resources/ts/components/flowbuilder/actions/ConditionBranchesBuilder.vue')['default']
+    Configuration: typeof import('./resources/ts/components/settings/configuration.vue')['default']
     ContactNode: typeof import('./resources/ts/components/bots/nodes/ContactNode.vue')['default']
     copy: typeof import('./resources/ts/components/scorecard/ScorecardDialogs copy.vue')['default']
     CustomFunctions: typeof import('./resources/ts/components/settings/custom-functions.vue')['default']
@@ -93,6 +95,7 @@ declare module 'vue' {
     SnackbarNotification: typeof import('./resources/ts/components/recruitment/SnackbarNotification.vue')['default']
     SuperAdminDashboard: typeof import('./resources/ts/components/dashboards/SuperAdminDashboard.vue')['default']
     SvgSprite: typeof import('./resources/ts/@core/components/SvgSprite.vue')['default']
+    TagVariableInput: typeof import('./resources/ts/components/TagVariableInput.vue')['default']
     TenantAdminDashboard: typeof import('./resources/ts/components/dashboards/TenantAdminDashboard.vue')['default']
     TenantDashboard: typeof import('./resources/ts/components/TenantDashboard.vue')['default']
     TenantHierarchy: typeof import('./resources/ts/components/organogram/TenantHierarchy.vue')['default']

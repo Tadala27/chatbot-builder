@@ -24,15 +24,39 @@ class VariableController extends Controller
     ];
 
 
-    public function index(Bot $bot): JsonResponse
+    public function index(Request $request, Bot $bot): JsonResponse
     {
         $this->authorizeBot($bot);
 
-        $custom = CustomVariable::where('bot_id', $bot->id)
-            ->orderBy('name')
-            ->get()
-            ->map(fn($v) => $this->formatVariable($v));
+        $query = CustomVariable::where('bot_id', $bot->id);
 
+        // SEARCH
+        if ($request->filled('search')) {
+            $s = $request->search;
+
+            $query->where(function ($q) use ($s) {
+                $q->where('name', 'like', "%{$s}%")
+                    ->orWhere('slug', 'like', "%{$s}%")
+                    ->orWhere('data_type', 'like', "%{$s}%");
+            });
+        }
+
+        // FILTERS
+        if ($request->filled('data_type')) {
+            $query->where('data_type', $request->data_type);
+        }
+
+        if ($request->filled('is_sensitive')) {
+            $query->where('is_sensitive', $request->boolean('is_sensitive'));
+        }
+
+        // SORT
+        $query->orderBy(
+            $request->get('sort', 'name'),
+            $request->get('direction', 'asc')
+        );
+
+        // SYSTEM VARIABLES
         $system = collect(self::SYSTEM_VARIABLES)->map(fn($s) => array_merge($s, [
             'id'            => null,
             'bot_id'        => $bot->id,
@@ -42,8 +66,33 @@ class VariableController extends Controller
             'default_value' => null,
         ]));
 
+        // ────── GET ALL VARIABLES ──────
+        if ($request->boolean('all')) {
+
+            $custom = $query->get()
+                ->map(fn($v) => $this->formatVariable($v));
+
+            return response()->json([
+                'data' => $system->concat($custom)->values()
+            ]);
+        }
+
+        // ────── PAGINATED VERSION ──────
+        $paginator = $query->paginate($request->get('per_page', 20));
+
+        $custom = collect($paginator->items())
+            ->map(fn($v) => $this->formatVariable($v));
+
         return response()->json([
-            'variables' => $system->concat($custom)->values(),
+            'data' => $system->concat($custom)->values(),
+            'pagination' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page'     => $paginator->perPage(),
+                'total'        => $paginator->total(),
+                'last_page'    => $paginator->lastPage(),
+                'from'         => $paginator->firstItem(),
+                'to'           => $paginator->lastItem(),
+            ]
         ]);
     }
 

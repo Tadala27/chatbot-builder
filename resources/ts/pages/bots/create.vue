@@ -98,7 +98,7 @@ const submit = async () => {
     const res = await axios.post("/api/bots", form.value);
     toast("Bot created successfully!");
     setTimeout(
-      () => router.push({ name: "bots-id-flowbuilder", params: { id: res.data.bot.id } }),
+      () => router.push({ name: "bots-bot-id-flowbuilder", params: { id: res.data.bot.id } }),
       800
     );
   } catch (e: any) {

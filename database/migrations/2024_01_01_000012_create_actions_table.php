@@ -28,6 +28,10 @@ return new class extends Migration
         Schema::create('actions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('dialog_id')->constrained('dialogs')->cascadeOnDelete();
+            $table->foreignId('then_action_id')
+                ->nullable()
+                ->constrained('actions')
+                ->nullOnDelete();
             $table->string('action_type', 50);
             $table->unsignedSmallInteger('action_order')->default(0);
             $table->json('config')->nullable(); // action-specific config payload

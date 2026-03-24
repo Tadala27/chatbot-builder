@@ -12,7 +12,11 @@ class Action extends Model
     use HasFactory;
 
     protected $fillable = [
-        'dialog_id', 'action_type', 'action_order', 'config', 'is_active',
+        'dialog_id',
+        'action_type',
+        'action_order',
+        'config',
+        'is_active',
     ];
 
     protected $casts = [
@@ -29,5 +33,10 @@ class Action extends Model
     public function conditions(): HasMany
     {
         return $this->hasMany(ActionCondition::class)->orderBy('condition_order');
+    }
+
+    public function thenAction(): BelongsTo
+    {
+        return $this->belongsTo(Action::class, 'then_action_id');
     }
 }

@@ -572,9 +572,6 @@ class WhatsAppMessageService
         $conversation->increment('message_count');
         $conversation->update(['last_message_at' => now()]);
 
-        // ── Real-time: push to Pusher so inbox shows bot messages instantly ──
-        // ShouldBroadcastNow fires synchronously — we are already inside a queue
-        // job (ProcessChatbotMessage), so no extra hop is needed.
         try {
             broadcast(new \App\Events\MessageSent($message, $conversation->fresh()));
         } catch (\Exception $e) {
@@ -603,12 +600,12 @@ class WhatsAppMessageService
         }
 
         return array_merge([
-            'user_name'        => $userName,
-            'phone_number'     => $to,
-            'current_date'     => now()->format('F j, Y'),
-            'current_time'     => now()->format('g:i A'),
-            'current_datetime' => now()->format('F j, Y g:i A'),
-            'day_of_week'      => now()->format('l'),
+            'userName'        => $userName,
+            'phoneNumber'     => $to,
+            'currentDate'     => now()->format('F j, Y'),
+            'currentDime'     => now()->format('g:i A'),
+            'currentDatetime' => now()->format('F j, Y g:i A'),
+            'dayOfWeek'      => now()->format('l'),
             'month'            => now()->format('F'),
             'year'             => now()->format('Y'),
         ], $variables);

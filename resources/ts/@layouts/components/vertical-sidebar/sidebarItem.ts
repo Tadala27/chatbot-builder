@@ -89,12 +89,12 @@ const rawSidebarItems: MenuItem[] = [
     children: [
       {
         title: "All Chatbots",
-        to: "/chatbots",
+        to: "/bots",
         permissions: ["view chatbots"],
       },
       {
         title: "Create Chatbot",
-        to: "/chatbots/create",
+        to: "/bots/create",
         permissions: ["create chatbots"],
       },
       {
