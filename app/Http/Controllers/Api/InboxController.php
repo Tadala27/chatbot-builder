@@ -9,7 +9,7 @@ use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Tenant;
 use App\Models\WhatsappAccount;
-use App\Services\WhatsAppMessageService;
+use App\Services\Bot\WhatsAppMessageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 

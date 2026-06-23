@@ -1,3 +1,4 @@
+// layouts/components/vertical-sidebar/sidebarItem.ts
 import { computed } from "vue";
 import { useUserStore } from "@/stores/user";
 
@@ -30,428 +31,206 @@ export interface MenuItem {
 // ============================================================================
 
 const rawSidebarItems: MenuItem[] = [
-  // ========================================================================
-  // DASHBOARD
-  // ========================================================================
+  // ── Dashboard — no restrictions, route has no meta.permissions/roles ────
   {
     title: "Dashboard",
     icon: "$home",
     to: "/dashboard",
   },
 
-  // ========================================================================
-  // SUPER ADMIN ONLY - Tenant Management
-  // ========================================================================
+  // ── Administration — Tenants (super-admin only, per route meta) ────────
   {
     title: "Tenants",
     icon: "$homeCity",
-    to: "/admin/tenants",
-    roles: ["super-admin"],
-    permissions: ["view tenants", "create tenants"],
-    permissionLogic: "OR",
+    to: "/administration/tenants",
+    roles: ["super-admin", "admin"],
   },
 
-  // ========================================================================
-  // WHATSAPP ACCOUNTS
-  // ========================================================================
+  // ── Administration — Users ──────────────────────────────────────────────
   {
-    title: "WhatsApp Accounts",
-    icon: "$whatsapp",
-    to: "/whatsapp",
-    permissions: ["view whatsapp-accounts"],
-    children: [
-      {
-        title: "Connected Accounts",
-        to: "/whatsapp/accounts",
-        permissions: ["view whatsapp-accounts"],
-      },
-      {
-        title: "Connect New Account",
-        to: "/whatsapp/connect",
-        permissions: ["connect whatsapp-accounts"],
-      },
-      {
-        title: "Account Health",
-        to: "/whatsapp/health",
-        permissions: ["view whatsapp-accounts"],
-      },
-    ],
+    title: "Admin Users",
+    icon: "$accountGroup",
+    to: "/administration/users",
+    permissions: ["view users"],
   },
 
-  // ========================================================================
-  // CHATBOTS
-  // ========================================================================
+  // ── Chatbots ─────────────────────────────────────────────────────────────
   {
     title: "Chatbots",
     icon: "$robot",
     to: "/chatbots",
     permissions: ["view chatbots"],
-    children: [
-      {
-        title: "All Chatbots",
-        to: "/bots",
-        permissions: ["view chatbots"],
-      },
-      {
-        title: "Create Chatbot",
-        to: "/bots/create",
-        permissions: ["create chatbots"],
-      },
-      {
-        title: "Published Bots",
-        to: "/chatbots/published",
-        permissions: ["view chatbots"],
-      },
-      {
-        title: "Draft Bots",
-        to: "/chatbots/drafts",
-        permissions: ["view chatbots"],
-      },
-    ],
   },
 
-  // ========================================================================
-  // CONVERSATIONS
-  // ========================================================================
+  // ── Variables ────────────────────────────────────────────────────────────
+  {
+    title: "Variables",
+    icon: "$variable",
+    to: "/variables",
+    permissions: ["view variables"],
+  },
+
+  // ── Functions ────────────────────────────────────────────────────────────
+  {
+    title: "Functions",
+    icon: "$codeJson",
+    to: "/functions",
+    permissions: ["view functions"],
+  },
+
+  // ── WhatsApp Accounts ────────────────────────────────────────────────────
+  {
+    title: "WhatsApp Accounts",
+    icon: "$whatsapp",
+    to: "/whatsapp-accounts",
+    permissions: ["view whatsapp-accounts"],
+  },
+
+  // ── Conversations ────────────────────────────────────────────────────────
   {
     title: "Conversations",
     icon: "$chatOutline",
     to: "/conversations",
     permissions: ["view conversations"],
-    children: [
-      {
-        title: "All Conversations",
-        to: "/conversations",
-        permissions: ["view conversations"],
-      },
-      {
-        title: "Active",
-        to: "/conversations/active",
-        permissions: ["view conversations"],
-      },
-      {
-        title: "Completed",
-        to: "/conversations/completed",
-        permissions: ["view conversations"],
-      },
-      {
-        title: "Handed Off",
-        to: "/conversations/handoff",
-        permissions: ["view conversations", "handoff conversations"],
-        permissionLogic: "OR",
-      },
-    ],
   },
 
-  // ========================================================================
-  // ANALYTICS & REPORTS
-  // ========================================================================
+  // ── Analytics ────────────────────────────────────────────────────────────
   {
     title: "Analytics",
     icon: "$chartLine",
     to: "/analytics",
     permissions: ["view analytics"],
-    children: [
-      {
-        title: "Overview",
-        to: "/analytics/overview",
-        permissions: ["view analytics"],
-      },
-      {
-        title: "Chatbot Performance",
-        to: "/analytics/chatbots",
-        permissions: ["view analytics"],
-      },
-      {
-        title: "Conversation Metrics",
-        to: "/analytics/conversations",
-        permissions: ["view analytics"],
-      },
-      {
-        title: "Popular Paths",
-        to: "/analytics/paths",
-        permissions: ["view detailed-analytics"],
-      },
-      {
-        title: "Drop-off Points",
-        to: "/analytics/dropoff",
-        permissions: ["view detailed-analytics"],
-      },
-      {
-        title: "Export Data",
-        to: "/analytics/export",
-        permissions: ["export analytics"],
-      },
-    ],
   },
 
-  // ========================================================================
-  // VARIABLES & FUNCTIONS
-  // ========================================================================
+  // ── Integrations ─────────────────────────────────────────────────────────
   {
-    title: "Development",
-    icon: "$codeJson",
-    to: "/development",
-    permissions: ["view variables", "view functions"],
-    permissionLogic: "OR",
-    children: [
-      {
-        title: "Global Variables",
-        to: "/variables/global",
-        permissions: ["view variables"],
-      },
-      {
-        title: "Custom Functions",
-        to: "/functions",
-        permissions: ["view functions"],
-      },
-      {
-        title: "Built-in Functions",
-        to: "/functions/built-in",
-        permissions: ["view functions"],
-      },
-      {
-        title: "API Integrations",
-        to: "/integrations",
-        permissions: ["view integrations"],
-      },
-    ],
+    title: "Integrations",
+    icon: "$apiOff",
+    to: "/integrations",
+    permissions: ["view integrations"],
   },
 
-  // ========================================================================
-  // MESSAGE TEMPLATES
-  // ========================================================================
+  // ── Templates ────────────────────────────────────────────────────────────
   {
     title: "Templates",
     icon: "$fileDocument",
     to: "/templates",
     permissions: ["view templates"],
-    children: [
-      {
-        title: "All Templates",
-        to: "/templates",
-        permissions: ["view templates"],
-      },
-      {
-        title: "Create Template",
-        to: "/templates/create",
-        permissions: ["create templates"],
-      },
-      {
-        title: "Pending Approval",
-        to: "/templates/pending",
-        permissions: ["submit templates"],
-      },
-    ],
   },
 
-  // ========================================================================
-  // TEAM MANAGEMENT
-  // ========================================================================
+  // ── Webhooks ─────────────────────────────────────────────────────────────
   {
-    title: "Team",
-    icon: "$accountGroup",
-    to: "/team",
-    permissions: ["view users"],
-    roles: ["tenant-admin", "super-admin"],
-    roleLogic: "OR",
-    children: [
-      {
-        title: "Team Members",
-        to: "/team/members",
-        permissions: ["view users"],
-      },
-      {
-        title: "Invite User",
-        to: "/team/invite",
-        permissions: ["invite users"],
-      },
-      {
-        title: "Roles & Permissions",
-        to: "/team/roles",
-        permissions: ["assign roles"],
-      },
-    ],
+    title: "Webhooks",
+    icon: "$webhook",
+    to: "/webhooks",
+    permissions: ["view webhooks"],
+  },
+  // ── Webhooks ─────────────────────────────────────────────────────────────
+  {
+    title: "Webhook Connector",
+    icon: "$webhook",
+    to: "/webhooks/connector",
+    permissions: ["view webhooks"],
   },
 
-  // ========================================================================
-  // SETTINGS
-  // ========================================================================
+  { divider: true },
+
+  // ── Settings ─────────────────────────────────────────────────────────────
   {
     title: "Settings",
     icon: "$cog",
     to: "/settings",
     permissions: ["view settings"],
-    children: [
-      {
-        title: "General Settings",
-        to: "/settings/general",
-        permissions: ["manage settings"],
-      },
-      {
-        title: "Subscription",
-        to: "/settings/subscription",
-        permissions: ["manage billing"],
-        roles: ["tenant-admin"],
-      },
-      {
-        title: "Notifications",
-        to: "/settings/notifications",
-        permissions: ["view settings"],
-      },
-      {
-        title: "API Keys",
-        to: "/settings/api-keys",
-        permissions: ["manage settings"],
-        roles: ["tenant-admin"],
-      },
-    ],
   },
 
-  // ========================================================================
-  // MY PROFILE
-  // ========================================================================
+  // ── My Profile — no restrictions ────────────────────────────────────────
   {
     title: "My Profile",
     icon: "$account",
     to: "/profile",
   },
-
-  // ========================================================================
-  // ACTIVITY LOG (Admin Only)
-  // ========================================================================
-  {
-    title: "Activity Log",
-    icon: "$history",
-    to: "/activity-log",
-    permissions: ["view settings"],
-    roles: ["tenant-admin", "super-admin"],
-    roleLogic: "OR",
-  },
 ];
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Extract permission names from user permissions array
- */
-function extractPermissionNames(permissions: any[]): string[] {
-  if (!Array.isArray(permissions)) return [];
-  return permissions.map((p) => (typeof p === "string" ? p : p.name));
-}
-
-/**
- * Check if conditions match using AND/OR logic
- */
-function checkConditions(
-  requiredItems: string[],
-  availableItems: string[],
-  logic: "AND" | "OR" = "AND",
-): boolean {
-  if (requiredItems.length === 0) return true;
-
-  return logic === "OR"
-    ? requiredItems.some((item) => availableItems.includes(item))
-    : requiredItems.every((item) => availableItems.includes(item));
-}
 
 // ============================================================================
 // PERMISSION & ROLE CHECKING
 // ============================================================================
+//
+// Delegates entirely to the user store's own normalised helpers
+// (hasRole / hasAnyRole / hasPermission / isSuperAdmin) rather than
+// re-extracting role/permission names here. The store already knows how to
+// handle both string[] and {name}[] shapes from different backends — see
+// stores/user.ts's toRoleNames/toPermNames.
 
-/**
- * Check if user has required permissions
- */
-function hasRequiredPermissions(
-  item: MenuItem,
-  userPermissions: string[],
-): boolean {
+function hasRequiredPermissions(item: MenuItem): boolean {
   if (!item.permissions?.length) return true;
 
+  const userStore = useUserStore();
   const logic = item.permissionLogic || "AND";
-  return checkConditions(item.permissions, userPermissions, logic);
+
+  return logic === "OR"
+    ? item.permissions.some((p) => userStore.hasPermission(p))
+    : item.permissions.every((p) => userStore.hasPermission(p));
 }
 
-/**
- * Check if user has required roles
- */
-function hasRequiredRoles(item: MenuItem, userRoles: string[]): boolean {
+function hasRequiredRoles(item: MenuItem): boolean {
   if (!item.roles?.length) return true;
 
+  const userStore = useUserStore();
+
+  if (userStore.isSuperAdmin) return true; // super-admin bypasses role gates everywhere
+
   const logic = item.roleLogic || "OR";
-  return checkConditions(item.roles, userRoles, logic);
+
+  return logic === "OR"
+    ? item.roles.some((r) => userStore.hasRole(r))
+    : item.roles.every((r) => userStore.hasRole(r));
 }
 
 /**
- * Main access check - combines roles AND permissions
+ * Main access check — combines roles AND permissions.
+ *
+ * - No requirements at all → visible to everyone.
+ * - Only roles specified    → must satisfy the role check.
+ * - Only permissions        → must satisfy the permission check.
+ * - Both specified          → either check passing is enough (matches the
+ *   route guard's own OR-between-role-and-permission-blocks behaviour).
  */
-function hasAccess(
-  item: MenuItem,
-  userRoles: string[],
-  userPermissions: string[],
-): boolean {
-  const hasRoleRequirement = item.roles && item.roles.length > 0;
-  const hasPermissionRequirement =
-    item.permissions && item.permissions.length > 0;
+function hasAccess(item: MenuItem): boolean {
+  const userStore = useUserStore();
 
-  // No requirements = everyone can access
-  if (!hasRoleRequirement && !hasPermissionRequirement) {
-    return true;
-  }
+  if (userStore.isSuperAdmin) return true;
 
-  // Only role check
-  if (hasRoleRequirement && !hasPermissionRequirement) {
-    return hasRequiredRoles(item, userRoles);
-  }
+  const hasRoleRequirement = !!item.roles?.length;
+  const hasPermissionRequirement = !!item.permissions?.length;
 
-  // Only permission check
-  if (!hasRoleRequirement && hasPermissionRequirement) {
-    return hasRequiredPermissions(item, userPermissions);
-  }
+  if (!hasRoleRequirement && !hasPermissionRequirement) return true;
+  if (hasRoleRequirement && !hasPermissionRequirement)
+    return hasRequiredRoles(item);
+  if (!hasRoleRequirement && hasPermissionRequirement)
+    return hasRequiredPermissions(item);
 
-  // Both specified: User needs EITHER correct role OR correct permission
-  const roleCheck = hasRequiredRoles(item, userRoles);
-  const permissionCheck = hasRequiredPermissions(item, userPermissions);
-
-  return roleCheck || permissionCheck;
+  return hasRequiredRoles(item) || hasRequiredPermissions(item);
 }
 
 // ============================================================================
 // MENU FILTERING
 // ============================================================================
 
-/**
- * Filter menu items recursively based on permissions and roles
- */
-function filterMenuItems(
-  items: MenuItem[],
-  userRoles: string[],
-  userPermissions: string[],
-): MenuItem[] {
+function filterMenuItems(items: MenuItem[]): MenuItem[] {
   return items
-    .filter((item) => {
-      return hasAccess(item, userRoles, userPermissions);
-    })
+    .filter((item) => item.divider || hasAccess(item))
     .map((item) => {
       if (!item.children?.length) return item;
 
-      // Recursively filter children
-      const filteredChildren = filterMenuItems(
-        item.children,
-        userRoles,
-        userPermissions,
-      );
+      const filteredChildren = filterMenuItems(item.children);
 
-      // If parent has no valid children, hide it
-      if (filteredChildren.length === 0) {
-        return null;
-      }
+      // Hide a parent that has children defined but none are visible —
+      // a parent with NO children defined (most items above) is unaffected.
+      if (filteredChildren.length === 0) return null;
 
       return { ...item, children: filteredChildren };
     })
-    .filter(Boolean) as MenuItem[];
+    .filter((item): item is MenuItem => item !== null);
 }
 
 // ============================================================================
@@ -461,25 +240,14 @@ function filterMenuItems(
 export const sidebarItems = computed(() => {
   const userStore = useUserStore();
 
-  // 1. If we have a token but user not loaded → trigger fetch (non-blocking)
-  if (userStore.token && !userStore.isLoaded && !userStore.isLoading) {
-    userStore.fetchUser().catch(() => {
-      // Silently fail — navigation guard will redirect anyway
-    });
-  }
-
-  // 2. While loading or not ready → return empty menu (no flicker)
-  if (!userStore.isLoaded || !userStore.user) {
+  // Not logged in yet, or session still rehydrating — render nothing rather
+  // than flash an unfiltered menu. The route guard (router.ts) is what
+  // actually triggers fetchMe(); this computed just waits for that to land.
+  if (!userStore.isLoggedIn) {
     return [];
   }
 
-  // 3. User is fully loaded → build menu
-  const userPermissions = extractPermissionNames(
-    userStore.user?.permissions || [],
-  );
-  const userRoles = userStore.user?.roles || [];
-
-  return filterMenuItems(rawSidebarItems, userRoles, userPermissions);
+  return filterMenuItems(rawSidebarItems);
 });
 
 // ============================================================================
@@ -490,54 +258,18 @@ export const useFilteredMenu = () => {
   const userStore = useUserStore();
 
   const refreshMenu = async () => {
-    if (!userStore.isLoaded || !userStore.user) {
-      await userStore.fetchUser();
+    if (!userStore.isLoggedIn) {
+      await userStore.fetchMe();
     }
     return sidebarItems.value;
-  };
-
-  const getUserPermissions = (): string[] => {
-    return extractPermissionNames(userStore.user?.permissions || []);
-  };
-
-  const getUserRoles = (): string[] => {
-    return userStore.user?.roles || [];
-  };
-
-  const hasPermission = (permission: string): boolean => {
-    const permissions = getUserPermissions();
-    return permissions.includes(permission);
-  };
-
-  const hasAnyPermission = (permissions: string[]): boolean => {
-    const userPermissions = getUserPermissions();
-    return permissions.some((p) => userPermissions.includes(p));
-  };
-
-  const hasAllPermissions = (permissions: string[]): boolean => {
-    const userPermissions = getUserPermissions();
-    return permissions.every((p) => userPermissions.includes(p));
-  };
-
-  const hasRole = (role: string): boolean => {
-    return getUserRoles().includes(role);
-  };
-
-  const hasAnyRole = (roles: string[]): boolean => {
-    const userRoles = getUserRoles();
-    return roles.some((r) => userRoles.includes(r));
   };
 
   return {
     sidebarItems,
     refreshMenu,
-    getUserPermissions,
-    getUserRoles,
-    hasPermission,
-    hasAnyPermission,
-    hasAllPermissions,
-    hasRole,
-    hasAnyRole,
+    hasPermission: userStore.hasPermission,
+    hasAnyRole: userStore.hasAnyRole,
+    hasRole: userStore.hasRole,
   };
 };
 

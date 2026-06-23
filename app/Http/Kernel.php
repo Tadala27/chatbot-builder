@@ -6,67 +6,109 @@ use Illuminate\Foundation\Http\Kernel as HttpKernel;
 
 class Kernel extends HttpKernel
 {
-    /**
-     * The application's global HTTP middleware stack.
-     *
-     * These middleware are run during every request to your application.
-     *
-     * @var array<int, class-string|string>
-     */
+    // ── Global middleware — runs on every request ─────────────────────────────
     protected $middleware = [
-        // \App\Http\Middleware\TrustHosts::class,
-        \App\Http\Middleware\TrustProxies::class,
+        Middleware\TrustProxies::class,
         \Illuminate\Http\Middleware\HandleCors::class,
-        \App\Http\Middleware\PreventRequestsDuringMaintenance::class,
+        Middleware\PreventRequestsDuringMaintenance::class,
         \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
-        \App\Http\Middleware\TrimStrings::class,
+        Middleware\TrimStrings::class,
         \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
     ];
 
-    /**
-     * The application's route middleware groups.
-     *
-     * @var array<string, array<int, class-string|string>>
-     */
+    // ── Middleware groups ─────────────────────────────────────────────────────
     protected $middlewareGroups = [
         'web' => [
-            \App\Http\Middleware\EncryptCookies::class,
+            Middleware\EncryptCookies::class,
             \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
             \Illuminate\Session\Middleware\StartSession::class,
             \Illuminate\View\Middleware\ShareErrorsFromSession::class,
-            \App\Http\Middleware\VerifyCsrfToken::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
 
+        // ── Central API (/api/*) ──────────────────────────────────────────────
         'api' => [
-            \App\Http\Middleware\AddTenantToStatefulDomains::class, // Add this
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
-            'throttle:api',
-            \Illuminate\Routing\Middleware\ThrottleRequests::class . ':api',
+            Middleware\ForceJsonResponse::class,
+            Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            Middleware\AuthenticateSession::class,
+            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
-            \App\Http\Middleware\ThrottleLogins::class,
+            Middleware\LogActivity::class,
+        ],
+
+        // ── Tenant API (/tenant/*) ────────────────────────────────────────────
+        //
+        'tenant' => [
+            Middleware\ForceJsonResponse::class,
+            Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            Middleware\AuthenticateSession::class,
+            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            Middleware\LogActivity::class,
         ],
     ];
 
-    /**
-     * The application's middleware aliases.
-     *
-     * Aliases may be used instead of class names to conveniently assign middleware to routes and groups.
-     *
-     * @var array<string, class-string|string>
-     */
+    // ── Route middleware aliases ───────────────────────────────────────────────
     protected $middlewareAliases = [
-        'auth' => \App\Http\Middleware\Authenticate::class,
+        // Laravel built-ins
+        'auth' => Middleware\Authenticate::class,
         'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
         'auth.session' => \Illuminate\Session\Middleware\AuthenticateSession::class,
         'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
         'can' => \Illuminate\Auth\Middleware\Authorize::class,
-        'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
+        'guest' => Middleware\RedirectIfAuthenticated::class,
         'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
         'precognitive' => \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
-        'signed' => \App\Http\Middleware\ValidateSignature::class,
+        'signed' => Middleware\ValidateSignature::class,
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
-        'tenant' => \App\Http\Middleware\TenantMiddleware::class,
+
+        // Spatie Permission
+        'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
+        'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
+        'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
+
+        // Stancl Tenancy
+        'tenancy' => \Stancl\Tenancy\Middleware\InitializeTenancyByDomain::class,
+        'tenant.subdomain' => \Stancl\Tenancy\Middleware\InitializeTenancyBySubdomain::class,
+        'prevent.central' => \Stancl\Tenancy\Middleware\PreventAccessFromCentralDomains::class,
+
+        // App-specific — kept as opt-in aliases, not in the default group stack
+        'domain.redirect' => Middleware\RedirectByDomain::class,
+        'check.user.type' => Middleware\CheckUserType::class,
+        'auth.system' => Middleware\AuthenticateSystemGuard::class,
+        'auth.tenant' => Middleware\AuthenticateTenantGuard::class,
+        'connector.auth' => Middleware\ResolveTenantFromConnectorKey::class,
+    ];
+
+    // ── Middleware priority ───────────────────────────────────────────────────
+    //
+    // CRITICAL: tenancy middleware MUST run before StartSession. If session
+    // starts first it opens on the wrong (landlord) database, the session
+    // row isn't found there, and every request after login looks
+    // unauthenticated.
+    protected $middlewarePriority = [
+        \Illuminate\Http\Middleware\HandleCors::class,
+        Middleware\EncryptCookies::class,
+        \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+
+        \Stancl\Tenancy\Middleware\PreventAccessFromCentralDomains::class,
+        \Stancl\Tenancy\Middleware\InitializeTenancyByDomain::class,
+        \Stancl\Tenancy\Middleware\InitializeTenancyBySubdomain::class,
+        \Stancl\Tenancy\Middleware\InitializeTenancyByDomainOrSubdomain::class,
+        \Stancl\Tenancy\Middleware\InitializeTenancyByPath::class,
+        \Stancl\Tenancy\Middleware\InitializeTenancyByRequestData::class,
+
+        \Illuminate\Session\Middleware\StartSession::class,
+
+        \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
+        \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        \Spatie\Permission\Middleware\PermissionMiddleware::class,
+        \Spatie\Permission\Middleware\RoleMiddleware::class,
     ];
 }

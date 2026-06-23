@@ -10,17 +10,6 @@ use App\Models\Flow;
 use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-
-/**
- * Key schema corrections from the original:
- *  - analytics_events has NO node_id column. Events store metadata in JSON.
- *  - Event types for dialog entry/exit are 'dialog_entered' / 'dialog_completed'
- *    (not node_entered/node_completed). The column in metadata->dialog_id carries
- *    the dialog reference where needed.
- *  - Flows belong to Bots, not directly to Tenants. Tenant scoping goes via
- *    conversations.tenant_id (conversations still carry tenant_id directly).
- *  - "top_flows" replaces "top_chatbots".
- */
 class AnalyticsController extends Controller
 {
     // =========================================================================

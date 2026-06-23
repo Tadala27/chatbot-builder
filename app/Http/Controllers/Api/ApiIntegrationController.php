@@ -11,17 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
 
-/**
- * API integrations scoped to a Bot.
- * Routes (all under prefix /api/bots/{bot}/apis):
- *   GET    /              → index
- *   POST   /              → store
- *   GET    /{api}         → show
- *   PUT    /{api}         → update
- *   DELETE /{api}         → destroy
- *   POST   /{api}/test    → test
- *   POST   /test-draft    → testDraft   (test before saving)
- */
+
 class ApiIntegrationController extends Controller
 {
     // ── CRUD ─────────────────────────────────────────────────────────────────

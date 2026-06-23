@@ -18,6 +18,36 @@ class Handler extends ExceptionHandler
         'password_confirmation',
     ];
 
+    public function render($request, Throwable $e)
+{
+    if ($request->is('api/*') || $request->is('tenant/*') || $request->expectsJson()) {
+
+        if ($e instanceof \Illuminate\Auth\AuthenticationException) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if ($e instanceof \Spatie\Permission\Exceptions\UnauthorizedException) {
+            return response()->json(['message' => 'Access denied. You do not have the required permission.'], 403);
+        }
+
+        if ($e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {
+            return response()->json(['message' => class_basename($e->getModel()).' not found.'], 404);
+        }
+
+        if ($e instanceof \Illuminate\Validation\ValidationException) {
+            $errorMessages = [];
+            foreach ($e->errors() as $field => $messages) {
+                $errorMessages[] = $field.': '.implode(', ', $messages);
+            }
+            return response()->json([
+                'message' => 'Validation failed: '.implode('; ', $errorMessages),
+                'errors'  => $e->errors(),
+            ], 422);
+        }
+    }
+
+    return parent::render($request, $e);
+}
     /**
      * Register the exception handling callbacks for the application.
      */

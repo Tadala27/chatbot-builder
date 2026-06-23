@@ -1,10 +1,10 @@
 <script lang="ts" setup>
-import { onMounted, watch, computed } from "vue";
-import { useTheme } from "vuetify";
+import { ref, onMounted, watch, computed } from "vue";
+import { useTheme, useDisplay } from "vuetify";
 import LoaderWrapper from "./components/LoaderWrapper.vue";
-import ActionEditor from "./components/ActionEditor.vue"; // ✅ ADD THIS
-// import Customizer from "./components/CustomizerPanel.vue"; // ✅ ADD THIS
-import VerticalSidebarVue from "./components/VerticalSidebar.vue";
+import ActionEditor from "./components/ActionEditor.vue";
+// import Customizer from "./components/CustomizerPanel.vue";
+import IconSidebar from "./components/IconSidebar.vue";
 import VerticalHeaderVue from "./components/VerticalHeader.vue";
 import HorizontalSidebar from "./components/HorizontalSidebar.vue";
 import HorizontalHeader from "./components/HorizontalHeader.vue";
@@ -14,6 +14,7 @@ import { DirAttrSet, HexToRgb } from "@/utils/utils";
 
 const theme = useTheme();
 const customizer = useCustomizerStore();
+const { lgAndUp } = useDisplay();
 
 // Set the initial direction attribute when the component is mounted
 onMounted(() => {
@@ -35,42 +36,70 @@ const dynamicStyle = computed(() => ({
   "--v-theme-lightprimary": HexToRgb(theme.current.value.colors.lightprimary),
 }));
 
-// Method to conditionally apply the preset class
 const getStyleObject = () => {
-  // Define your condition here, for example:
-  const condition = true; // Replace this with your actual condition
+  const condition = true;
   return condition ? dynamicStyle.value : {};
 };
+
+const mobileDrawer = ref(false);
 </script>
 
 <template>
   <VLocaleProvider :rtl="customizer.isRtl">
-    <VApp :style="getStyleObject()" :theme="customizer.actTheme" :class="[
-      customizer.actTheme,
-      customizer.fontTheme,
-      customizer.miniSidebar ? 'mini-sidebar' : '',
-      customizer.isHorizontalLayout ? 'horizontalLayout' : 'verticalLayout',
-      customizer.inputBg ? 'inputWithbg' : '',
-      customizer.themeContrast ? 'contrast' : '',
-    ]">
-      <!-- ✅ ADD ACTION EDITOR DRAWER HERE - Same level as Customizer -->
+    <VApp
+      :style="getStyleObject()"
+      :theme="customizer.actTheme"
+      :class="[
+        customizer.actTheme,
+        customizer.fontTheme,
+        customizer.miniSidebar ? 'mini-sidebar' : '',
+        customizer.isHorizontalLayout ? 'horizontalLayout' : 'verticalLayout',
+        customizer.inputBg ? 'inputWithbg' : '',
+        customizer.themeContrast ? 'contrast' : '',
+      ]"
+    >
+      <!-- Action editor drawer — same level as Customizer -->
       <ActionEditor />
-
       <!-- <Customizer /> -->
-      <VerticalSidebarVue v-if="!customizer.isHorizontalLayout" />
-      <VerticalHeaderVue v-if="!customizer.isHorizontalLayout" />
-      <HorizontalHeader v-if="customizer.isHorizontalLayout" />
-      <HorizontalSidebar v-if="customizer.isHorizontalLayout" />
 
-      <VMain class="page-wrapper">
+      <!-- ── Vertical layout: icon sidebar + header ────────────────────── -->
+      <template v-if="!customizer.isHorizontalLayout">
+        <!-- Desktop: permanent icon sidebar -->
+        <IconSidebar v-if="lgAndUp" />
+
+        <!-- Mobile: icon sidebar inside a temporary drawer -->
+        <VNavigationDrawer
+          v-if="!lgAndUp"
+          v-model="mobileDrawer"
+          temporary
+          width="56"
+        >
+          <IconSidebar
+            style="position: static; box-shadow: none; border-right: none"
+          />
+        </VNavigationDrawer>
+
+        <VerticalHeaderVue @s-toggle="mobileDrawer = !mobileDrawer" />
+      </template>
+
+      <!-- ── Horizontal layout: unchanged ───────────────────────────────── -->
+      <template v-else>
+        <HorizontalHeader />
+        <HorizontalSidebar />
+      </template>
+      <VMain
+        class="page-wrapper"
+        :style="
+          !customizer.isHorizontalLayout && lgAndUp ? 'padding-left: 30px;' : ''
+        "
+      >
         <VContainer fluid>
           <div :class="customizer.boxed ? 'maxWidth' : ''">
-            <!-- Loader start -->
             <LoaderWrapper />
-            <!-- Loader end -->
             <RouterView />
           </div>
         </VContainer>
+
         <VContainer fluid class="pt-0">
           <div :class="customizer.boxed ? 'maxWidth' : ''">
             <FooterPanel />

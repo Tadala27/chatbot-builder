@@ -1,7 +1,6 @@
 <?php
 
 return [
-
     /*
     |--------------------------------------------------------------------------
     | Third Party Services
@@ -43,4 +42,19 @@ return [
         'app_secret' => env('FACEBOOK_APP_SECRET'),
         'redirect_uri' => env('FACEBOOK_REDIRECT_URI'),
     ],
+    'meta' => [
+        'api_version' => env('META_API_VERSION', 'v21.0'),
+        'tech_provider_token' => env('META_TECH_PROVIDER_TOKEN'),
+        'business_id' => env('META_BUSINESS_ID'),
+        'tech_provider_waba_id' => env('META_TECH_PROVIDER_WABA_ID'),
+        'app_secret' => env('META_APP_SECRET'), // used by WebhookController signature verification
+    ],
+
+    // 'meta' => [
+    //     'app_id' => env('META_APP_ID'),
+    //     'app_secret' => env('META_APP_SECRET'),
+    //     'redirect_uri' => env('FACEBOOK_REDIRECT_URI'),
+    //     'api_version' => env('WHATSAPP_API_VERSION', 'v21.0'),
+    //     'app_secret' => env('WHATSAPP_APP_SECRET'),
+    // ],
 ];

@@ -7,7 +7,7 @@ use App\Models\Bot;
 use App\Models\BuiltInFunction;
 use App\Models\CustomFunction;
 use App\Models\Tenant;
-use App\Services\FunctionExecutor;
+use App\Services\Bot\FunctionExecutor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;

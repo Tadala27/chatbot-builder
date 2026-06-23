@@ -12,8 +12,6 @@ use Illuminate\Http\Request;
 
 class BotDialogController extends Controller
 {
-
-
     public function index(Bot $bot): JsonResponse
     {
         $this->authorizeBot($bot);

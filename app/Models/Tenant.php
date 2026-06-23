@@ -2,54 +2,88 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
-use Spatie\Activitylog\LogOptions;
-use Spatie\Activitylog\Traits\LogsActivity;
-use Spatie\Multitenancy\Models\Tenant as SpatieTenant;
+use Stancl\Tenancy\Contracts\TenantWithDatabase;
+use Stancl\Tenancy\Database\Concerns\HasDatabase;
+use Stancl\Tenancy\Database\Concerns\HasDomains;
+use Stancl\Tenancy\Database\Models\Tenant as BaseTenant;
+use Stancl\Tenancy\DatabaseConfig;
 
-class Tenant extends SpatieTenant
+class Tenant extends BaseTenant implements TenantWithDatabase
 {
-    use HasFactory, SoftDeletes, LogsActivity;
+    use HasDatabase;
+    use HasDomains;
+
+    public static function getCustomColumns(): array
+    {
+        return [
+            'id',
+            'name',
+            'db_schema',
+            'deployment_mode',
+            'slug',
+            'is_active',
+            'subscription_tier',
+            'subscription_expires_at',
+            'max_flows',
+            'max_conversations_per_month',
+        ];
+    }
 
     protected $fillable = [
+        'id',
         'name',
+        'db_schema',
+        'deployment_mode',                         // data bag
         'slug',
-        'domain',
-        'database',
         'is_active',
         'subscription_tier',
         'subscription_expires_at',
         'max_flows',
         'max_conversations_per_month',
-        'settings',
+        'settings',                     // data bag
     ];
 
     protected $casts = [
-        'is_active'                => 'boolean',
-        'subscription_expires_at'  => 'datetime',
-        'settings'                 => 'array',
-        'max_flows'                => 'integer',
+        'is_active' => 'boolean',
+        'subscription_expires_at' => 'datetime',
+        'settings' => 'array',
+        'max_flows' => 'integer',
         'max_conversations_per_month' => 'integer',
     ];
 
-    public function getActivitylogOptions(): LogOptions
+    protected static function booted(): void
     {
-        return LogOptions::defaults()
-            ->logOnly(['name', 'slug', 'is_active', 'subscription_tier'])
-            ->logOnlyDirty()
-            ->dontSubmitEmptyLogs();
+        // Override the global DB name generator so ALL tenants use db_schema.
+        DatabaseConfig::generateDatabaseNamesUsing(
+            fn (TenantWithDatabase $tenant) => $tenant->db_schema
+        );
+
+        // When a tenant is loaded, sync db_schema → internal db_name
+        static::retrieved(function (self $tenant) {
+            if ($tenant->db_schema) {
+                $tenant->setInternal('db_name', $tenant->db_schema);
+            }
+        });
+
+        // When a new tenant is being created, set db_name so DatabaseConfig
+        // picks it up. If db_config is set (existing DB), we still set db_name
+        // but the TenantObserver::$enabled = false flag prevents auto-provisioning.
+        static::creating(function (self $tenant) {
+            if ($tenant->db_schema) {
+                $tenant->setInternal('db_name', $tenant->db_schema);
+            }
+        });
     }
 
-
-    public function users(): BelongsToMany
+    public function primaryDomain(): ?Domain
     {
-        return $this->belongsToMany(User::class, 'tenant_users')
-            ->withPivot('is_primary', 'joined_at')
-            ->withTimestamps();
+        return $this->domains()->where('is_primary', true)->first();
     }
+
+    // ── Tenant DB relationships ───────────────────────────────────────────────
+    // All of these live in the tenant's own database.
+    // Only call them inside an initialized tenant context.
 
     public function bots(): HasMany
     {
@@ -91,14 +125,14 @@ class Tenant extends SpatieTenant
         return $this->hasMany(OutgoingWebhook::class);
     }
 
-
-    // ─── Business Logic ───────────────────────────────────────────────────────
+    // ── Business Logic ────────────────────────────────────────────────────────
 
     public function isSubscriptionActive(): bool
     {
         return $this->subscription_expires_at === null
             || $this->subscription_expires_at->isFuture();
     }
+
     public function canCreateFlow(): bool
     {
         return $this->bots()->count() < $this->max_flows;
@@ -121,16 +155,17 @@ class Tenant extends SpatieTenant
     {
         return $this->getConversationsThisMonth() >= $this->max_conversations_per_month;
     }
+
     public function getUsagePercentage(): float
     {
+        if ($this->max_conversations_per_month == 0) {
+            return 0;
+        }
+
         $used = $this->conversations()
             ->whereMonth('created_at', now()->month)
             ->whereYear('created_at', now()->year)
             ->count();
-
-        if ($this->max_conversations_per_month == 0) {
-            return 0;
-        }
 
         return min(100, ($used / $this->max_conversations_per_month) * 100);
     }

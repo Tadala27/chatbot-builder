@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Providers;
 
 use Illuminate\Cache\RateLimiting\Limit;
@@ -13,21 +15,44 @@ class RouteServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureRateLimiting();
+        $this->routes(function () {
+            // ── Central API (/api/*) ─────────────────────────────────────
+            Route::middleware('api')
+                 ->prefix('api')
+                 ->group(base_path('routes/api.php'));
 
-        // Web routes (your Vue SPA)
-        Route::middleware('web')
-            ->group(base_path('routes/web.php'));
+            // ── Tenant API (/tenant/*) ───────────────────────────────────
+            // InitializeTenancyByDomain MUST be before StartSession
+            Route::middleware([
+                \App\Http\Middleware\ForceJsonResponse::class,
+                \Illuminate\Cookie\Middleware\EncryptCookies::class,
+                \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+                \Stancl\Tenancy\Middleware\InitializeTenancyByDomain::class,
+                \Stancl\Tenancy\Middleware\PreventAccessFromCentralDomains::class,
+                \Illuminate\Session\Middleware\StartSession::class,
+                \App\Http\Middleware\AuthenticateSession::class,
+                \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+                \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            ])
+                 ->prefix('tenant')
+                 ->group(base_path('routes/tenant.php'));
 
-        // API routes (handles both tenant and central)
-        Route::middleware('api')
-            ->prefix('api')
-            ->group(base_path('routes/api.php'));
+            // ── Web ──────────────────────────────────────────────────────
+            Route::middleware('web')
+                 ->group(base_path('routes/web.php'));
+        });
     }
 
-    protected function configureRateLimiting()
+    protected function configureRateLimiting(): void
     {
         RateLimiter::for('api', function (Request $request) {
-            return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+            return Limit::perMinute(60)->by(
+                $request->user()?->id ?: $request->ip()
+            );
+        });
+
+        RateLimiter::for('auth', function (Request $request) {
+            return Limit::perMinute(10)->by($request->ip());
         });
     }
 }

@@ -1,28 +1,13 @@
 import { URL, fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
-import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 import laravel from "laravel-vite-plugin";
 import vue from "@vitejs/plugin-vue";
 import vuetify from "vite-plugin-vuetify";
-import {
-  VueRouterAutoImports,
-  getPascalCaseRouteName,
-} from "unplugin-vue-router";
-import VueRouter from "unplugin-vue-router/vite";
-import Layouts from "vite-plugin-vue-layouts";
+import AutoImport from "unplugin-auto-import/vite";
 
 export default defineConfig({
-  // base: "/build/",
   plugins: [
-    VueRouter({
-      getRouteName: (routeNode) => {
-        return getPascalCaseRouteName(routeNode)
-          .replace(/([a-z\d])([A-Z])/g, "$1-$2")
-          .toLowerCase();
-      },
-      routesFolder: "resources/ts/pages",
-    }),
     vue({
       template: {
         compilerOptions: {
@@ -36,9 +21,6 @@ export default defineConfig({
     }),
     laravel(["resources/ts/main.ts"]),
     vuetify(),
-    Layouts({
-      layoutsDirs: "./resources/ts/layouts/",
-    }),
     Components({
       dirs: [
         "resources/ts/@core/components",
@@ -60,7 +42,7 @@ export default defineConfig({
     AutoImport({
       imports: [
         "vue",
-        VueRouterAutoImports,
+        "vue-router",
         "@vueuse/core",
         "@vueuse/math",
         "vue-i18n",
@@ -77,7 +59,6 @@ export default defineConfig({
       ignore: ["useCookie"],
     }),
   ],
-
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./resources/ts", import.meta.url)),
@@ -91,20 +72,18 @@ export default defineConfig({
       "@core": fileURLToPath(new URL("./resources/ts/@core", import.meta.url)),
     },
   },
-
   optimizeDeps: {
     exclude: ["vuetify"],
     entries: ["./resources/ts/**/*.vue"],
   },
-
-  // THIS IS THE FIX — CORS + proper HMR for multi-tenant domains
+  // CORS + HMR for multi-tenant local domains (tnm.test, nbs.test, etc.)
   server: {
-    host: "0.0.0.0", // Allows access from tnm.test, nbs.test, etc.
+    host: "0.0.0.0",
     port: 5173,
     strictPort: true,
-    cors: true, // Allows all origins — perfect for *.test:8000 dev
+    cors: true,
     hmr: {
-      host: "localhost", // Vite connects back via localhost (safe)
+      host: "localhost",
     },
   },
 });

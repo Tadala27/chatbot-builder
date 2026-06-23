@@ -4,11 +4,12 @@ namespace App\Jobs;
 
 use App\Models\Conversation;
 use App\Models\Message;
-use App\Services\ChatbotFlowExecutor;
+use App\Services\Bot\ChatbotFlowExecutor;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
@@ -19,7 +20,6 @@ class ProcessChatbotMessage implements ShouldQueue
     public int $tries   = 3;
     public int $timeout = 60;
     public array $backoff = [10, 30, 60];
-
     public int $tenantId;
 
     public function __construct(
@@ -30,8 +30,43 @@ class ProcessChatbotMessage implements ShouldQueue
         $this->onQueue('chatbot');
     }
 
+    /**
+     * Serialize all processing for a single conversation so messages
+     * can never be processed out of order or concurrently.
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping("conversation-{$this->conversation->id}"))
+                ->expireAfter(120)       // release if job crashes without cleanup
+                ->dontRelease(),         // if locked, throw — don't retry silently
+        ];
+    }
+
+    /**
+     * Unique lock key (Laravel uses this to prevent dispatch of duplicate jobs
+     * for the same message).
+     */
+    public function uniqueId(): string
+    {
+        return "chatbot-message-{$this->message->id}";
+    }
+
+    public int $uniqueFor = 300;
+
     public function handle(ChatbotFlowExecutor $executor): void
     {
+        // Idempotency guard: if processing already finished for this message
+        // (from a prior attempt that succeeded right before a crash), bail out.
+        $this->message->refresh();
+        if ($this->message->processed_at !== null) {
+            Log::info('Skipping already-processed message', [
+                'message_id'     => $this->message->id,
+                'processed_at'   => $this->message->processed_at,
+            ]);
+            return;
+        }
+
         Log::info('Processing chatbot message', [
             'tenant_id'       => $this->tenantId,
             'conversation_id' => $this->conversation->id,
@@ -41,20 +76,19 @@ class ProcessChatbotMessage implements ShouldQueue
         try {
             $executor->processMessage($this->conversation, $this->message);
 
+            // Mark processed so retries don't re-run the flow.
+            $this->message->update(['processed_at' => now()]);
+
             Log::info('Chatbot message processed successfully', [
-                'tenant_id'       => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
                 'message_id'      => $this->message->id,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to process chatbot message', [
-                'tenant_id'       => $this->tenantId,
                 'conversation_id' => $this->conversation->id,
                 'message_id'      => $this->message->id,
                 'error'           => $e->getMessage(),
-                'trace'           => $e->getTraceAsString(),
             ]);
-
             throw $e;
         }
     }

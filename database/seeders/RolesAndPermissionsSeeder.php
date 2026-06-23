@@ -3,246 +3,64 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
     public function run(): void
     {
-        // Reset cached roles and permissions
         app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // Create permissions
         $permissions = [
-            // Tenant Management (Super Admin only)
+            // Tenant Management
             'view tenants',
             'create tenants',
             'edit tenants',
             'delete tenants',
             'manage tenant subscriptions',
+            'impersonate tenant',
 
-            // User Management
-            'view users',
-            'invite users',
-            'edit users',
-            'delete users',
-            'assign roles',
+            // System / Platform
+            'view system logs',
+            'manage platform settings',
+            'view platform analytics',
 
-            // Chatbot Management
-            'view chatbots',
-            'create chatbots',
-            'edit chatbots',
-            'delete chatbots',
-            'publish chatbots',
-            'test chatbots',
-            'duplicate chatbots',
-
-            // Flow Builder
-            'edit flows',
-            'create nodes',
-            'edit nodes',
-            'delete nodes',
-            'validate flows',
-
-            // Variables
-            'view variables',
-            'create variables',
-            'edit variables',
-            'delete variables',
-
-            // Functions
-            'view functions',
-            'create functions',
-            'edit functions',
-            'delete functions',
-            'execute functions',
-            'test functions',
-
-            // WhatsApp Accounts
-            'view whatsapp-accounts',
-            'connect whatsapp-accounts',
-            'disconnect whatsapp-accounts',
-            'manage whatsapp-accounts',
-
-            // Conversations
-            'view conversations',
-            'view conversation-details',
-            'export conversations',
-            'delete conversations',
-            'handoff conversations',
-
-            // Analytics
-            'view analytics',
-            'view detailed-analytics',
-            'export analytics',
-
-            // Integrations
-            'view integrations',
-            'create integrations',
-            'edit integrations',
-            'delete integrations',
-            'test integrations',
-
-            // Templates
-            'view templates',
-            'create templates',
-            'edit templates',
-            'delete templates',
-            'submit templates',
-
-            // Webhooks
-            'view webhooks',
-            'create webhooks',
-            'edit webhooks',
-            'delete webhooks',
-
-            // Settings
-            'view settings',
-            'manage settings',
-            'manage billing',
+            // Central User Management
+            'view admin users',
+            'create admin users',
+            'edit admin users',
+            'delete admin users',
+            'assign admin roles',
         ];
 
         foreach ($permissions as $permission) {
-            Permission::create(['name' => $permission]);
+            Permission::firstOrCreate(
+                ['name' => $permission, 'guard_name' => 'system']
+            );
         }
 
-        // Create roles and assign permissions
+        // Super Admin — everything
+        $superAdmin = Role::firstOrCreate(['name' => 'super-admin', 'guard_name' => 'system']);
+        $superAdmin->syncPermissions(Permission::where('guard_name', 'system')->get());
 
-        // 1. Super Admin (system-wide)
-        $superAdmin = Role::create(['name' => 'super-admin']);
-        $superAdmin->givePermissionTo(Permission::all());
-
-        // 2. Tenant Admin (full access within tenant)
-        $tenantAdmin = Role::create(['name' => 'tenant-admin']);
-        $tenantAdmin->givePermissionTo([
-            // User management
-            'view users',
-            'invite users',
-            'edit users',
-            'delete users',
-            'assign roles',
-
-            // Chatbot management
-            'view chatbots',
-            'create chatbots',
-            'edit chatbots',
-            'delete chatbots',
-            'publish chatbots',
-            'test chatbots',
-            'duplicate chatbots',
-
-            // Flow builder
-            'edit flows',
-            'create nodes',
-            'edit nodes',
-            'delete nodes',
-            'validate flows',
-
-            // Variables
-            'view variables',
-            'create variables',
-            'edit variables',
-            'delete variables',
-
-            // Functions
-            'view functions',
-            'create functions',
-            'edit functions',
-            'delete functions',
-            'execute functions',
-            'test functions',
-
-            // WhatsApp
-            'view whatsapp-accounts',
-            'connect whatsapp-accounts',
-            'disconnect whatsapp-accounts',
-            'manage whatsapp-accounts',
-
-            // Conversations
-            'view conversations',
-            'view conversation-details',
-            'export conversations',
-            'delete conversations',
-            'handoff conversations',
-
-            // Analytics
-            'view analytics',
-            'view detailed-analytics',
-            'export analytics',
-
-            // Integrations
-            'view integrations',
-            'create integrations',
-            'edit integrations',
-            'delete integrations',
-            'test integrations',
-
-            // Templates
-            'view templates',
-            'create templates',
-            'edit templates',
-            'delete templates',
-            'submit templates',
-
-            // Webhooks
-            'view webhooks',
-            'create webhooks',
-            'edit webhooks',
-            'delete webhooks',
-
-            // Settings
-            'view settings',
-            'manage settings',
-            'manage billing',
+        // Support Admin — can view and manage tenants but not delete or billing
+        $Admin = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'system']);
+        $Admin->syncPermissions([
+            'view tenants',
+            'edit tenants',
+            'impersonate tenant',
+            'view system logs',
+            'view platform analytics',
+            'view admin users',
         ]);
 
-        // 3. Bot Builder (can create/edit bots)
-        $botBuilder = Role::create(['name' => 'bot-builder']);
-        $botBuilder->givePermissionTo([
-            'view chatbots',
-            'create chatbots',
-            'edit chatbots',
-            'test chatbots',
-            'duplicate chatbots',
-            'edit flows',
-            'create nodes',
-            'edit nodes',
-            'delete nodes',
-            'validate flows',
-            'view variables',
-            'create variables',
-            'edit variables',
-            'delete variables',
-            'view functions',
-            'execute functions',
-            'test functions',
-            'view conversations',
-            'view conversation-details',
-            'view analytics',
-            'view templates',
-            'view integrations',
-        ]);
-
-        // 4. Agent (handles conversations)
-        $agent = Role::create(['name' => 'agent']);
-        $agent->givePermissionTo([
-            'view conversations',
-            'view conversation-details',
-            'handoff conversations',
-            'view chatbots',
-        ]);
-
-        // 5. Viewer (read-only)
-        $viewer = Role::create(['name' => 'viewer']);
-        $viewer->givePermissionTo([
-            'view chatbots',
-            'view conversations',
-            'view analytics',
-            'view templates',
-            'view integrations',
-            'view functions',
-            'view variables',
+        // Billing Admin — subscription management only
+        $billingAdmin = Role::firstOrCreate(['name' => 'billing-admin', 'guard_name' => 'system']);
+        $billingAdmin->syncPermissions([
+            'view tenants',
+            'manage tenant subscriptions',
+            'view platform analytics',
         ]);
     }
 }

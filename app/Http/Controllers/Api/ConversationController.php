@@ -108,7 +108,7 @@ class ConversationController extends Controller
 
         // Notify the WhatsApp user
         if ($conversation->whatsappAccount) {
-            app(\App\Services\WhatsAppMessageService::class)->sendTextMessage(
+            app(\App\Services\Bot\WhatsAppMessageService::class)->sendTextMessage(
                 $conversation->whatsappAccount,
                 $conversation->whatsapp_user_phone,
                 $validated['reason'] ?? 'Transferring you to an agent...'

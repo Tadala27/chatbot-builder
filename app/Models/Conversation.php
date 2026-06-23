@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use App\States\ConversationState;
 
 class Conversation extends Model
 {
@@ -34,6 +35,7 @@ class Conversation extends Model
         'last_message_at' => 'datetime',
         'message_count'   => 'integer',
         'metadata'        => 'array',
+        'status' => ConversationState::class,
     ];
 
     public function tenant(): BelongsTo

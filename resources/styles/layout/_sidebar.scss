@@ -54,8 +54,8 @@
   .verticalLayout:not(.component-wrapper) {
     .v-application__wrap {
       > header.v-toolbar {
-        width: calc(100% - 279px) !important;
-        left: 250px !important;
+        width: calc(100% - 50px) !important;
+        left: 60px !important;
         [dir="rtl"] & {
           left: unset !important;
           right: 279px !important;
