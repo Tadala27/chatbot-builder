@@ -59,7 +59,7 @@ const rawSidebarItems: MenuItem[] = [
     title: "Chatbots",
     icon: "$robot",
     to: "/chatbots",
-    permissions: ["view chatbots"],
+    permissions: ["view bots"],
   },
 
   // ── Variables ────────────────────────────────────────────────────────────
@@ -127,10 +127,10 @@ const rawSidebarItems: MenuItem[] = [
   },
   // ── Webhooks ─────────────────────────────────────────────────────────────
   {
-    title: "Webhook Connector",
-    icon: "$webhook",
-    to: "/webhooks/connector",
-    permissions: ["view webhooks"],
+    title: "Register Account",
+    icon: "$whatsApp",
+    to: "/register",
+    permissions: ["view whatsapp-accounts"],
   },
 
   { divider: true },

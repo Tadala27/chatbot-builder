@@ -48,6 +48,7 @@ const ChatbotCreate = () => import("@/pages/chatbots/create.vue");
 const ChatbotDetail = () => import("@/pages/chatbots/[id].vue");
 const ChatbotEdit = () => import("@/pages/chatbots/[id]-edit.vue");
 const ChatbotFlow = () => import("@/pages/chatbots/[id]-flow.vue");
+const ChatbotSettings = () => import("@/pages/chatbots/settings.vue");
 
 // Variables / Functions
 const Variables = () => import("@/pages/variables/index.vue");
@@ -55,17 +56,17 @@ const Functions = () => import("@/pages/functions/index.vue");
 
 // WhatsApp
 const WhatsappAccounts = () => import("@/pages/whatsapp-accounts/index.vue");
+const WhatsappDetails = () => import("@/pages/whatsapp-accounts/show.vue");
+const RegisterAccount = () => import("@/pages/whatsapp-accounts/register.vue");
 
 // Conversations / Analytics
 const Conversations = () => import("@/pages/conversations/index.vue");
-const ConversationDetail = () => import("@/pages/conversations/[id].vue");
 const Analytics = () => import("@/pages/analytics/index.vue");
 
 // Integrations / Templates / Webhooks / Settings
 const Integrations = () => import("@/pages/integrations/index.vue");
 const Templates = () => import("@/pages/templates/index.vue");
 const Webhooks = () => import("@/pages/webhooks/index.vue");
-const Connector = () => import("@/pages/webhooks/connector.vue");
 const Settings = () => import("@/pages/settings/index.vue");
 
 // ── Meta type augmentation ──────────────────────────────────────────────────────
@@ -197,38 +198,42 @@ const routes: RouteRecordRaw[] = [
         path: "chatbots",
         name: "chatbots",
         component: Chatbots,
-        meta: { permissions: ["view chatbots"] },
+        meta: { permissions: ["view bots"] },
       },
       {
         path: "chatbots/create",
         name: "chatbots-create",
         component: ChatbotCreate,
-        meta: { permissions: ["create chatbots"] },
+        meta: { permissions: ["create bots"] },
       },
       {
         path: "chatbots/:id",
         name: "chatbot-detail",
         component: ChatbotDetail,
-        meta: { permissions: ["view chatbots"] },
+        meta: { permissions: ["view bots"] },
       },
       {
         path: "chatbots/:id/edit",
         name: "chatbot-edit",
         component: ChatbotEdit,
-        meta: { permissions: ["edit chatbots"] },
+        meta: { permissions: ["edit bots"] },
       },
       {
         path: "chatbots/:id/flow",
         name: "chatbot-flow",
         component: ChatbotFlow,
         meta: {
-          permissions: [
-            "edit flows",
-            "create nodes",
-            "edit nodes",
-            "delete nodes",
-            "validate flows",
-          ],
+          permissions: ["create bots", "edit bots"],
+          logic: "OR",
+        },
+      },
+      {
+        path: "chatbots/:id/settings",
+        name: "chatbot-settings",
+        component: ChatbotSettings,
+        props: (route) => ({ botId: route.params.id }),
+        meta: {
+          permissions: ["create bots", "edit bots"],
           logic: "OR",
         },
       },
@@ -254,6 +259,18 @@ const routes: RouteRecordRaw[] = [
         component: WhatsappAccounts,
         meta: { permissions: ["view whatsapp-accounts"] },
       },
+      {
+        path: "whatsapp-account/:id/detail",
+        name: "whatsapp-account-detail",
+        component: WhatsappDetails,
+        meta: { permissions: ["view whatsapp-accounts"] },
+      },
+      {
+        path: "register",
+        name: "register-accounts",
+        component: RegisterAccount,
+        meta: { permissions: ["view whatsapp-accounts"] },
+      },
 
       // Conversations / Analytics
       {
@@ -261,12 +278,6 @@ const routes: RouteRecordRaw[] = [
         name: "conversations",
         component: Conversations,
         meta: { permissions: ["view conversations"] },
-      },
-      {
-        path: "conversations/:id",
-        name: "conversation-detail",
-        component: ConversationDetail,
-        meta: { permissions: ["view conversation-details"] },
       },
       {
         path: "analytics",
@@ -292,12 +303,6 @@ const routes: RouteRecordRaw[] = [
         path: "webhooks",
         name: "webhooks",
         component: Webhooks,
-        meta: { permissions: ["view webhooks"] },
-      },
-      {
-        path: "webhooks/connector",
-        name: "webhooks-connector",
-        component: Connector,
         meta: { permissions: ["view webhooks"] },
       },
       {

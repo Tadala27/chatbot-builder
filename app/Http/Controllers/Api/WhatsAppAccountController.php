@@ -4,22 +4,23 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\WhatsappAccount;
-use App\Services\Bot\FacebookSignupService;
-use App\Services\MetaPhoneNumberLookupService;
+use App\Services\Bot\MetaEmbeddedSignupService;
 use App\Services\WhatsappPhoneIndexSync;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Exception\ServerException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppAccountController extends Controller
 {
     public function __construct(
-        protected FacebookSignupService $facebookService,
         protected WhatsappPhoneIndexSync $phoneIndex,
-    ) {}
+    ) {
+    }
 
-    // ── GET /tenant/whatsapp-accounts ──────────────────────────────────────
     public function index(): JsonResponse
     {
         $accounts = WhatsappAccount::with('bots')
@@ -39,16 +40,90 @@ class WhatsAppAccountController extends Controller
         return response()->json(['data' => $accounts]);
     }
 
-    // ── GET /tenant/whatsapp-accounts/connector ────────────────────────────
-    // Returns the tenant's single connector-mode account (if any) and the
-    // fixed send endpoint URL. Never returns the API key — that's shown
-    // once, only at connectConnector()/rotateConnectorKey() time.
-    public function connectorAccount(): JsonResponse
+    /**
+     * Step 1–3 of Tech Provider onboarding, triggered by the frontend after
+     * the FB SDK's Embedded Signup flow hands back a code + asset IDs via
+     * the WA_EMBEDDED_SIGNUP postMessage event.
+     */
+    public function embeddedSignupCallback(Request $request, MetaEmbeddedSignupService $onboarding): JsonResponse
     {
-        $account = WhatsappAccount::where('mode', 'connector')->first();
+        $validated = $request->validate([
+            'code' => ['required', 'string'],
+            'waba_id' => ['required', 'string'],
+            'phone_number_id' => ['required', 'string'],
+            'business_id' => ['sometimes', 'string'],
+        ]);
 
-        if (!$account) {
-            return response()->json(['account' => null]);
+        if (WhatsappAccount::where('phone_number_id', $validated['phone_number_id'])->exists()) {
+            return response()->json([
+                'message' => 'This number is already connected to your account.',
+            ], 422);
+        }
+
+        try {
+            $account = $onboarding->onboard($validated);
+
+            activity()->causedBy(Auth::guard('tenant')->user())
+                ->performedOn($account)
+                ->log('WhatsApp number onboarded via Embedded Signup');
+
+            return response()->json([
+                'message' => 'Number registered. Choose how you want to use it, then add a payment method to activate sending.',
+                'account' => $account,
+            ], 201);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function chooseMode(Request $request, WhatsappAccount $account): JsonResponse
+    {
+        $validated = $request->validate([
+            'mode' => ['required', 'in:managed_bot,connector'],
+            'webhook_url' => ['required_if:mode,connector', 'url'],
+        ]);
+
+        if ($account->mode !== null) {
+            return response()->json(['message' => 'Mode has already been set for this account.'], 422);
+        }
+
+        $account->mode = $validated['mode'];
+
+        if ($validated['mode'] === 'connector') {
+            $account->webhook_url = $validated['webhook_url'];
+            $account->save();
+
+            $apiKey = $account->rotateConnectorApiKey();
+            $this->phoneIndex->upsert($account->fresh());
+
+            activity()->causedBy(Auth::guard('tenant')->user())
+                ->performedOn($account)
+                ->log('Connector mode enabled');
+
+            return response()->json([
+                'message' => 'Connector mode enabled.',
+                'account' => $account->fresh(),
+                'connector_api_key' => $apiKey,
+                'endpoint_url' => $this->buildSendEndpoint(),
+            ]);
+        }
+
+        $account->save();
+
+        activity()->causedBy(Auth::guard('tenant')->user())
+            ->performedOn($account)
+            ->log('Managed bot mode enabled');
+
+        return response()->json(['message' => 'Managed bot mode enabled.', 'account' => $account]);
+    }
+
+    /**
+     * Connector setup instructions for a SPECIFIC account.
+     */
+    public function connectorInfo(WhatsappAccount $account): JsonResponse
+    {
+        if (!$account->isConnectorMode()) {
+            return response()->json(['message' => 'This account is not in connector mode.'], 422);
         }
 
         return response()->json([
@@ -57,103 +132,6 @@ class WhatsAppAccountController extends Controller
         ]);
     }
 
-    // ── POST /tenant/whatsapp-accounts/connect-connector ───────────────────
-    // Phone number + webhook URL only. No OAuth, no tenant-supplied Meta
-    // credentials. Resolves phone_number_id via the platform's own Tech
-    // Provider Meta credentials (MetaPhoneNumberLookupService). One
-    // connector account per tenant — blocks a second.
-    public function connectConnector(
-        Request $request,
-        MetaPhoneNumberLookupService $lookup,
-    ): JsonResponse {
-        if (WhatsappAccount::where('mode', 'connector')->exists()) {
-            return response()->json([
-                'message' => 'You already have a connected number. Disconnect it first if you want to connect a different one.',
-            ], 422);
-        }
-
-        $validated = $request->validate([
-            'phone_number' => ['required', 'string'],
-            'webhook_url' => ['required', 'url'],
-        ]);
-
-        $resolved = $lookup->resolveByPhoneNumber($validated['phone_number']);
-
-        if (!$resolved) {
-            return response()->json([
-                'message' => "We couldn't find [{$validated['phone_number']}] under our WhatsApp Business " .
-                    'platform. Make sure the number has been registered with us first, then try again.',
-            ], 422);
-        }
-
-        if (WhatsappAccount::where('phone_number_id', $resolved['phone_number_id'])->exists()) {
-            return response()->json([
-                'message' => 'This phone number is already connected.',
-            ], 422);
-        }
-
-        $account = WhatsappAccount::create([
-            'phone_number_id' => $resolved['phone_number_id'],
-            'waba_id' => $resolved['waba_id'],
-            'phone_number' => preg_replace('/\D/', '', $resolved['display_phone_number']),
-            'display_phone_number' => $resolved['display_phone_number'],
-            'verified_name' => $resolved['verified_name'],
-            'quality_rating' => $resolved['quality_rating'],
-            'webhook_url' => $validated['webhook_url'],
-            'is_active' => true,
-            'mode' => 'connector',
-        ]);
-
-        $apiKey = $account->rotateConnectorApiKey();
-
-        // Populates BOTH central indexes — phone (inbound) and key (outbound).
-        $this->phoneIndex->upsert($account->fresh());
-
-        activity()->causedBy(Auth::guard('tenant')->user())
-            ->performedOn($account)
-            ->log('WhatsApp number connected in connector mode');
-
-        return response()->json([
-            'message' => 'Number connected successfully.',
-            'account' => $account->fresh(),
-            'connector_api_key' => $apiKey,
-            'endpoint_url' => $this->buildSendEndpoint(),
-        ], 201);
-    }
-
-    // ── GET /tenant/whatsapp-accounts/signup-url ───────────────────────────
-    // Managed-bot accounts only — embedded signup OAuth flow.
-    public function getSignupUrl(): JsonResponse
-    {
-        $url = $this->facebookService->getSignupUrl(tenant());
-
-        return response()->json(['signup_url' => $url]);
-    }
-
-    // ── POST /tenant/whatsapp-accounts/callback ────────────────────────────
-    public function handleCallback(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'code' => 'required|string',
-            'state' => 'required|string',
-        ]);
-
-        try {
-            $result = $this->facebookService->handleCallback($validated['code'], $validated['state']);
-
-            return response()->json([
-                'message' => 'WhatsApp account connected successfully.',
-                'whatsapp_account' => $result['whatsapp_account'],
-            ], 201);
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Failed to connect WhatsApp account.',
-                'error' => $e->getMessage(),
-            ], 422);
-        }
-    }
-
-    // ── GET /tenant/whatsapp-accounts/{account} ────────────────────────────
     public function show(WhatsappAccount $account): JsonResponse
     {
         $account->load(['bots', 'conversations' => fn ($q) => $q->latest()->limit(10)]);
@@ -168,17 +146,27 @@ class WhatsAppAccountController extends Controller
                 'conversations_this_month' => $account->conversations()->whereMonth('started_at', now()->month)->count(),
                 'quality_rating' => $account->quality_rating,
                 'messaging_limit' => $account->messaging_limit,
+                'onboarding_status' => $account->onboarding_status,
                 'is_healthy' => $account->isHealthy(),
                 'mode' => $account->mode,
+                'phone_status' => $account->getPhoneStatusAttribute(),
+                'code_verification_status' => $account->getCodeVerificationStatusAttribute(),
+                'name_status' => $account->getNameStatusAttribute(),
+                'platform_type' => $account->getPlatformTypeAttribute(),
+                'throughput_level' => $account->getThroughputLevelAttribute(),
+                'account_review_status' => $account->getAccountReviewStatusAttribute(),
+                'currency' => $account->getCurrencyAttribute(),
+                'timezone_id' => $account->getTimezoneIdAttribute(),
             ],
         ]);
     }
 
-    // ── PUT /tenant/whatsapp-accounts/{account} ────────────────────────────
     public function update(Request $request, WhatsappAccount $account): JsonResponse
     {
         $validated = $request->validate([
             'metadata' => 'sometimes|array',
+            'webhook_url' => 'sometimes|url',
+            'is_active' => 'sometimes|boolean',
         ]);
 
         $account->update($validated);
@@ -188,7 +176,6 @@ class WhatsAppAccountController extends Controller
         return response()->json(['message' => 'Account updated.', 'account' => $account]);
     }
 
-    // ── POST /tenant/whatsapp-accounts/{account}/disconnect ────────────────
     public function disconnect(WhatsappAccount $account): JsonResponse
     {
         if ($account->bots()->where('is_active', true)->exists()) {
@@ -205,16 +192,14 @@ class WhatsAppAccountController extends Controller
 
         $account->update(['is_active' => false]);
 
-        // Remove from both central indexes — inbound stops forwarding,
-        // outbound key stops authenticating.
+        // Remove from both central indexes
         $this->phoneIndex->remove($account);
 
         activity()->causedBy(Auth::guard('tenant')->user())->performedOn($account)->log('WhatsApp account disconnected');
 
-        return response()->json(['message' => 'Account disconnected.']);
+        return response()->json(['message' => 'Account disconnected locally. To fully remove the number from Meta, do so via WhatsApp Manager.']);
     }
 
-    // ── POST /tenant/whatsapp-accounts/{account}/reconnect ─────────────────
     public function reconnect(WhatsappAccount $account): JsonResponse
     {
         $account->update(['is_active' => true]);
@@ -226,73 +211,314 @@ class WhatsAppAccountController extends Controller
         return response()->json(['message' => 'Account reconnected.', 'account' => $account]);
     }
 
-    // ── POST /tenant/whatsapp-accounts/{account}/sync ──────────────────────
-    // Managed-bot only — connector accounts have no access_token to sync with.
+    /**
+     * Sync account data from Meta API.
+     */
     public function sync(WhatsappAccount $account): JsonResponse
     {
-        if (!$account->hasOwnAccessToken()) {
-            return response()->json(['message' => 'Sync is not available for connector-mode accounts.'], 422);
-        }
-
         try {
-            $client = new Client();
-            $response = $client->get("https://graph.facebook.com/v18.0/{$account->phone_number_id}", [
-                'query' => [
-                    'access_token' => decrypt($account->access_token),
-                    'fields' => 'verified_name,display_phone_number,quality_rating,messaging_limit_tier',
+            // Check if account has an access token
+            if (empty($account->access_token)) {
+                return response()->json([
+                    'message' => 'Sync failed.',
+                    'error' => 'Account has no access token. Please reconnect or re-onboard this number.',
+                ], 422);
+            }
+
+            $client = new Client(['timeout' => 15]);
+            $apiVersion = config('services.meta.api_version', 'v21.0');
+
+            // Decrypt the access token
+            try {
+                $token = $account->access_token;
+            } catch (\Exception $e) {
+                return response()->json([
+                    'message' => 'Sync failed.',
+                    'error' => 'Access token is corrupted. Please reconnect this number.',
+                ], 422);
+            }
+
+            // First, test if the token is valid
+            try {
+                $testResponse = $client->get("https://graph.facebook.com/{$apiVersion}/me", [
+                    'headers' => ['Authorization' => "Bearer {$token}"],
+                ]);
+                $testData = json_decode($testResponse->getBody()->getContents(), true);
+
+                if (isset($testData['error'])) {
+                    return response()->json([
+                        'message' => 'Sync failed.',
+                        'error' => 'Access token is invalid or expired: '.($testData['error']['message'] ?? 'Unknown error'),
+                    ], 422);
+                }
+            } catch (\Exception $e) {
+                return response()->json([
+                    'message' => 'Sync failed.',
+                    'error' => 'Failed to validate access token: '.$e->getMessage(),
+                ], 422);
+            }
+
+            // Fetch phone number details
+            $phoneFields = 'verified_name,display_phone_number,quality_rating,status,'
+                .'platform_type,throughput,code_verification_status,name_status,'
+                .'whatsapp_business_manager_messaging_limit,health_status';
+
+            $phoneResponse = $client->get("https://graph.facebook.com/{$apiVersion}/{$account->phone_number_id}", [
+                'headers' => ['Authorization' => "Bearer {$token}"],
+                'query' => ['fields' => $phoneFields],
+            ]);
+            $phoneData = json_decode($phoneResponse->getBody()->getContents(), true);
+
+            if (isset($phoneData['error'])) {
+                return response()->json([
+                    'message' => 'Sync failed.',
+                    'error' => 'Meta API error (phone): '.($phoneData['error']['message'] ?? 'Unknown error'),
+                ], 422);
+            }
+
+            // Fetch WABA details
+            $wabaResponse = $client->get("https://graph.facebook.com/{$apiVersion}/{$account->waba_id}", [
+                'headers' => ['Authorization' => "Bearer {$token}"],
+                'query' => ['fields' => 'currency,timezone_id,account_review_status'],
+            ]);
+            $wabaData = json_decode($wabaResponse->getBody()->getContents(), true);
+
+            if (isset($wabaData['error'])) {
+                return response()->json([
+                    'message' => 'Sync failed.',
+                    'error' => 'Meta API error (WABA): '.($wabaData['error']['message'] ?? 'Unknown error'),
+                ], 422);
+            }
+
+            $canSend = $phoneData['health_status']['can_send_message'] ?? null;
+
+            // Get the messaging limit from the correct field name
+            $messagingLimit = $phoneData['whatsapp_business_manager_messaging_limit'] ?? null;
+
+            // Map tier values to your enum values - support all possible values
+            $messagingLimitMapped = $this->mapMessagingLimit($messagingLimit);
+
+            // Prepare metadata - store all extra fields here
+            $metadata = array_merge($account->metadata ?? [], [
+                'phone_status' => $phoneData['status'] ?? null,
+                'platform_type' => $phoneData['platform_type'] ?? null,
+                'throughput_level' => $phoneData['throughput']['level'] ?? $phoneData['throughput'] ?? null,
+                'code_verification_status' => $phoneData['code_verification_status'] ?? null,
+                'name_status' => $phoneData['name_status'] ?? null,
+                'account_review_status' => $wabaData['account_review_status'] ?? null,
+                'currency' => $wabaData['currency'] ?? null,
+                'timezone_id' => $wabaData['timezone_id'] ?? null,
+                'can_send_message' => $canSend,
+                'messaging_limit_raw' => $messagingLimit,
+                'last_sync' => now()->toIso8601String(),
+                'sync_data' => [
+                    'phone' => $phoneData,
+                    'waba' => $wabaData,
                 ],
             ]);
 
-            $data = json_decode($response->getBody()->getContents(), true);
-
+            // Update only the fields that exist in the table
             $account->update([
-                'verified_name' => $data['verified_name'] ?? $account->verified_name,
-                'quality_rating' => strtoupper($data['quality_rating'] ?? $account->quality_rating),
-                'messaging_limit' => $data['messaging_limit_tier'] ?? $account->messaging_limit,
-                'metadata' => $data,
+                'verified_name' => $phoneData['verified_name'] ?? $account->verified_name,
+                'display_phone_number' => $phoneData['display_phone_number'] ?? $account->display_phone_number,
+                'quality_rating' => strtoupper($phoneData['quality_rating'] ?? $account->quality_rating),
+                'messaging_limit' => $messagingLimitMapped,
+                'metadata' => $metadata,
                 'last_synced_at' => now(),
+                'onboarding_status' => $this->determineOnboardingStatus($account, $canSend),
             ]);
+
+            // Update phone index if mode is set
+            if (!$this->phoneIndex->hasIndex($account) && $account->mode !== null) {
+                $this->phoneIndex->upsert($account->fresh());
+            }
 
             activity()->causedBy(Auth::guard('tenant')->user())->performedOn($account)->log('WhatsApp account synced');
 
-            return response()->json(['message' => 'Account synced.', 'account' => $account->fresh()]);
+            return response()->json([
+                'message' => 'Account synced successfully.',
+                'account' => $account->fresh(),
+                'meta' => [
+                    'phone_data' => $phoneData,
+                    'waba_data' => $wabaData,
+                ],
+            ]);
+        } catch (ClientException $e) {
+            $response = $e->getResponse();
+            $body = $response->getBody()->getContents();
+            $data = json_decode($body, true);
+
+            $errorMessage = $data['error']['message'] ?? $e->getMessage();
+            $errorCode = $data['error']['code'] ?? null;
+
+            Log::error('WhatsApp sync failed', [
+                'account_id' => $account->id,
+                'phone_number' => $account->phone_number,
+                'error_code' => $errorCode,
+                'error_message' => $errorMessage,
+            ]);
+
+            return response()->json([
+                'message' => 'Sync failed.',
+                'error' => $errorMessage,
+                'code' => $errorCode,
+            ], 422);
+        } catch (ServerException $e) {
+            Log::error('WhatsApp sync failed', [
+                'account_id' => $account->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Sync failed.',
+                'error' => 'Meta server error. Please try again later.',
+            ], 503);
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Sync failed.', 'error' => $e->getMessage()], 422);
+            Log::error('WhatsApp sync failed', [
+                'account_id' => $account->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Sync failed.',
+                'error' => $e->getMessage(),
+            ], 422);
         }
     }
 
-    // ── GET /tenant/whatsapp-accounts/{account}/health ─────────────────────
+    /**
+     * Map Meta's messaging limit values to your enum values.
+     */
+    private function mapMessagingLimit(?string $limit): string
+    {
+        if (empty($limit)) {
+            return 'TIER_1K';
+        }
+
+        // Map all possible values to your enum
+        return match (strtoupper($limit)) {
+            'TIER_1K', 'DEVELOPMENT', 'LIMITED' => 'TIER_1K',
+            'TIER_2K' => 'TIER_2K',
+            'TIER_10K', 'STANDARD', 'HIGH' => 'TIER_10K',
+            'TIER_100K' => 'TIER_100K',
+            'TIER_UNLIMITED', 'UNLIMITED' => 'TIER_UNLIMITED',
+            default => 'TIER_1K',
+        };
+    }
+
+    /**
+     * Determine the onboarding status based on account state and Meta's health status.
+     */
+    private function determineOnboardingStatus(WhatsappAccount $account, $canSend): string
+    {
+        // If the account is already active, keep it unless there's a problem
+        if ($account->onboarding_status === 'active') {
+            // If we have health status and sending is not available, maybe it's suspended
+            if ($canSend && $canSend !== 'AVAILABLE') {
+                return 'suspended';
+            }
+
+            return 'active';
+        }
+
+        // If sending is available, mark as active
+        if ($canSend === 'AVAILABLE') {
+            return 'active';
+        }
+
+        // If we have a payment issue
+        if ($account->onboarding_status === 'pending_payment') {
+            return 'pending_payment';
+        }
+
+        // If the number is verified but not yet active
+        $metadata = $account->metadata ?? [];
+        if (($metadata['code_verification_status'] ?? null) === 'VERIFIED') {
+            return 'verified';
+        }
+
+        // Default to pending
+        return $account->onboarding_status ?? 'pending';
+    }
+
     public function health(WhatsappAccount $account): JsonResponse
     {
+        $metadata = $account->metadata ?? [];
         $issues = [];
 
+        // Check if there's a payment issue
+        if ($account->onboarding_status === 'pending_payment') {
+            $issues[] = ['severity' => 'critical', 'message' => 'No payment method on file — this number cannot send messages yet.'];
+        }
+
+        // Check quality rating
         if ($account->quality_rating === 'RED') {
             $issues[] = ['severity' => 'critical', 'message' => 'Quality rating is RED — account may be restricted.'];
         } elseif ($account->quality_rating === 'YELLOW') {
             $issues[] = ['severity' => 'warning', 'message' => 'Quality rating is YELLOW — improve message quality.'];
         }
 
+        // Check phone status from metadata
+        if (($metadata['phone_status'] ?? null) === 'RESTRICTED') {
+            $issues[] = ['severity' => 'critical', 'message' => 'Number is restricted — messaging limit reached.'];
+        }
+
+        // Check if account is inactive
         if (!$account->is_active) {
             $issues[] = ['severity' => 'warning', 'message' => 'Account is inactive.'];
         }
 
+        // Check if account hasn't been synced recently
         if ($account->last_synced_at?->diffInHours(now()) > 24) {
             $issues[] = ['severity' => 'info', 'message' => 'Account has not been synced in over 24 hours.'];
         }
 
+        // Check if there are any SIP errors in the health status
+        $syncData = $metadata['sync_data'] ?? [];
+        $phoneData = $syncData['phone'] ?? [];
+        $healthStatus = $phoneData['health_status'] ?? [];
+        $entities = $healthStatus['entities'] ?? [];
+
+        foreach ($entities as $entity) {
+            if (!empty($entity['errors'])) {
+                foreach ($entity['errors'] as $error) {
+                    // Only show SIP errors as info since they don't affect messaging
+                    if (strpos($error['error_description'] ?? '', 'SIP') !== false) {
+                        $issues[] = [
+                            'severity' => 'info',
+                            'message' => $error['error_description'].' — '.($error['possible_solution'] ?? ''),
+                        ];
+                    }
+                }
+            }
+        }
+
+        // Get can_send_message from metadata
+        $canSendMessage = $metadata['can_send_message'] ?? null;
+
         return response()->json([
             'status' => empty($issues) ? 'healthy' : 'needs_attention',
             'mode' => $account->mode,
+            'onboarding_status' => $account->onboarding_status,
             'quality_rating' => $account->quality_rating,
             'messaging_limit' => $account->messaging_limit,
+            'can_send_message' => $canSendMessage,
             'is_active' => $account->is_active,
             'last_synced_at' => $account->last_synced_at?->toIso8601String(),
             'verified_name' => $account->verified_name,
+            'phone_status' => $metadata['phone_status'] ?? null,
+            'code_verification_status' => $metadata['code_verification_status'] ?? null,
+            'name_status' => $metadata['name_status'] ?? null,
+            'account_review_status' => $metadata['account_review_status'] ?? null,
+            'platform_type' => $metadata['platform_type'] ?? null,
+            'throughput_level' => $metadata['throughput_level'] ?? null,
+            'currency' => $metadata['currency'] ?? null,
+            'timezone_id' => $metadata['timezone_id'] ?? null,
             'issues' => $issues,
         ]);
     }
 
-    // ── POST /tenant/whatsapp-accounts/{account}/rotate-connector-key ──────
     public function rotateConnectorKey(WhatsappAccount $account): JsonResponse
     {
         if (!$account->isConnectorMode()) {
@@ -301,9 +527,6 @@ class WhatsAppAccountController extends Controller
 
         $newKey = $account->rotateConnectorApiKey();
 
-        // Critical: re-sync the key index immediately, or the OLD key
-        // keeps resolving (stale index row) even though the account's
-        // actual connector_api_key has changed.
         $this->phoneIndex->syncKeyIndex($account->fresh());
 
         activity()->causedBy(Auth::guard('tenant')->user())->performedOn($account)->log('Connector API key rotated');
@@ -314,13 +537,99 @@ class WhatsAppAccountController extends Controller
         ]);
     }
 
-    /**
-     * Same URL for EVERY tenant — no slug, no per-tenant path segment.
-     * The X-Connector-Key header alone determines tenant resolution
-     * (see ResolveTenantFromConnectorKey).
-     */
     private function buildSendEndpoint(): string
     {
-        return rtrim(config('app.url'), '/') . '/api/connector/messages';
+        return rtrim(config('app.url'), '/').'/api/connector/messages';
+    }
+
+    /**
+     * Test the access token for debugging purposes.
+     */
+    public function testToken(WhatsappAccount $account): JsonResponse
+    {
+        try {
+            if (empty($account->access_token)) {
+                return response()->json([
+                    'valid' => false,
+                    'message' => 'No access token found.',
+                ], 422);
+            }
+
+            $token = decrypt($account->access_token);
+            $apiVersion = config('services.meta.api_version', 'v21.0');
+
+            $client = new Client(['timeout' => 15]);
+            $response = $client->get("https://graph.facebook.com/{$apiVersion}/me", [
+                'headers' => ['Authorization' => "Bearer {$token}"],
+            ]);
+
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            return response()->json([
+                'valid' => true,
+                'message' => 'Token is valid',
+                'data' => $data,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'valid' => false,
+                'message' => 'Token is invalid',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Test if the phone number exists in Meta for debugging.
+     */
+    public function testPhoneNumber(WhatsappAccount $account): JsonResponse
+    {
+        try {
+            if (empty($account->access_token)) {
+                return response()->json([
+                    'exists' => false,
+                    'message' => 'No access token found.',
+                ], 422);
+            }
+
+            $token = decrypt($account->access_token);
+            $apiVersion = config('services.meta.api_version', 'v21.0');
+
+            $client = new Client(['timeout' => 15]);
+            $response = $client->get("https://graph.facebook.com/{$apiVersion}/{$account->phone_number_id}", [
+                'headers' => ['Authorization' => "Bearer {$token}"],
+                'query' => ['fields' => 'verified_name,display_phone_number,quality_rating,status'],
+            ]);
+
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            return response()->json([
+                'exists' => true,
+                'message' => 'Phone number exists in Meta',
+                'data' => $data,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'exists' => false,
+                'message' => 'Phone number not found or error occurred',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Get the raw sync data from metadata for debugging.
+     */
+    public function syncData(WhatsappAccount $account): JsonResponse
+    {
+        $metadata = $account->metadata ?? [];
+
+        return response()->json([
+            'account_id' => $account->id,
+            'phone_number' => $account->phone_number,
+            'last_synced_at' => $account->last_synced_at,
+            'sync_data' => $metadata['sync_data'] ?? null,
+            'raw_metadata' => $metadata,
+        ]);
     }
 }

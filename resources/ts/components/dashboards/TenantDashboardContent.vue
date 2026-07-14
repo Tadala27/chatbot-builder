@@ -2,15 +2,23 @@
 import { ref, computed, onMounted } from "vue";
 import axios from "axios";
 import { useUserStore } from "@/stores/user";
+import Hero from "./hero.vue";
+import Stat from "./stat.vue";
+import EarningsDonut from "./earnings-donut.vue";
 
 const userStore = useUserStore();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+// Kept in lockstep with App\Http\Controllers\Api\DashboardController::index()
 
 interface DashboardData {
   stats: {
-    bots: { total: number; active: number };
-    flows: { total: number; published: number; draft: number };
+    bots: {
+      total: number;
+      active: number;
+      published: number;
+      draft: number;
+    };
     whatsapp_accounts: number;
     conversations: {
       this_month: number;
@@ -34,17 +42,22 @@ interface DashboardData {
     messages_by_day: { date: string; inbound: number; outbound: number }[];
     conversation_status: Record<string, number>;
   };
-  top_bots: { id: number; name: string; conversation_count: number }[];
+  top_bots: {
+    id: number;
+    name: string;
+    conversation_count: number;
+  }[];
   recent_conversations: {
     id: number;
-    flow_id: number;
+    bot_id: number;
+    bot_version_id: number | null;
     whatsapp_user_name: string | null;
     whatsapp_user_phone: string;
     status: string;
     message_count: number;
     started_at: string;
     last_message_at: string;
-    flow?: { id: number; name: string };
+    bot?: { id: number; name: string };
   }[];
 }
 
@@ -67,12 +80,12 @@ onMounted(async () => {
 
 const tenant = computed(() => userStore.currentTenant);
 
-const formatChange = (pct: number | null) => {
-  if (pct === null) return { text: "—", color: "default" };
-  if (pct > 0) return { text: `+${pct}%`, color: "success" };
-  if (pct < 0) return { text: `${pct}%`, color: "error" };
-  return { text: "0%", color: "default" };
-};
+const greeting = computed(() => {
+  const hour = new Date().getHours();
+  const time = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const name = userStore.displayName?.split(" ")[0];
+  return `Good ${time}${name ? `, ${name}` : ""}!`;
+});
 
 const statusColor: Record<string, string> = {
   active: "success",
@@ -89,17 +102,54 @@ const fmtDate = (iso: string) =>
     minute: "2-digit",
   });
 
-const convSeries = computed(() => {
+// ── Stat ring percentages (slim rings, top row) ───────────────────────────────
+
+const conversationsPercent = computed(() => {
+  if (!data.value) return 0;
+  const { this_month, prev_month } = data.value.stats.conversations;
+  if (!prev_month) return this_month > 0 ? 100 : 0;
+  return Math.min(100, Math.round((this_month / (prev_month * 1.5)) * 100));
+});
+
+const messagesPercent = computed(() => {
+  if (!data.value) return 0;
+  const { inbound, outbound } = data.value.stats.messages;
+  const total = inbound + outbound;
+  return total > 0
+    ? Math.min(100, Math.round((outbound / total) * 100) + 30)
+    : 0;
+});
+
+const botsPercent = computed(() => {
+  if (!data.value || !data.value.stats.bots.total) return 0;
+  return Math.round(
+    (data.value.stats.bots.active / data.value.stats.bots.total) * 100,
+  );
+});
+
+// ── Gross total (top-left big number, like "$855.8K Gross Sales") ────────────
+
+const grossTotal = computed(() => {
+  if (!data.value) return "0";
+  return (
+    data.value.stats.conversations.this_month +
+    data.value.stats.messages.this_month
+  ).toLocaleString();
+});
+
+// ── Main area chart (Conversations / Messages dual-line, like Sales/Cost) ────
+
+const mainChartSeries = computed(() => {
   if (!data.value) return [];
+  const conv = data.value.charts.conversations_by_day;
+  const msg = data.value.charts.messages_by_day;
   return [
-    {
-      name: "Conversations",
-      data: data.value.charts.conversations_by_day.map((d) => d.total),
-    },
+    { name: "Conversations", data: conv.map((d) => d.total) },
+    { name: "Messages", data: msg.map((d) => d.inbound + d.outbound) },
   ];
 });
 
-const convCategories = computed(
+const mainChartCategories = computed(
   () =>
     data.value?.charts.conversations_by_day.map((d) =>
       new Date(d.date).toLocaleDateString("en-GB", {
@@ -109,7 +159,64 @@ const convCategories = computed(
     ) ?? [],
 );
 
-const msgSeries = computed(() => {
+const mainChartOptions = computed(() => ({
+  chart: { type: "area", toolbar: { show: false } },
+  stroke: { curve: "smooth", width: 2.5 },
+  fill: {
+    type: "gradient",
+    gradient: { shadeIntensity: 1, opacityFrom: 0.25, opacityTo: 0.02 },
+  },
+  xaxis: {
+    categories: mainChartCategories.value,
+    labels: { style: { fontSize: "11px", colors: "#9aa3b2" } },
+    axisBorder: { show: false },
+    axisTicks: { show: false },
+  },
+  yaxis: { labels: { style: { fontSize: "11px", colors: "#9aa3b2" } } },
+  colors: ["#273775", "#27a7df"],
+  legend: { show: false },
+  tooltip: { x: { show: true } },
+  grid: { borderColor: "#f0f2f6", strokeDashArray: 3 },
+  dataLabels: { enabled: false },
+}));
+
+// ── Earnings donut (Conversation status, repurposed) ──────────────────────────
+
+const earningsSegments = computed(() => {
+  if (!data.value) return [];
+  const statusEntries = Object.entries(data.value.charts.conversation_status);
+  const colors = ["#273775", "#27a7df", "#f59e0b", "#ef4444"];
+  return statusEntries.map(([label, value], i) => ({
+    label: label.replace("_", " "),
+    value,
+    color: colors[i % colors.length],
+  }));
+});
+
+// ── Conversions-style bar chart (Messages in/out, like the S-M-T-W bars) ─────
+
+const conversionsChartOptions = computed(() => ({
+  chart: { type: "bar", toolbar: { show: false }, stacked: true },
+  plotOptions: { bar: { borderRadius: 3, columnWidth: "45%" } },
+  xaxis: {
+    categories:
+      data.value?.charts.messages_by_day.map((d) =>
+        new Date(d.date)
+          .toLocaleDateString("en-GB", { weekday: "short" })
+          .charAt(0),
+      ) ?? [],
+    labels: { style: { fontSize: "11px", colors: "#9aa3b2" } },
+    axisBorder: { show: false },
+    axisTicks: { show: false },
+  },
+  yaxis: { show: false },
+  colors: ["#273775", "#27a7df"],
+  dataLabels: { enabled: false },
+  grid: { show: false },
+  legend: { show: false },
+}));
+
+const conversionsSeries = computed(() => {
   if (!data.value) return [];
   return [
     {
@@ -123,98 +230,27 @@ const msgSeries = computed(() => {
   ];
 });
 
-const msgCategories = computed(
-  () =>
-    data.value?.charts.messages_by_day.map((d) =>
-      new Date(d.date).toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-      }),
-    ) ?? [],
-);
+// ── Bots table (Companies/Contacts/Order shape, trimmed to available fields) ─
 
-const statusPieSeries = computed(() =>
-  data.value ? Object.values(data.value.charts.conversation_status) : [],
-);
-const statusPieLabels = computed(() =>
-  data.value ? Object.keys(data.value.charts.conversation_status) : [],
-);
-
-const convChartOptions = computed(() => ({
-  chart: {
-    type: "area",
-    toolbar: { show: false },
-    sparkline: { enabled: false },
-  },
-  stroke: { curve: "smooth", width: 2 },
-  fill: {
-    type: "gradient",
-    gradient: { shadeIntensity: 1, opacityFrom: 0.3, opacityTo: 0.05 },
-  },
-  xaxis: {
-    categories: convCategories.value,
-    labels: { rotate: -45, style: { fontSize: "11px" } },
-  },
-  yaxis: { labels: { style: { fontSize: "11px" } } },
-  colors: ["#5199ae"],
-  tooltip: { x: { show: true } },
-  grid: { borderColor: "#f0f0f0" },
-  dataLabels: { enabled: false },
-}));
-
-const msgChartOptions = computed(() => ({
-  chart: { type: "bar", toolbar: { show: false }, stacked: false },
-  plotOptions: { bar: { borderRadius: 4, columnWidth: "55%" } },
-  xaxis: {
-    categories: msgCategories.value,
-    labels: { style: { fontSize: "11px" } },
-  },
-  colors: ["#5199ae", "#3f7f91"],
-  dataLabels: { enabled: false },
-  grid: { borderColor: "#f0f0f0" },
-  legend: { position: "top" },
-}));
-
-const pieChartOptions = computed(() => ({
-  chart: { type: "donut" },
-  labels: statusPieLabels.value,
-  colors: ["#22c55e", "#5199ae", "#f59e0b", "#ef4444"],
-  legend: { position: "bottom" },
-  dataLabels: {
-    enabled: true,
-    formatter: (val: number) => `${Math.round(val)}%`,
-  },
-  plotOptions: { pie: { donut: { size: "60%" } } },
-}));
+const initials = (name: string, fallback = "??") =>
+  (name || fallback).slice(0, 2).toUpperCase();
 </script>
 
 <template>
-  <!-- ── Header ─────────────────────────────────────────────────────── -->
-  <div class="d-flex align-center justify-space-between mb-6 flex-wrap gap-3">
-    <div>
-      <h1 class="text-h5 font-weight-bold">Dashboard</h1>
-      <p class="text-body-2 text-medium-emphasis mt-1">
-        {{ tenant?.name ?? "Your organisation" }} ·
-        {{
-          new Date().toLocaleDateString("en-GB", {
-            month: "long",
-            year: "numeric",
-          })
-        }}
-      </p>
-    </div>
-    <VChip
-      v-if="tenant?.subscription_tier"
-      color="primary"
-      variant="tonal"
-      size="small"
-      class="text-capitalize"
-    >
-      {{ tenant.subscription_tier }}
-    </VChip>
-  </div>
+  <!-- ── Hero ───────────────────────────────────────────────────────── -->
+  <Hero
+    :greeting="greeting"
+    subtitle="We're here to help your bots have better conversations, for free."
+    :cta-label="
+      tenant?.subscription_tier
+        ? tenant.subscription_tier.charAt(0).toUpperCase() +
+          tenant.subscription_tier.slice(1) +
+          ' plan'
+        : undefined
+    "
+    cta-icon="$bullhornOutline"
+  />
 
-  <!-- ── Loading / error ────────────────────────────────────────────── -->
   <div
     v-if="loading"
     class="d-flex justify-center align-center"
@@ -228,309 +264,171 @@ const pieChartOptions = computed(() => ({
   }}</VAlert>
 
   <template v-else-if="data">
-    <!-- ── Stat cards row ────────────────────────────────────────────── -->
+    <!-- ── Slim stat row ─────────────────────────────────────────────── -->
     <VRow class="mb-2">
-      <!-- Conversations -->
-      <VCol cols="12" sm="6" lg="3">
+      <VCol cols="12" sm="4">
+        <Stat
+          label="Conversations"
+          :value="data.stats.conversations.this_month.toLocaleString()"
+          :percent="conversationsPercent"
+          direction="up"
+          color="#273775"
+        />
+      </VCol>
+      <VCol cols="12" sm="4">
+        <Stat
+          label="Messages"
+          :value="data.stats.messages.this_month.toLocaleString()"
+          :percent="messagesPercent"
+          direction="down"
+          color="#27a7df"
+        />
+      </VCol>
+      <VCol cols="12" sm="4">
+        <Stat
+          label="Active bots"
+          :value="data.stats.bots.active"
+          :percent="botsPercent"
+          direction="down"
+          color="#7fc8e8"
+        />
+      </VCol>
+    </VRow>
+
+    <!-- ── Main chart ──────────────────────────────────────────────────── -->
+    <VRow class="mb-2">
+      <VCol cols="12">
         <VCard variant="flat" border rounded="lg" class="pa-5">
-          <div class="d-flex align-start justify-space-between">
+          <div
+            class="d-flex align-center justify-space-between mb-1 flex-wrap gap-2"
+          >
             <div>
-              <p
-                class="text-caption text-medium-emphasis text-uppercase font-weight-medium mb-1"
-              >
+              <p class="text-h5 font-weight-bold mb-0">{{ grossTotal }}</p>
+              <p class="text-caption text-medium-emphasis mb-0">
+                Conversations &amp; messages — last 30 days
+              </p>
+            </div>
+            <div class="d-flex align-center gap-4">
+              <span class="d-flex align-center gap-1 text-caption">
+                <span class="legend-dot" style="background: #273775" />
                 Conversations
-              </p>
-              <p class="text-h4 font-weight-bold">
-                {{ data.stats.conversations.this_month.toLocaleString() }}
-              </p>
-              <p class="text-caption mt-1">
-                This month ·
-                <span
-                  :class="`text-${formatChange(data.stats.conversations.change_pct).color}`"
-                >
-                  {{ formatChange(data.stats.conversations.change_pct).text }}
-                </span>
-                vs last
-              </p>
+              </span>
+              <span class="d-flex align-center gap-1 text-caption">
+                <span class="legend-dot" style="background: #27a7df" /> Messages
+              </span>
             </div>
-            <VAvatar color="primary" variant="tonal" size="44" rounded="lg">
-              <VIcon icon="mdi-message-processing-outline" />
-            </VAvatar>
           </div>
-          <VDivider class="my-3" />
-          <div class="d-flex gap-4 text-caption text-medium-emphasis">
-            <span
-              ><span class="text-success font-weight-medium">{{
-                data.stats.conversations.active
-              }}</span>
-              active</span
-            >
-            <span
-              ><span class="text-primary font-weight-medium">{{
-                data.stats.conversations.completed
-              }}</span>
-              completed</span
-            >
-            <span
-              ><span class="text-warning font-weight-medium">{{
-                data.stats.conversations.handed_off
-              }}</span>
-              handed off</span
-            >
-          </div>
-        </VCard>
-      </VCol>
-
-      <!-- Messages -->
-      <VCol cols="12" sm="6" lg="3">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
-          <div class="d-flex align-start justify-space-between">
-            <div>
-              <p
-                class="text-caption text-medium-emphasis text-uppercase font-weight-medium mb-1"
-              >
-                Messages
-              </p>
-              <p class="text-h4 font-weight-bold">
-                {{ data.stats.messages.this_month.toLocaleString() }}
-              </p>
-              <p class="text-caption mt-1">
-                This month ·
-                <span
-                  :class="`text-${formatChange(data.stats.messages.change_pct).color}`"
-                >
-                  {{ formatChange(data.stats.messages.change_pct).text }}
-                </span>
-                vs last
-              </p>
-            </div>
-            <VAvatar color="info" variant="tonal" size="44" rounded="lg">
-              <VIcon icon="mdi-chat-outline" />
-            </VAvatar>
-          </div>
-          <VDivider class="my-3" />
-          <div class="d-flex gap-4 text-caption text-medium-emphasis">
-            <span
-              ><span class="font-weight-medium"
-                >↓ {{ data.stats.messages.inbound.toLocaleString() }}</span
-              >
-              in</span
-            >
-            <span
-              ><span class="font-weight-medium"
-                >↑ {{ data.stats.messages.outbound.toLocaleString() }}</span
-              >
-              out</span
-            >
-          </div>
-        </VCard>
-      </VCol>
-
-      <!-- Bots -->
-      <VCol cols="12" sm="6" lg="3">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
-          <div class="d-flex align-start justify-space-between">
-            <div>
-              <p
-                class="text-caption text-medium-emphasis text-uppercase font-weight-medium mb-1"
-              >
-                Bots
-              </p>
-              <p class="text-h4 font-weight-bold">
-                {{ data.stats.bots.total }}
-              </p>
-              <p class="text-caption mt-1 text-medium-emphasis">
-                {{ data.stats.bots.active }} active ·
-                {{ data.stats.bots.total - data.stats.bots.active }} inactive
-              </p>
-            </div>
-            <VAvatar color="success" variant="tonal" size="44" rounded="lg">
-              <VIcon icon="mdi-robot-outline" />
-            </VAvatar>
-          </div>
-          <VDivider class="my-3" />
-          <div class="d-flex gap-4 text-caption text-medium-emphasis">
-            <span
-              ><span class="text-primary font-weight-medium">{{
-                data.stats.flows.published
-              }}</span>
-              published flows</span
-            >
-            <span
-              ><span class="font-weight-medium">{{
-                data.stats.flows.draft
-              }}</span>
-              drafts</span
-            >
-          </div>
-        </VCard>
-      </VCol>
-
-      <!-- WhatsApp & Users -->
-      <VCol cols="12" sm="6" lg="3">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
-          <div class="d-flex align-start justify-space-between">
-            <div>
-              <p
-                class="text-caption text-medium-emphasis text-uppercase font-weight-medium mb-1"
-              >
-                WhatsApp Accounts
-              </p>
-              <p class="text-h4 font-weight-bold">
-                {{ data.stats.whatsapp_accounts }}
-              </p>
-              <p class="text-caption mt-1 text-medium-emphasis">
-                Connected &amp; active
-              </p>
-            </div>
-            <VAvatar
-              color="success"
-              variant="tonal"
-              size="44"
-              rounded="lg"
-              style="background: #25d366 !important; opacity: 0.85"
-            >
-              <VIcon icon="mdi-whatsapp" color="white" />
-            </VAvatar>
-          </div>
-          <VDivider class="my-3" />
-          <div class="text-caption text-medium-emphasis">
-            <span class="font-weight-medium">{{
-              data.stats.users.active
-            }}</span>
-            / {{ data.stats.users.total }} team members active
-          </div>
+          <apexchart
+            type="area"
+            height="240"
+            :options="mainChartOptions"
+            :series="mainChartSeries"
+          />
         </VCard>
       </VCol>
     </VRow>
 
-    <!-- ── Charts row ──────────────────────────────────────────────── -->
+    <!-- ── Earnings donut + Conversions bar ────────────────────────────── -->
     <VRow class="mb-2">
-      <!-- Conversations over 30 days -->
-      <VCol cols="12" md="8">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
-          <p class="text-subtitle-2 font-weight-semibold mb-4">
-            Conversations — last 30 days
-          </p>
-          <apexchart
-            type="area"
-            height="220"
-            :options="convChartOptions"
-            :series="convSeries"
-          />
-        </VCard>
-      </VCol>
-
-      <!-- Status donut -->
-      <VCol cols="12" md="4">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
+      <VCol cols="12" md="5">
+        <VCard variant="flat" border rounded="lg" class="pa-5 h-100">
           <p class="text-subtitle-2 font-weight-semibold mb-4">
             Conversation status
           </p>
-          <apexchart
-            v-if="statusPieSeries.length"
-            type="donut"
-            height="220"
-            :options="pieChartOptions"
-            :series="statusPieSeries"
+          <EarningsDonut
+            v-if="earningsSegments.length"
+            :segments="earningsSegments"
           />
-          <div
-            v-else
-            class="d-flex align-center justify-center"
-            style="height: 220px"
-          >
-            <p class="text-caption text-medium-emphasis">No data yet</p>
-          </div>
+          <p v-else class="text-caption text-medium-emphasis">No data yet</p>
         </VCard>
       </VCol>
-    </VRow>
 
-    <!-- Messages + Top bots -->
-    <VRow class="mb-2">
-      <!-- Messages by day -->
       <VCol cols="12" md="7">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
+        <VCard variant="flat" border rounded="lg" class="pa-5 h-100">
           <p class="text-subtitle-2 font-weight-semibold mb-4">
             Messages — last 7 days
           </p>
           <apexchart
             type="bar"
-            height="220"
-            :options="msgChartOptions"
-            :series="msgSeries"
+            height="180"
+            :options="conversionsChartOptions"
+            :series="conversionsSeries"
           />
-        </VCard>
-      </VCol>
-
-      <!-- Top bots -->
-      <VCol cols="12" md="5">
-        <VCard variant="flat" border rounded="lg" class="pa-5">
-          <p class="text-subtitle-2 font-weight-semibold mb-4">
-            Top bots this month
-          </p>
-          <div v-if="data.top_bots.length">
-            <div
-              v-for="(bot, i) in data.top_bots"
-              :key="bot.id"
-              class="d-flex align-center gap-3 mb-3"
-            >
-              <VAvatar
-                size="32"
-                color="primary"
-                variant="tonal"
-                class="text-caption font-weight-bold"
-              >
-                {{ i + 1 }}
-              </VAvatar>
-              <div class="flex-grow-1 min-w-0">
-                <p class="text-body-2 font-weight-medium text-truncate">
-                  {{ bot.name }}
-                </p>
-                <VProgressLinear
-                  :model-value="bot.conversation_count"
-                  :max="data.top_bots[0].conversation_count || 1"
-                  color="primary"
-                  rounded
-                  height="4"
-                  class="mt-1"
-                />
-              </div>
-              <span class="text-caption text-medium-emphasis">{{
-                bot.conversation_count
-              }}</span>
-            </div>
-          </div>
-          <p v-else class="text-caption text-medium-emphasis">
-            No conversations this month.
-          </p>
         </VCard>
       </VCol>
     </VRow>
 
-    <!-- ── Recent conversations table ─────────────────────────────── -->
+    <!-- ── Bots table — only fields the API actually returns ──────────── -->
+    <VRow class="mb-2">
+      <VCol cols="12">
+        <VCard variant="flat" border rounded="lg">
+          <div class="px-5 pt-5 pb-3">
+            <p class="text-subtitle-2 font-weight-semibold mb-0">Top Bots</p>
+            <p class="text-caption text-medium-emphasis mb-0">
+              {{ data.top_bots.length }} bot(s) this month
+            </p>
+          </div>
+          <VDivider />
+          <VTable density="comfortable">
+            <thead>
+              <tr>
+                <th>Bot</th>
+                <th>Conversations this month</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="bot in data.top_bots" :key="bot.id">
+                <td>
+                  <div class="d-flex align-center gap-2 py-1">
+                    <VAvatar
+                      size="32"
+                      color="primary"
+                      variant="tonal"
+                      rounded="lg"
+                    >
+                      <VIcon icon="$robotOutline" size="16" />
+                    </VAvatar>
+                    <span class="text-body-2 font-weight-medium">{{
+                      bot.name
+                    }}</span>
+                  </div>
+                </td>
+                <td class="text-body-2 text-medium-emphasis">
+                  {{ bot.conversation_count }}
+                </td>
+              </tr>
+              <tr v-if="!data.top_bots.length">
+                <td
+                  colspan="2"
+                  class="text-center text-caption text-medium-emphasis py-6"
+                >
+                  No bots yet.
+                </td>
+              </tr>
+            </tbody>
+          </VTable>
+        </VCard>
+      </VCol>
+    </VRow>
+
+    <!-- ── Recent conversations ─────────────────────────────────────────── -->
     <VRow>
       <VCol cols="12">
         <VCard variant="flat" border rounded="lg">
-          <div class="d-flex align-center justify-space-between px-5 pt-5 pb-3">
-            <p class="text-subtitle-2 font-weight-semibold">
+          <div class="px-5 pt-5 pb-3">
+            <p class="text-subtitle-2 font-weight-semibold mb-0">
               Recent conversations
             </p>
-            <RouterLink
-              to="/conversations"
-              class="text-caption text-primary text-decoration-none"
-            >
-              View all →
-            </RouterLink>
           </div>
           <VDivider />
-          <VTable density="compact">
+          <VTable density="comfortable">
             <thead>
               <tr>
                 <th>User</th>
-                <th>Flow</th>
+                <th>Bot</th>
                 <th>Status</th>
-                <th class="text-right">Messages</th>
-                <th class="text-right">Last activity</th>
+                <th>Messages</th>
+                <th>Last message</th>
               </tr>
             </thead>
             <tbody>
@@ -538,41 +436,38 @@ const pieChartOptions = computed(() => ({
                 <td>
                   <div class="d-flex align-center gap-2 py-1">
                     <VAvatar
-                      size="28"
-                      color="secondary"
+                      size="26"
+                      color="info"
                       variant="tonal"
                       class="text-caption"
                     >
                       {{
-                        (conv.whatsapp_user_name ??
-                          conv.whatsapp_user_phone)[0].toUpperCase()
+                        initials(
+                          conv.whatsapp_user_name ?? conv.whatsapp_user_phone,
+                        )
                       }}
                     </VAvatar>
-                    <div>
-                      <p class="text-body-2">
-                        {{ conv.whatsapp_user_name ?? "—" }}
-                      </p>
-                      <p class="text-caption text-medium-emphasis">
-                        {{ conv.whatsapp_user_phone }}
-                      </p>
-                    </div>
+                    <span class="text-body-2">
+                      {{ conv.whatsapp_user_name ?? conv.whatsapp_user_phone }}
+                    </span>
                   </div>
                 </td>
-                <td class="text-body-2">{{ conv.flow?.name ?? "—" }}</td>
+                <td class="text-body-2 text-medium-emphasis">
+                  {{ conv.bot?.name ?? "—" }}
+                </td>
                 <td>
                   <VChip
+                    size="small"
                     :color="statusColor[conv.status] ?? 'default'"
-                    size="x-small"
                     variant="tonal"
-                    class="text-capitalize"
                   >
                     {{ conv.status.replace("_", " ") }}
                   </VChip>
                 </td>
-                <td class="text-right text-body-2">
+                <td class="text-body-2 text-medium-emphasis">
                   {{ conv.message_count }}
                 </td>
-                <td class="text-right text-caption text-medium-emphasis">
+                <td class="text-body-2 text-medium-emphasis">
                   {{ fmtDate(conv.last_message_at) }}
                 </td>
               </tr>
@@ -591,3 +486,12 @@ const pieChartOptions = computed(() => ({
     </VRow>
   </template>
 </template>
+
+<style scoped>
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+</style>

@@ -135,7 +135,6 @@ class TenantNotificationService
                         ],
                     ));
             } catch (\Throwable) {
-                // Email failure must never break the notification flow
             }
         }
     }

@@ -329,6 +329,10 @@ import {
   mdiFileOutline,
   mdiPlayCircle,
   mdiEarth,
+  mdiArrowTopRight,
+  mdiArrowBottomLeft,
+  mdiBullhornOutline,
+  mdiPaperclip,
 } from "@mdi/js";
 
 export const icons = {
@@ -662,4 +666,8 @@ export const icons = {
   fileOutline: mdiFileOutline,
   playCircle: mdiPlayCircle,
   earth: mdiEarth,
+  arrowTopRight: mdiArrowTopRight,
+  arrowBottomLeft: mdiArrowBottomLeft,
+  bullhornOutline: mdiBullhornOutline,
+  paperclip: mdiPaperclip,
 };

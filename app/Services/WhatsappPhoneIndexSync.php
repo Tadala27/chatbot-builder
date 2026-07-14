@@ -83,4 +83,11 @@ class WhatsappPhoneIndexSync
                 ->delete();
         }
     }
+
+    public function hasIndex(WhatsappAccount $account): bool
+    {
+        return WhatsappPhoneIndex::on($this->landlordConnection())
+            ->where('phone_number_id', $account->phone_number_id)
+            ->exists();
+    }
 }

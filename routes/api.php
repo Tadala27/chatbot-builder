@@ -7,8 +7,7 @@ use App\Http\Controllers\Api\Admin\PlatformAnalyticsController;
 use App\Http\Controllers\Api\Admin\PlatformSettingsController;
 use App\Http\Controllers\Api\Admin\SystemLogController;
 use App\Http\Controllers\Api\Admin\TenantController;
-use App\Http\Controllers\Api\ConnectorController;
-use App\Http\Middleware\ResolveTenantFromConnectorKey;
+use App\Http\Controllers\Api\WebhookController;
 use Illuminate\Support\Facades\Route;
 
 // =============================================================================
@@ -20,15 +19,12 @@ Route::prefix('auth')->group(function () {
     Route::post('password/reset-link', [AuthController::class, 'sendResetLink']);
     Route::post('password/reset', [AuthController::class, 'resetPassword']);
 });
-Route::prefix('webhook/connector')->group(function () {
-    Route::get('/', [ConnectorController::class, 'verify']);
-    Route::post('/', [ConnectorController::class, 'receive']);
+
+Route::prefix('webhooks')->group(function () {
+    Route::get('/whatsapp', [WebhookController::class, 'verifyWhatsApp']);
+    Route::post('/whatsapp', [WebhookController::class, 'handleWhatsApp']);
 });
-Route::get('connector/media/{media_id}', [ConnectorController::class, 'streamMedia'])
-    ->name('connector.media.stream')
-    ->middleware('signed');
-Route::post('connector/messages', [ConnectorController::class, 'send'])
-    ->middleware(ResolveTenantFromConnectorKey::class);
+
 // =============================================================================
 // PROTECTED — Central admin users only
 // =============================================================================
@@ -46,7 +42,7 @@ Route::middleware(['auth:system'])->group(function () {
     // ── Tenant Management ─────────────────────────────────────────────────────
     Route::prefix('admin/tenants')->group(function () {
         Route::get('/', [TenantController::class, 'index'])
-        ->middleware('permission:view tenants');
+            ->middleware('permission:view tenants');
 
         Route::post('/', [TenantController::class, 'store'])
             ->middleware('permission:create tenants');

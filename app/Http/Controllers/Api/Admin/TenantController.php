@@ -7,8 +7,8 @@ use App\Models\Tenant;
 use App\Services\Tenant\TenantDatabaseManager;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
+// use Illuminate\Support\Facades\Auth;
+// use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class TenantController extends Controller
@@ -51,7 +51,7 @@ class TenantController extends Controller
             'slug' => ['required', 'string', 'max:100', 'unique:tenants,slug', 'alpha_dash'],
             'subscription_tier' => ['required', Rule::in(['free', 'starter', 'professional', 'enterprise'])],
             'subscription_expires_at' => ['nullable', 'date', 'after:today'],
-            'max_flows' => ['sometimes', 'integer', 'min:1'],
+            'max_bots' => ['sometimes', 'integer', 'min:1'],
             'max_conversations_per_month' => ['sometimes', 'integer', 'min:100'],
             'is_active' => ['sometimes', 'boolean'],
             'settings' => ['sometimes', 'array'],
@@ -67,7 +67,7 @@ class TenantController extends Controller
             'name' => $validated['name'],
             'subscription_tier' => $validated['subscription_tier'],
             'subscription_expires_at' => $validated['subscription_expires_at'] ?? null,
-            'max_flows' => $validated['max_flows'] ?? 3,
+            'max_bots' => $validated['max_bots'] ?? 3,
             'max_conversations_per_month' => $validated['max_conversations_per_month'] ?? 1000,
             'is_active' => $validated['is_active'] ?? true,
             'settings' => $validated['settings'] ?? [],
@@ -100,7 +100,7 @@ class TenantController extends Controller
             'slug' => ['sometimes', 'string', 'alpha_dash', Rule::unique('tenants', 'slug')->ignore($tenant->id)],
             'subscription_tier' => ['sometimes', Rule::in(['free', 'starter', 'professional', 'enterprise'])],
             'subscription_expires_at' => ['nullable', 'date'],
-            'max_flows' => ['sometimes', 'integer', 'min:1'],
+            'max_bots' => ['sometimes', 'integer', 'min:1'],
             'max_conversations_per_month' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
             'settings' => ['sometimes', 'array'],

@@ -2,6 +2,7 @@
 
 namespace App\Services\Bot;
 
+use App\Jobs\ContinueChatbotFlow;
 use App\Models\Api;
 use App\Models\Conversation;
 use App\Models\ConversationVariable;
@@ -9,27 +10,13 @@ use App\Models\CustomVariable;
 use App\Models\Dialog;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Executes individual action configs produced by the flow builder.
- *
- * Actions are loaded from the dialog_actions table via getDialogActions() in
- * ChatbotFlowExecutor. Each action's config JSON is merged with ['kind' => action_type].
- *
- * Condition actions receive a '_db_conditions' key from ActionCondition rows.
- *
- * saved_response conditions:
- *   - Resolve via __dialog_{id}_selection conversation variables set by
- *     ChatbotFlowExecutor::processUserInput() when DialogOption.save_response = true.
- *   - The condition's 'source' field holds the option's external_id (UUID).
- *   - The condition's 'value' may be null; in that case 'source' is used as
- *     the expected value (i.e. "was THIS option selected?").
- */
 class ActionExecutorService
 {
     public function __construct(
         private VariableResolver $variableResolver,
         private FunctionExecutor $functionExecutor,
-    ) {}
+    ) {
+    }
 
     // =========================================================================
     // PUBLIC API
@@ -37,33 +24,34 @@ class ActionExecutorService
 
     public function execute(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action,
-        array        $variables
+        Dialog $dialog,
+        array $action,
+        array $variables
     ): ?string {
         $kind = $action['kind'] ?? $action['action_type'] ?? null;
 
         if (!$kind) {
             Log::warning('ActionExecutorService: action missing kind', [
                 'dialog_id' => $dialog->id,
-                'action'    => $action,
+                'action' => $action,
             ]);
+
             return null;
         }
 
         return match ($kind) {
-            'navigation'    => $this->executeNavigation($action),
-            'condition'     => $this->executeCondition($conversation, $dialog, $action, $variables),
-            'variable'      => $this->executeVariable($conversation, $action, $variables),
-            'api'           => $this->executeApiCall($conversation, $dialog, $action, $variables),
-            'function'      => $this->executeFunction($conversation, $action, $variables),
-            'delay'         => $this->executeDelay($conversation, $dialog, $action),
-            'handoff'       => $this->executeHandoff($conversation, $dialog, $action),
-            'start_flow'    => '__system:start_flow__',
-            'go_home'       => '__system:go_home__',
-            'go_back'       => '__system:go_back__',
+            'navigation' => $this->executeNavigation($action),
+            'condition' => $this->executeCondition($conversation, $dialog, $action, $variables),
+            'variable' => $this->executeVariable($conversation, $action, $variables),
+            'api' => $this->executeApiCall($conversation, $dialog, $action, $variables),
+            'function' => $this->executeFunction($conversation, $action, $variables),
+            'delay' => $this->executeDelay($conversation, $dialog, $action),
+            'handoff' => $this->executeHandoff($conversation, $dialog, $action),
+            'start_flow' => '__system:start_flow__',
+            'go_home' => '__system:go_home__',
+            'go_back' => '__system:go_back__',
             'talk_to_agent' => '__system:talk_to_agent__',
-            default         => null,
+            default => null,
         };
     }
 
@@ -82,13 +70,10 @@ class ActionExecutorService
 
     private function executeHandoff(Conversation $conversation, Dialog $dialog, array $action): ?string
     {
-        $conversation->update([
-            'status'   => 'handed_off',
-            'metadata' => array_merge($conversation->metadata ?? [], [
-                'handoff_source_dialog' => $dialog->id,
-                'handoff_resume_at'     => $action['resumeAt'] ?? null,
-            ]),
-        ]);
+        $conversation->handOff(
+            sourceDialogId: $dialog->id,
+            resumeAt: $action['resumeAt'] ?? null,
+        );
 
         return null;
     }
@@ -97,20 +82,14 @@ class ActionExecutorService
 
     private function executeCondition(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action,
-        array        $variables
+        Dialog $dialog,
+        array $action,
+        array $variables
     ): ?string {
-        // _db_conditions is a flat list from ActionCondition rows injected by
-        // getDialogActions(). When present, use them for the first branch.
-        // For multi-branch flows the branches array in config is authoritative.
         $dbConditions = $action['_db_conditions'] ?? null;
 
         foreach ($action['branches'] ?? [] as $branchIndex => $branch) {
             $logic = $branch['conditionLogic'] ?? 'AND';
-
-            // Use DB conditions for branch 0 when available (single-branch common case).
-            // Multi-branch: each branch uses its own config-embedded conditions.
             if ($dbConditions !== null && $branchIndex === 0) {
                 $conditions = $dbConditions;
             } else {
@@ -122,7 +101,7 @@ class ActionExecutorService
             }
 
             $results = array_map(
-                fn($cond) => $this->evaluateSingleCondition($cond, $variables, $conversation),
+                fn ($cond) => $this->evaluateSingleCondition($cond, $variables, $conversation),
                 $conditions
             );
 
@@ -132,16 +111,19 @@ class ActionExecutorService
 
             Log::info('Condition branch evaluated', [
                 'branch_index' => $branchIndex,
-                'logic'        => $logic,
-                'results'      => $results,
-                'matched'      => $matched,
+                'logic' => $logic,
+                'results' => $results,
+                'matched' => $matched,
             ]);
 
             if ($matched) {
                 foreach ($branch['actions'] ?? [] as $branchAction) {
                     $target = $this->execute($conversation, $dialog, $branchAction, $variables);
-                    if ($target) return $target;
+                    if ($target) {
+                        return $target;
+                    }
                 }
+
                 return null; // matched but no navigation action in branch
             }
         }
@@ -149,7 +131,9 @@ class ActionExecutorService
         // ── ELSE (defaultBranch) ──────────────────────────────────────────────
         foreach ($action['defaultBranch']['actions'] ?? [] as $defaultAction) {
             $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
-            if ($target) return $target;
+            if ($target) {
+                return $target;
+            }
         }
 
         return null;
@@ -161,11 +145,11 @@ class ActionExecutorService
      * Accepts both camelCase (config-embedded) and snake_case (DB ActionCondition) keys.
      */
     private function evaluateSingleCondition(
-        array        $condition,
-        array        $variables,
+        array $condition,
+        array $variables,
         Conversation $conversation
     ): bool {
-        $type     = $condition['type']     ?? $condition['condition_type']     ?? 'variable';
+        $type = $condition['type'] ?? $condition['condition_type'] ?? 'variable';
         $operator = $condition['operator'] ?? $condition['condition_operator'] ?? 'equals';
 
         // For saved_response: if 'value' is null/empty, compare against 'source'
@@ -173,8 +157,8 @@ class ActionExecutorService
         // sets up "did the user select THIS option?" conditions.
         $expectedValue = $condition['value'] ?? $condition['condition_value'] ?? '';
         if (
-            in_array($type, ['saved_response', 'option_selected'], true) &&
-            ($expectedValue === null || $expectedValue === '')
+            in_array($type, ['saved_response', 'option_selected'], true)
+            && ($expectedValue === null || $expectedValue === '')
         ) {
             $expectedValue = $condition['source'] ?? $condition['variable_key'] ?? '';
         }
@@ -198,11 +182,11 @@ class ActionExecutorService
         };
 
         Log::info('Evaluating condition', [
-            'type'           => $type,
-            'operator'       => $operator,
+            'type' => $type,
+            'operator' => $operator,
             'expected_value' => $expectedValue,
-            'actual_value'   => $actualValue,
-            'result'         => $this->compareValues($actualValue, $expectedValue, $operator),
+            'actual_value' => $actualValue,
+            'result' => $this->compareValues($actualValue, $expectedValue, $operator),
         ]);
 
         return $this->compareValues($actualValue, $expectedValue, $operator);
@@ -222,8 +206,8 @@ class ActionExecutorService
      * then checks against expectedValue (also the option's external_id).
      */
     private function resolveOptionSelection(
-        array        $condition,
-        array        $variables,
+        array $condition,
+        array $variables,
         Conversation $conversation
     ): ?string {
         // ── 1. DB option_id reference ─────────────────────────────────────────
@@ -234,8 +218,8 @@ class ActionExecutorService
                 $selectedId = $variables["__dialog_{$option->dialog_id}_selection"] ?? null;
 
                 Log::info('saved_response resolved via option_id', [
-                    'option_id'   => $optionId,
-                    'dialog_id'   => $option->dialog_id,
+                    'option_id' => $optionId,
+                    'dialog_id' => $option->dialog_id,
                     'selected_id' => $selectedId,
                 ]);
 
@@ -252,9 +236,9 @@ class ActionExecutorService
 
                 Log::info('saved_response resolved via external_id', [
                     'external_id' => $externalId,
-                    'dialog_id'   => $option->dialog_id,
+                    'dialog_id' => $option->dialog_id,
                     'selected_id' => $selectedId,
-                    'match'       => $selectedId === $externalId,
+                    'match' => $selectedId === $externalId,
                 ]);
 
                 return $selectedId;
@@ -263,7 +247,7 @@ class ActionExecutorService
 
         // ── 3. Fallback ───────────────────────────────────────────────────────
         Log::warning('saved_response: could not find DialogOption, falling back to last user input', [
-            'option_id'   => $optionId,
+            'option_id' => $optionId,
             'external_id' => $externalId,
         ]);
 
@@ -274,8 +258,8 @@ class ActionExecutorService
 
     private function executeVariable(
         Conversation $conversation,
-        array        $action,
-        array        $variables
+        array $action,
+        array $variables
     ): ?string {
         $varName = $action['varName'] ?? null;
 
@@ -283,6 +267,7 @@ class ActionExecutorService
             Log::warning('Set Variable action has no varName', [
                 'conversation_id' => $conversation->id,
             ]);
+
             return null;
         }
 
@@ -301,20 +286,21 @@ class ActionExecutorService
         if ($value === null) {
             Log::info('Set Variable: no value found', [
                 'conversation_id' => $conversation->id,
-                'var'             => $varName,
+                'var' => $varName,
             ]);
+
             return null;
         }
 
-        \App\Models\ConversationVariable::updateOrCreate(
+        ConversationVariable::updateOrCreate(
             ['conversation_id' => $conversation->id, 'key' => $varName],
             ['value' => $value]
         );
 
         Log::info('Variable set', [
             'conversation_id' => $conversation->id,
-            'variable'        => $varName,
-            'value'           => $value,
+            'variable' => $varName,
+            'value' => $value,
         ]);
 
         return null;
@@ -322,32 +308,33 @@ class ActionExecutorService
 
     private function executeApiCall(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action,
-        array        $variables
+        Dialog $dialog,
+        array $action,
+        array $variables
     ): ?string {
         try {
             $apiConfig = Api::where('name', $action['apiConfigId'])->first();
 
             if (!$apiConfig) {
                 Log::error('API config not found', [
-                    'dialog_id'     => $dialog->id,
+                    'dialog_id' => $dialog->id,
                     'api_config_id' => $action['apiConfigId'] ?? '',
                 ]);
+
                 return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
             }
 
-            $client   = new \GuzzleHttp\Client(['timeout' => 30]);
-            $method   = strtoupper($apiConfig->method);
+            $client = new \GuzzleHttp\Client(['timeout' => 30]);
+            $method = strtoupper($apiConfig->method);
             $endpoint = $this->variableResolver->resolve($apiConfig->url, $variables);
-            $options  = [];
+            $options = [];
 
             // Cast-safe decoding — model casts headers/form_data/etc. to array,
             // but request_body is a plain text column.
-            $headers          = $this->safeJsonDecode($apiConfig->headers);
-            $formData         = $this->safeJsonDecode($apiConfig->form_data);
+            $headers = $this->safeJsonDecode($apiConfig->headers);
+            $formData = $this->safeJsonDecode($apiConfig->form_data);
             $urlEncodedFields = $this->safeJsonDecode($apiConfig->url_encoded_fields);
-            $bodyParameters   = $this->safeJsonDecode($apiConfig->body_parameters);
+            $bodyParameters = $this->safeJsonDecode($apiConfig->body_parameters);
 
             // ── Build headers ─────────────────────────────────────────────────────
             // For multipart, do NOT set Content-Type — Guzzle sets it with the
@@ -364,13 +351,12 @@ class ActionExecutorService
 
             // ── Build body ────────────────────────────────────────────────────────
             if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
-
                 if ($isMultipart && !empty($formData)) {
                     $multipart = [];
                     foreach ($formData as $field) {
                         if (is_array($field) && isset($field['key'])) {
                             $multipart[] = [
-                                'name'     => $field['key'],
+                                'name' => $field['key'],
                                 'contents' => $this->variableResolver->resolve(
                                     (string) ($field['value'] ?? ''),
                                     $variables
@@ -383,7 +369,7 @@ class ActionExecutorService
                     }
                 } elseif (!empty($apiConfig->request_body)) {
                     // request_body is a text column — always a string from the DB.
-                    $rawBody     = (string) $apiConfig->request_body;
+                    $rawBody = (string) $apiConfig->request_body;
                     $resolvedBody = $this->variableResolver->resolve($rawBody, $variables);
 
                     // resolve() should return string, but guard defensively.
@@ -395,9 +381,9 @@ class ActionExecutorService
                             $options['json'] = $decoded;
                         } else {
                             Log::warning('API call: request_body is not valid JSON after variable resolution', [
-                                'dialog_id'  => $dialog->id,
+                                'dialog_id' => $dialog->id,
                                 'api_config' => $apiConfig->name,
-                                'body'       => $resolvedBody,
+                                'body' => $resolvedBody,
                             ]);
                         }
                     }
@@ -424,7 +410,7 @@ class ActionExecutorService
                     $key = is_array($param) ? ($param['key'] ?? reset($param)) : $param;
                     if (!empty($key) && is_string($key)) {
                         $queryParams[$key] = $this->variableResolver->resolve(
-                            '{{' . $key . '}}',
+                            '{{'.$key.'}}',
                             $variables
                         );
                     }
@@ -436,20 +422,20 @@ class ActionExecutorService
 
             Log::debug('API request details', [
                 'dialog_id' => $dialog->id,
-                'method'    => $method,
-                'endpoint'  => $endpoint,
-                'options'   => $this->sanitizeOptionsForLog($options),
+                'method' => $method,
+                'endpoint' => $endpoint,
+                'options' => $this->sanitizeOptionsForLog($options),
             ]);
 
-            $response     = $client->request($method, $endpoint, $options);
-            $statusCode   = $response->getStatusCode();
+            $response = $client->request($method, $endpoint, $options);
+            $statusCode = $response->getStatusCode();
             $responseBody = json_decode($response->getBody()->getContents(), true);
 
             Log::info('API call executed', [
-                'dialog_id'   => $dialog->id,
-                'api_config'  => $apiConfig->name,
-                'endpoint'    => $endpoint,
-                'method'      => $method,
+                'dialog_id' => $dialog->id,
+                'api_config' => $apiConfig->name,
+                'endpoint' => $endpoint,
+                'method' => $method,
                 'status_code' => $statusCode,
             ]);
 
@@ -463,7 +449,7 @@ class ActionExecutorService
             $conversation->update([
                 'metadata' => array_merge($conversation->metadata ?? [], [
                     'last_api_response' => $responseBody,
-                    'last_api_status'   => $statusCode,
+                    'last_api_status' => $statusCode,
                 ]),
             ]);
 
@@ -488,18 +474,18 @@ class ActionExecutorService
             );
         } catch (\GuzzleHttp\Exception\RequestException $e) {
             $responseBody = null;
-            $statusCode   = null;
+            $statusCode = null;
 
             if ($e->hasResponse()) {
                 // HTTP error path (RequestException with response)
-                $statusCode   = $e->getResponse()->getStatusCode();
+                $statusCode = $e->getResponse()->getStatusCode();
                 $responseBody = json_decode($e->getResponse()->getBody()->getContents(), true);
 
                 Log::error('API call HTTP error', [
-                    'dialog_id'     => $dialog->id,
+                    'dialog_id' => $dialog->id,
                     'api_config_id' => $action['apiConfigId'] ?? '',
-                    'status_code'   => $statusCode,
-                    'error'         => $e->getMessage(),
+                    'status_code' => $statusCode,
+                    'error' => $e->getMessage(),
                 ]);
 
                 return $this->executeResponseHandlers(
@@ -513,17 +499,17 @@ class ActionExecutorService
             }
 
             Log::error('API call network error', [
-                'dialog_id'     => $dialog->id,
+                'dialog_id' => $dialog->id,
                 'api_config_id' => $action['apiConfigId'] ?? '',
-                'error'         => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
         } catch (\Exception $e) {
             Log::error('API call unexpected error', [
-                'dialog_id'     => $dialog->id,
+                'dialog_id' => $dialog->id,
                 'api_config_id' => $action['apiConfigId'] ?? '',
-                'error'         => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
@@ -531,15 +517,13 @@ class ActionExecutorService
     }
 
     /**
-     * Safely decode JSON data that could be either string or array
-     * 
-     * @param mixed $data
-     * @return array
+     * Safely decode JSON data that could be either string or array.
      */
     private function safeJsonDecode($data): array
     {
         if (is_string($data) && !empty($data)) {
             $decoded = json_decode($data, true);
+
             return json_last_error() === JSON_ERROR_NONE ? ($decoded ?? []) : [];
         }
 
@@ -547,10 +531,7 @@ class ActionExecutorService
     }
 
     /**
-     * Sanitize options array for logging (remove sensitive data)
-     * 
-     * @param array $options
-     * @return array
+     * Sanitize options array for logging (remove sensitive data).
      */
     private function sanitizeOptionsForLog(array $options): array
     {
@@ -584,77 +565,84 @@ class ActionExecutorService
         return $sanitized;
     }
 
-private function storeResponseAsVariables(
-    Conversation $conversation,
-    array                    $declaredParams,
-    array                    $responseBody,
-    int                      $botId
-): void {
-    if (empty($declaredParams) || empty($responseBody)) {
-        return;
-    }
- 
-    // Extract declared keys, stripping any {{ }} wrappers the builder adds.
-    $paramKeys = [];
-    foreach ($declaredParams as $param) {
-        $raw = is_array($param) ? ($param['key'] ?? reset($param)) : (string) $param;
-        $key = trim((string) $raw, '{}');
-        if ($key !== '') {
-            $paramKeys[] = $key;
+    private function storeResponseAsVariables(
+        Conversation $conversation,
+        array $declaredParams,
+        array $responseBody,
+        string $botId
+    ): void {
+        if (empty($declaredParams) || empty($responseBody)) {
+            return;
         }
+
+        // Extract declared keys, stripping any {{ }} wrappers the builder adds.
+        $paramKeys = [];
+        foreach ($declaredParams as $param) {
+            $raw = is_array($param) ? ($param['key'] ?? reset($param)) : (string) $param;
+            $key = trim((string) $raw, '{}');
+            if ($key !== '') {
+                $paramKeys[] = $key;
+            }
+        }
+
+        if (empty($paramKeys)) {
+            return;
+        }
+
+        // Lookup custom variable IDs in one query
+        $customVars = CustomVariable::where('bot_id', $botId)
+            ->whereIn('key', $paramKeys)
+            ->pluck('id', 'key'); // ['memberName' => 5, 'DoJ' => 7]
+
+        // Build batch upsert rows
+        $rows = [];
+        $now = now();
+        foreach ($paramKeys as $key) {
+            if (!array_key_exists($key, $responseBody)) {
+                continue;
+            }
+
+            $value = $responseBody[$key];
+            $scalarValue = is_array($value) || is_object($value)
+                ? json_encode($value)
+                : (string) $value;
+
+            $rows[] = [
+                'conversation_id' => $conversation->id,
+                'key' => $key,
+                'value' => $scalarValue,
+                'custom_variable_id' => $customVars->get($key),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (empty($rows)) {
+            return;
+        }
+
+        // Single upsert — requires the unique index (conversation_id, key) from
+        // the migration in file 04.
+        ConversationVariable::upsert(
+            $rows,
+            uniqueBy: ['conversation_id', 'key'],
+            update: ['value', 'custom_variable_id', 'updated_at']
+        );
+
+        Log::info('API response variables batched', [
+            'conversation_id' => $conversation->id,
+            'count' => count($rows),
+            'keys' => array_column($rows, 'key'),
+        ]);
     }
- 
-    if (empty($paramKeys)) return;
- 
-    // Lookup custom variable IDs in one query
-    $customVars = CustomVariable::where('bot_id', $botId)
-        ->whereIn('key', $paramKeys)
-        ->pluck('id', 'key'); // ['memberName' => 5, 'DoJ' => 7]
- 
-    // Build batch upsert rows
-    $rows = [];
-    $now  = now();
-    foreach ($paramKeys as $key) {
-        if (!array_key_exists($key, $responseBody)) continue;
- 
-        $value = $responseBody[$key];
-        $scalarValue = is_array($value) || is_object($value)
-            ? json_encode($value)
-            : (string) $value;
- 
-        $rows[] = [
-            'conversation_id'    => $conversation->id,
-            'key'                => $key,
-            'value'              => $scalarValue,
-            'custom_variable_id' => $customVars->get($key),
-            'created_at'         => $now,
-            'updated_at'         => $now,
-        ];
-    }
- 
-    if (empty($rows)) return;
- 
-    // Single upsert — requires the unique index (conversation_id, key) from
-    // the migration in file 04.
-    ConversationVariable::upsert(
-        $rows,
-        uniqueBy: ['conversation_id', 'key'],
-        update: ['value', 'custom_variable_id', 'updated_at']
-    );
- 
-    Log::info('API response variables batched', [
-        'conversation_id' => $conversation->id,
-        'count'           => count($rows),
-        'keys'            => array_column($rows, 'key'),
-    ]);
-}
+
     private function executeResponseHandlers(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action,
-        mixed        $responseBody,
-        array        $variables,
-        ?int         $httpStatusCode = null    // ← add this
+        Dialog $dialog,
+        array $action,
+        mixed $responseBody,
+        array $variables,
+        ?int $httpStatusCode = null    // ← add this
     ): ?string {
         $body = is_array($responseBody) ? $responseBody : [];
 
@@ -669,8 +657,11 @@ private function storeResponseAsVariables(
             if ($allMatch) {
                 foreach ($handler['actions'] ?? [] as $handlerAction) {
                     $target = $this->execute($conversation, $dialog, $handlerAction, $variables);
-                    if ($target) return $target;
+                    if ($target) {
+                        return $target;
+                    }
                 }
+
                 return null;
             }
         }
@@ -680,23 +671,27 @@ private function storeResponseAsVariables(
 
     private function executeDefaultActions(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action,
-        array        $variables
+        Dialog $dialog,
+        array $action,
+        array $variables
     ): ?string {
         foreach ($action['defaultActions'] ?? [] as $defaultAction) {
             $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
-            if ($target) return $target;
+            if ($target) {
+                return $target;
+            }
         }
+
         return null;
     }
+
     private function evaluateResponseCondition(
         array $condition,
         array $responseBody,
-        ?int  $httpStatusCode = null     // ← add this
+        ?int $httpStatusCode = null     // ← add this
     ): bool {
         $field = $condition['responseField'] ?? 'status';
-        $path  = $condition['responsePath'] ?? '';
+        $path = $condition['responsePath'] ?? '';
 
         $actualValue = match ($field) {
             // Prefer the real HTTP status code; fall back to body fields
@@ -704,14 +699,14 @@ private function storeResponseAsVariables(
                 ?? $responseBody['status']
                 ?? $responseBody['statusCode']
                 ?? null,
-            'body'   => $this->getNestedValue($responseBody, $path),
-            default  => $this->getNestedValue($responseBody, $path),
+            'body' => $this->getNestedValue($responseBody, $path),
+            default => $this->getNestedValue($responseBody, $path),
         };
 
         return $this->compareValues(
             // Cast to string so "404" == 404 works with strict-ish comparison
             $actualValue !== null ? (string) $actualValue : null,
-            $condition['value']    ?? '',
+            $condition['value'] ?? '',
             $condition['operator'] ?? 'equals'
         );
     }
@@ -719,21 +714,23 @@ private function storeResponseAsVariables(
 
     private function executeFunction(
         Conversation $conversation,
-        array        $action,
-        array        $variables
+        array $action,
+        array $variables
     ): ?string {
-        $fnId      = $action['fnId']      ?? null;
+        $fnId = $action['fnId'] ?? null;
         $resultVar = $action['resultVar'] ?? null;
 
-        if (!$fnId) return null;
+        if (!$fnId) {
+            return null;
+        }
 
         try {
             $paramsJson = $this->variableResolver->resolve($action['paramsRaw'] ?? '{}', $variables);
-            $params     = json_decode($paramsJson, true) ?? [];
-            $result     = $this->functionExecutor->execute($fnId, $params);
+            $params = json_decode($paramsJson, true) ?? [];
+            $result = $this->functionExecutor->execute($fnId, $params);
 
             if ($resultVar) {
-                \App\Models\ConversationVariable::updateOrCreate(
+                ConversationVariable::updateOrCreate(
                     ['conversation_id' => $conversation->id, 'key' => $resultVar],
                     ['value' => is_array($result) ? json_encode($result) : (string) $result]
                 );
@@ -741,7 +738,7 @@ private function storeResponseAsVariables(
         } catch (\Exception $e) {
             Log::error('Function action failed', [
                 'function_id' => $fnId,
-                'error'       => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
 
@@ -752,21 +749,20 @@ private function storeResponseAsVariables(
 
     private function executeDelay(
         Conversation $conversation,
-        Dialog       $dialog,
-        array        $action
+        Dialog $dialog,
+        array $action
     ): ?string {
-        $seconds      = $action['seconds'] ?? 3;
-        $nextDialogId = $action['goTo']    ?? null;
+        $seconds = $action['seconds'] ?? 3;
+        $nextDialogId = $action['goTo'] ?? null;
 
         if ($nextDialogId) {
-            $nextDialog = $dialog->flowVersion
+            $nextDialog = $dialog->botVersion
                 ?->dialogs()
                 ->where('config->id', $nextDialogId)
                 ->first();
 
             if ($nextDialog) {
-                \App\Jobs\ContinueChatbotFlow::dispatch($conversation, $nextDialog)
-                    ->delay(now()->addSeconds($seconds));
+                ContinueChatbotFlow::dispatchFor($conversation, $nextDialog, $delaySeconds);
             }
         }
 
@@ -784,24 +780,30 @@ private function storeResponseAsVariables(
             ->latest()
             ->first();
 
-        if (!$lastMessage) return null;
+        if (!$lastMessage) {
+            return null;
+        }
 
         return match ($lastMessage->message_type) {
-            'text'        => $lastMessage->content['text'] ?? null,
+            'text' => $lastMessage->content['text'] ?? null,
             'interactive' => $lastMessage->content['response']['title']
                 ?? $lastMessage->content['response']['id']
                 ?? null,
-            default       => null,
+            default => null,
         };
     }
 
     private function getNestedValue(array $data, string $path): mixed
     {
-        if (empty($path)) return null;
+        if (empty($path)) {
+            return null;
+        }
 
         $value = $data;
         foreach (explode('.', $path) as $key) {
-            if (!is_array($value) || !array_key_exists($key, $value)) return null;
+            if (!is_array($value) || !array_key_exists($key, $value)) {
+                return null;
+            }
             $value = $value[$key];
         }
 
@@ -811,22 +813,22 @@ private function storeResponseAsVariables(
     public function compareValues(mixed $left, mixed $right, string $operator): bool
     {
         return match ($operator) {
-            'equals',                '=='  => $left == $right,
-            'not_equals',            '!='  => $left != $right,
-            'greater_than', '>' => is_numeric($left) && is_numeric($right)? ((float) $left) > ((float) $right): false,
-            'less_than',             '<'   => $left <  $right,
-            'greater_than_or_equal', '>='  => $left >= $right,
-            'less_than_or_equal',    '<='  => $left <= $right,
-            'contains'     => is_string($left) && str_contains($left,    (string) $right),
-            'not_contains' => is_string($left) && !str_contains($left,   (string) $right),
-            'starts_with'  => is_string($left) && str_starts_with($left, (string) $right),
-            'ends_with'    => is_string($left) && str_ends_with($left,   (string) $right),
-            'is_empty'     => empty($left),
+            'equals',                '==' => $left == $right,
+            'not_equals',            '!=' => $left != $right,
+            'greater_than', '>' => is_numeric($left) && is_numeric($right) ? ((float) $left) > ((float) $right) : false,
+            'less_than',             '<' => $left < $right,
+            'greater_than_or_equal', '>=' => $left >= $right,
+            'less_than_or_equal',    '<=' => $left <= $right,
+            'contains' => is_string($left) && str_contains($left, (string) $right),
+            'not_contains' => is_string($left) && !str_contains($left, (string) $right),
+            'starts_with' => is_string($left) && str_starts_with($left, (string) $right),
+            'ends_with' => is_string($left) && str_ends_with($left, (string) $right),
+            'is_empty' => empty($left),
             'is_not_empty',
-            'not_empty'    => !empty($left),
-            'in_array'     => is_array($left) && in_array($right, $left),
+            'not_empty' => !empty($left),
+            'in_array' => is_array($left) && in_array($right, $left),
             'not_in_array' => is_array($left) && !in_array($right, $left),
-            default        => false,
+            default => false,
         };
     }
 }

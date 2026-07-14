@@ -7,11 +7,14 @@
 export {}
 declare global {
   const $api: typeof import('./resources/ts/utils/api')['$api']
+  const DAYS_OF_WEEK: typeof import('./resources/ts/composables/botSettings')['DAYS_OF_WEEK']
   const DirAttrSet: typeof import('./resources/ts/utils/utils')['DirAttrSet']
   const EffectScope: typeof import('vue')['EffectScope']
   const HexToRgb: typeof import('./resources/ts/utils/utils')['HexToRgb']
+  const SYSTEM_ACTION_OPTIONS: typeof import('./resources/ts/composables/botSettings')['SYSTEM_ACTION_OPTIONS']
+  const VALIDATION_BOUNDS: typeof import('./resources/ts/composables/botSettings')['VALIDATION_BOUNDS']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
-  const allTargetsEqual: typeof import('./resources/ts/utils/scorecardUtils')['allTargetsEqual']
+  const allTargetsEqual: (typeof import("./resources/ts/utils/messagePreview"))["allTargetsEqual"]
   const alphaDashValidator: typeof import('./resources/ts/@core/utils/validators')['alphaDashValidator']
   const alphaValidator: typeof import('./resources/ts/@core/utils/validators')['alphaValidator']
   const asyncComputed: typeof import('@vueuse/core')['asyncComputed']
@@ -45,24 +48,27 @@ declare global {
   const defineAsyncComponent: typeof import('vue')['defineAsyncComponent']
   const defineComponent: typeof import('vue')['defineComponent']
   const defineStore: typeof import('pinia')['defineStore']
-  const determineAppraisalBehaviour: typeof import('./resources/ts/utils/scorecardUtils')['determineAppraisalBehaviour']
+  const determineAppraisalBehaviour: (typeof import("./resources/ts/utils/messagePreview"))["determineAppraisalBehaviour"]
   const districts: typeof import('./resources/ts/composables/data')['districts']
   const eagerComputed: typeof import('@vueuse/core')['eagerComputed']
   const effectScope: typeof import('vue')['effectScope']
   const emailValidator: typeof import('./resources/ts/@core/utils/validators')['emailValidator']
+  const emptyOperatingHours: typeof import('./resources/ts/composables/botSettings')['emptyOperatingHours']
   const extendRef: typeof import('@vueuse/core')['extendRef']
-  const extractPerspectiveData: typeof import('./resources/ts/utils/scorecardUtils')['extractPerspectiveData']
-  const formatTarget: typeof import('./resources/ts/utils/scorecardUtils')['formatTarget']
+  const extractPerspectiveData: (typeof import("./resources/ts/utils/messagePreview"))["extractPerspectiveData"]
+  const formatTarget: (typeof import("./resources/ts/utils/messagePreview"))["formatTarget"]
   const getActivePinia: typeof import('pinia')['getActivePinia']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentScope: typeof import('vue')['getCurrentScope']
-  const getPerspectiveColor: typeof import('./resources/ts/utils/scorecardUtils')['getPerspectiveColor']
-  const getThresholdColor: typeof import('./resources/ts/utils/scorecardUtils')['getThresholdColor']
+  const getPerspectiveColor: (typeof import("./resources/ts/utils/messagePreview"))["getPerspectiveColor"]
+  const getThresholdColor: (typeof import("./resources/ts/utils/messagePreview"))["getThresholdColor"]
   const h: typeof import('vue')['h']
   const ignorableWatch: typeof import('@vueuse/core')['ignorableWatch']
   const inject: typeof import('vue')['inject']
   const injectLocal: typeof import('@vueuse/core')['injectLocal']
   const integerValidator: typeof import('./resources/ts/@core/utils/validators')['integerValidator']
+  const interactiveCopy: typeof import('./resources/ts/utils/messagePreview')['interactiveCopy']
+  const interactiveOptions: typeof import('./resources/ts/utils/messagePreview')['interactiveOptions']
   const isDefined: typeof import('@vueuse/core')['isDefined']
   const isEmpty: typeof import('./resources/ts/@core/utils/helpers')['isEmpty']
   const isEmptyArray: typeof import('./resources/ts/@core/utils/helpers')['isEmptyArray']
@@ -104,12 +110,14 @@ declare global {
   const onUnmounted: typeof import('vue')['onUnmounted']
   const onUpdated: typeof import('vue')['onUpdated']
   const onWatcherCleanup: typeof import('vue')['onWatcherCleanup']
-  const parseObjectiveType: typeof import('./resources/ts/utils/scorecardUtils')['parseObjectiveType']
-  const parseTargetType: typeof import('./resources/ts/utils/scorecardUtils')['parseTargetType']
-  const parseTargetValue: typeof import('./resources/ts/utils/scorecardUtils')['parseTargetValue']
+  const parseObjectiveType: (typeof import("./resources/ts/utils/messagePreview"))["parseObjectiveType"]
+  const parseTargetType: (typeof import("./resources/ts/utils/messagePreview"))["parseTargetType"]
+  const parseTargetValue: (typeof import("./resources/ts/utils/messagePreview"))["parseTargetValue"]
   const passwordValidator: typeof import('./resources/ts/@core/utils/validators')['passwordValidator']
   const pausableWatch: typeof import('@vueuse/core')['pausableWatch']
-  const processFullScorecardExcel: typeof import('./resources/ts/utils/scorecardUtils')['processFullScorecardExcel']
+  const previewIconLabel: typeof import('./resources/ts/utils/messagePreview')['previewIconLabel']
+  const previewText: typeof import('./resources/ts/utils/messagePreview')['previewText']
+  const processFullScorecardExcel: (typeof import("./resources/ts/utils/messagePreview"))["processFullScorecardExcel"]
   const provide: typeof import('vue')['provide']
   const provideLocal: typeof import('@vueuse/core')['provideLocal']
   const reactify: typeof import('@vueuse/core')['reactify']
@@ -118,7 +126,7 @@ declare global {
   const reactiveComputed: typeof import('@vueuse/core')['reactiveComputed']
   const reactiveOmit: typeof import('@vueuse/core')['reactiveOmit']
   const reactivePick: typeof import('@vueuse/core')['reactivePick']
-  const readExcelFile: typeof import('./resources/ts/utils/scorecardUtils')['readExcelFile']
+  const readExcelFile: (typeof import("./resources/ts/utils/messagePreview"))["readExcelFile"]
   const readonly: typeof import('vue')['readonly']
   const ref: typeof import('vue')['ref']
   const refAutoReset: typeof import('@vueuse/core')['refAutoReset']
@@ -163,7 +171,7 @@ declare global {
   const useAbs: typeof import('@vueuse/math')['useAbs']
   const useActiveElement: typeof import('@vueuse/core')['useActiveElement']
   const useAnimate: typeof import('@vueuse/core')['useAnimate']
-  const useApi: typeof import('./resources/ts/composables/useApi')['useApi']
+  const useApi: (typeof import("./resources/ts/composables/useApi"))["useApi"]
   const useArrayDifference: typeof import('@vueuse/core')['useArrayDifference']
   const useArrayEvery: typeof import('@vueuse/core')['useArrayEvery']
   const useArrayFilter: typeof import('@vueuse/core')['useArrayFilter']
@@ -183,6 +191,7 @@ declare global {
   const useBase64: typeof import('@vueuse/core')['useBase64']
   const useBattery: typeof import('@vueuse/core')['useBattery']
   const useBluetooth: typeof import('@vueuse/core')['useBluetooth']
+  const useBotConfiguration: typeof import('./resources/ts/composables/botSettings')['useBotConfiguration']
   const useBreakpoints: typeof import('@vueuse/core')['useBreakpoints']
   const useBroadcastChannel: typeof import('@vueuse/core')['useBroadcastChannel']
   const useBrowserLocation: typeof import('@vueuse/core')['useBrowserLocation']
@@ -194,6 +203,8 @@ declare global {
   const useCloned: typeof import('@vueuse/core')['useCloned']
   const useColorMode: typeof import('@vueuse/core')['useColorMode']
   const useConfirmDialog: typeof import('@vueuse/core')['useConfirmDialog']
+  const useConversationChannel: (typeof import("./resources/ts/composables/useEchoChannels.js"))["useConversationChannel"]
+  const useConversationMessages: typeof import('./resources/ts/composables/useConversationMessages')['useConversationMessages']
   const useCookie: typeof import('./resources/ts/@core/composable/useCookie')['useCookie']
   const useCountdown: typeof import('@vueuse/core')['useCountdown']
   const useCounter: typeof import('@vueuse/core')['useCounter']
@@ -215,7 +226,8 @@ declare global {
   const useDocumentVisibility: typeof import('@vueuse/core')['useDocumentVisibility']
   const useDraggable: typeof import('@vueuse/core')['useDraggable']
   const useDropZone: typeof import('@vueuse/core')['useDropZone']
-  const useEditGuard: typeof import('./resources/ts/composables/useEditGuard')['useEditGuard']
+  const useEchoChannels: typeof import('./resources/ts/composables/useEchoChannels')['useEchoChannels']
+  const useEditGuard: (typeof import("./resources/ts/composables/useEditGuard"))["useEditGuard"]
   const useElementBounding: typeof import('@vueuse/core')['useElementBounding']
   const useElementByPoint: typeof import('@vueuse/core')['useElementByPoint']
   const useElementHover: typeof import('@vueuse/core')['useElementHover']
@@ -230,6 +242,7 @@ declare global {
   const useFileDialog: typeof import('@vueuse/core')['useFileDialog']
   const useFileSystemAccess: typeof import('@vueuse/core')['useFileSystemAccess']
   const useFloor: typeof import('@vueuse/math')['useFloor']
+  const useFlowBuilder: typeof import('./resources/ts/composables/useFlowBuilder')['useFlowBuilder']
   const useFocus: typeof import('@vueuse/core')['useFocus']
   const useFocusWithin: typeof import('@vueuse/core')['useFocusWithin']
   const useFps: typeof import('@vueuse/core')['useFps']
@@ -266,8 +279,8 @@ declare global {
   const useMutationObserver: typeof import('@vueuse/core')['useMutationObserver']
   const useNavigatorLanguage: typeof import('@vueuse/core')['useNavigatorLanguage']
   const useNetwork: typeof import('@vueuse/core')['useNetwork']
-  const useNodeDefaults: typeof import('./resources/ts/composables/useNodeDefaults')['useNodeDefaults']
-  const useNodeHelpers: typeof import('./resources/ts/composables/useNodeHelpers')['useNodeHelpers']
+  const useNodeDefaults: (typeof import("./resources/ts/composables/useNodeDefaults"))["useNodeDefaults"]
+  const useNodeHelpers: (typeof import("./resources/ts/composables/useNodeHelpers"))["useNodeHelpers"]
   const useNow: typeof import('@vueuse/core')['useNow']
   const useObjectUrl: typeof import('@vueuse/core')['useObjectUrl']
   const useOffsetPagination: typeof import('@vueuse/core')['useOffsetPagination']
@@ -316,6 +329,7 @@ declare global {
   const useSwipe: typeof import('@vueuse/core')['useSwipe']
   const useTemplateRef: typeof import('vue')['useTemplateRef']
   const useTemplateRefsList: typeof import('@vueuse/core')['useTemplateRefsList']
+  const useTenantInboxChannel: (typeof import("./resources/ts/composables/useEchoChannels.js"))["useTenantInboxChannel"]
   const useTextDirection: typeof import('@vueuse/core')['useTextDirection']
   const useTextSelection: typeof import('@vueuse/core')['useTextSelection']
   const useTextareaAutosize: typeof import('@vueuse/core')['useTextareaAutosize']
@@ -347,7 +361,7 @@ declare global {
   const useWindowFocus: typeof import('@vueuse/core')['useWindowFocus']
   const useWindowScroll: typeof import('@vueuse/core')['useWindowScroll']
   const useWindowSize: typeof import('@vueuse/core')['useWindowSize']
-  const validatePerspectiveWeights: typeof import('./resources/ts/utils/scorecardUtils')['validatePerspectiveWeights']
+  const validatePerspectiveWeights: (typeof import("./resources/ts/utils/messagePreview"))["validatePerspectiveWeights"]
   const watch: typeof import('vue')['watch']
   const watchArray: typeof import('@vueuse/core')['watchArray']
   const watchAtMost: typeof import('@vueuse/core')['watchAtMost']
@@ -378,11 +392,13 @@ declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
     readonly $api: UnwrapRef<typeof import('./resources/ts/utils/api')['$api']>
+    readonly DAYS_OF_WEEK: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['DAYS_OF_WEEK']>
     readonly DirAttrSet: UnwrapRef<typeof import('./resources/ts/utils/utils')['DirAttrSet']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly HexToRgb: UnwrapRef<typeof import('./resources/ts/utils/utils')['HexToRgb']>
+    readonly SYSTEM_ACTION_OPTIONS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['SYSTEM_ACTION_OPTIONS']>
+    readonly VALIDATION_BOUNDS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['VALIDATION_BOUNDS']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
-    readonly allTargetsEqual: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['allTargetsEqual']>
     readonly alphaDashValidator: UnwrapRef<typeof import('./resources/ts/@core/utils/validators')['alphaDashValidator']>
     readonly alphaValidator: UnwrapRef<typeof import('./resources/ts/@core/utils/validators')['alphaValidator']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
@@ -416,24 +432,22 @@ declare module 'vue' {
     readonly defineAsyncComponent: UnwrapRef<typeof import('vue')['defineAsyncComponent']>
     readonly defineComponent: UnwrapRef<typeof import('vue')['defineComponent']>
     readonly defineStore: UnwrapRef<typeof import('pinia')['defineStore']>
-    readonly determineAppraisalBehaviour: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['determineAppraisalBehaviour']>
     readonly districts: UnwrapRef<typeof import('./resources/ts/composables/data')['districts']>
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
     readonly emailValidator: UnwrapRef<typeof import('./resources/ts/@core/utils/validators')['emailValidator']>
+    readonly emptyOperatingHours: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['emptyOperatingHours']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
-    readonly extractPerspectiveData: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['extractPerspectiveData']>
-    readonly formatTarget: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['formatTarget']>
     readonly getActivePinia: UnwrapRef<typeof import('pinia')['getActivePinia']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
-    readonly getPerspectiveColor: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['getPerspectiveColor']>
-    readonly getThresholdColor: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['getThresholdColor']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
     readonly inject: UnwrapRef<typeof import('vue')['inject']>
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
     readonly integerValidator: UnwrapRef<typeof import('./resources/ts/@core/utils/validators')['integerValidator']>
+    readonly interactiveCopy: UnwrapRef<typeof import('./resources/ts/utils/messagePreview')['interactiveCopy']>
+    readonly interactiveOptions: UnwrapRef<typeof import('./resources/ts/utils/messagePreview')['interactiveOptions']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
     readonly isEmpty: UnwrapRef<typeof import('./resources/ts/@core/utils/helpers')['isEmpty']>
     readonly isEmptyArray: UnwrapRef<typeof import('./resources/ts/@core/utils/helpers')['isEmptyArray']>
@@ -475,12 +489,10 @@ declare module 'vue' {
     readonly onUnmounted: UnwrapRef<typeof import('vue')['onUnmounted']>
     readonly onUpdated: UnwrapRef<typeof import('vue')['onUpdated']>
     readonly onWatcherCleanup: UnwrapRef<typeof import('vue')['onWatcherCleanup']>
-    readonly parseObjectiveType: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['parseObjectiveType']>
-    readonly parseTargetType: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['parseTargetType']>
-    readonly parseTargetValue: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['parseTargetValue']>
     readonly passwordValidator: UnwrapRef<typeof import('./resources/ts/@core/utils/validators')['passwordValidator']>
     readonly pausableWatch: UnwrapRef<typeof import('@vueuse/core')['pausableWatch']>
-    readonly processFullScorecardExcel: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['processFullScorecardExcel']>
+    readonly previewIconLabel: UnwrapRef<typeof import('./resources/ts/utils/messagePreview')['previewIconLabel']>
+    readonly previewText: UnwrapRef<typeof import('./resources/ts/utils/messagePreview')['previewText']>
     readonly provide: UnwrapRef<typeof import('vue')['provide']>
     readonly provideLocal: UnwrapRef<typeof import('@vueuse/core')['provideLocal']>
     readonly reactify: UnwrapRef<typeof import('@vueuse/core')['reactify']>
@@ -489,7 +501,6 @@ declare module 'vue' {
     readonly reactiveComputed: UnwrapRef<typeof import('@vueuse/core')['reactiveComputed']>
     readonly reactiveOmit: UnwrapRef<typeof import('@vueuse/core')['reactiveOmit']>
     readonly reactivePick: UnwrapRef<typeof import('@vueuse/core')['reactivePick']>
-    readonly readExcelFile: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['readExcelFile']>
     readonly readonly: UnwrapRef<typeof import('vue')['readonly']>
     readonly ref: UnwrapRef<typeof import('vue')['ref']>
     readonly refAutoReset: UnwrapRef<typeof import('@vueuse/core')['refAutoReset']>
@@ -534,7 +545,6 @@ declare module 'vue' {
     readonly useAbs: UnwrapRef<typeof import('@vueuse/math')['useAbs']>
     readonly useActiveElement: UnwrapRef<typeof import('@vueuse/core')['useActiveElement']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
-    readonly useApi: UnwrapRef<typeof import('./resources/ts/composables/useApi')['useApi']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>
     readonly useArrayEvery: UnwrapRef<typeof import('@vueuse/core')['useArrayEvery']>
     readonly useArrayFilter: UnwrapRef<typeof import('@vueuse/core')['useArrayFilter']>
@@ -554,6 +564,7 @@ declare module 'vue' {
     readonly useBase64: UnwrapRef<typeof import('@vueuse/core')['useBase64']>
     readonly useBattery: UnwrapRef<typeof import('@vueuse/core')['useBattery']>
     readonly useBluetooth: UnwrapRef<typeof import('@vueuse/core')['useBluetooth']>
+    readonly useBotConfiguration: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['useBotConfiguration']>
     readonly useBreakpoints: UnwrapRef<typeof import('@vueuse/core')['useBreakpoints']>
     readonly useBroadcastChannel: UnwrapRef<typeof import('@vueuse/core')['useBroadcastChannel']>
     readonly useBrowserLocation: UnwrapRef<typeof import('@vueuse/core')['useBrowserLocation']>
@@ -586,7 +597,6 @@ declare module 'vue' {
     readonly useDocumentVisibility: UnwrapRef<typeof import('@vueuse/core')['useDocumentVisibility']>
     readonly useDraggable: UnwrapRef<typeof import('@vueuse/core')['useDraggable']>
     readonly useDropZone: UnwrapRef<typeof import('@vueuse/core')['useDropZone']>
-    readonly useEditGuard: UnwrapRef<typeof import('./resources/ts/composables/useEditGuard')['useEditGuard']>
     readonly useElementBounding: UnwrapRef<typeof import('@vueuse/core')['useElementBounding']>
     readonly useElementByPoint: UnwrapRef<typeof import('@vueuse/core')['useElementByPoint']>
     readonly useElementHover: UnwrapRef<typeof import('@vueuse/core')['useElementHover']>
@@ -601,6 +611,7 @@ declare module 'vue' {
     readonly useFileDialog: UnwrapRef<typeof import('@vueuse/core')['useFileDialog']>
     readonly useFileSystemAccess: UnwrapRef<typeof import('@vueuse/core')['useFileSystemAccess']>
     readonly useFloor: UnwrapRef<typeof import('@vueuse/math')['useFloor']>
+    readonly useFlowBuilder: UnwrapRef<typeof import('./resources/ts/composables/useFlowBuilder')['useFlowBuilder']>
     readonly useFocus: UnwrapRef<typeof import('@vueuse/core')['useFocus']>
     readonly useFocusWithin: UnwrapRef<typeof import('@vueuse/core')['useFocusWithin']>
     readonly useFps: UnwrapRef<typeof import('@vueuse/core')['useFps']>
@@ -637,8 +648,6 @@ declare module 'vue' {
     readonly useMutationObserver: UnwrapRef<typeof import('@vueuse/core')['useMutationObserver']>
     readonly useNavigatorLanguage: UnwrapRef<typeof import('@vueuse/core')['useNavigatorLanguage']>
     readonly useNetwork: UnwrapRef<typeof import('@vueuse/core')['useNetwork']>
-    readonly useNodeDefaults: UnwrapRef<typeof import('./resources/ts/composables/useNodeDefaults')['useNodeDefaults']>
-    readonly useNodeHelpers: UnwrapRef<typeof import('./resources/ts/composables/useNodeHelpers')['useNodeHelpers']>
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
@@ -718,7 +727,6 @@ declare module 'vue' {
     readonly useWindowFocus: UnwrapRef<typeof import('@vueuse/core')['useWindowFocus']>
     readonly useWindowScroll: UnwrapRef<typeof import('@vueuse/core')['useWindowScroll']>
     readonly useWindowSize: UnwrapRef<typeof import('@vueuse/core')['useWindowSize']>
-    readonly validatePerspectiveWeights: UnwrapRef<typeof import('./resources/ts/utils/scorecardUtils')['validatePerspectiveWeights']>
     readonly watch: UnwrapRef<typeof import('vue')['watch']>
     readonly watchArray: UnwrapRef<typeof import('@vueuse/core')['watchArray']>
     readonly watchAtMost: UnwrapRef<typeof import('@vueuse/core')['watchAtMost']>

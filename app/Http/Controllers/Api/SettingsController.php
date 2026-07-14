@@ -3,48 +3,45 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class SettingsController extends Controller
 {
-    // GET /api/settings
     public function index(): JsonResponse
     {
-        $tenant = Tenant::current();
+        $currentTenant = tenant();
 
         return response()->json([
-            'settings'     => $tenant->settings ?? [],
+            'settings' => $currentTenant->settings ?? [],
             'subscription' => [
-                'tier'                        => $tenant->subscription_tier,
-                'expires_at'                  => $tenant->subscription_expires_at?->toIso8601String(),
-                'is_active'                   => $tenant->isSubscriptionActive(),
-                'max_flows'                   => $tenant->max_flows,
-                'max_conversations_per_month' => $tenant->max_conversations_per_month,
-                'usage_percentage'            => $tenant->getUsagePercentage(),
+                'tier' => $currentTenant->subscription_tier,
+                'expires_at' => $currentTenant->subscription_expires_at?->toIso8601String(),
+                'is_active' => $currentTenant->isSubscriptionActive(),
+                'max_bots' => $currentTenant->max_bots,
+                'max_conversations_per_month' => $currentTenant->max_conversations_per_month,
+                'usage_percentage' => $currentTenant->getUsagePercentage(),
             ],
         ]);
     }
 
-    // PUT /api/settings
     public function update(Request $request): JsonResponse
     {
-        $tenant = Tenant::current();
+        $currentTenant = tenant();
 
         $validated = $request->validate([
             'settings' => 'required|array',
         ]);
 
-        $tenant->update([
-            'settings' => array_merge($tenant->settings ?? [], $validated['settings']),
+        $currentTenant->update([
+            'settings' => array_merge($currentTenant->settings ?? [], $validated['settings']),
         ]);
 
-        activity()->causedBy(auth()->user())->performedOn($tenant)->log('Settings updated');
+        activity()->causedBy(auth()->user())->performedOn($currentTenant)->log('Settings updated');
 
         return response()->json([
-            'message'  => 'Settings updated.',
-            'settings' => $tenant->fresh()->settings,
+            'message' => 'Settings updated.',
+            'settings' => $currentTenant->fresh()->settings,
         ]);
     }
 }

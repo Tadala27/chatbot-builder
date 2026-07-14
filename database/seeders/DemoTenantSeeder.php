@@ -10,7 +10,9 @@ use Illuminate\Support\Facades\Log;
 
 class DemoTenantSeeder extends Seeder
 {
-    public function __construct(private TenantDatabaseManager $manager) {}
+    public function __construct(private TenantDatabaseManager $manager)
+    {
+    }
 
     public function run(): void
     {
@@ -21,16 +23,16 @@ class DemoTenantSeeder extends Seeder
         $tenant = Tenant::firstOrCreate(
             ['id' => 'demo'],
             [
-                'slug'                        => 'demo',
-                'is_active'                   => true,
-                'db_schema'                   => 'tenant_demo',
-                'deployment_mode'             => 'shared',
-                'subscription_tier'           => 'professional',
-                'subscription_expires_at'     => now()->addYear(),
-                'max_flows'                   => 10,
+                'slug' => 'demo',
+                'is_active' => true,
+                'db_schema' => 'tenant_demo',
+                'deployment_mode' => 'shared',
+                'subscription_tier' => 'professional',
+                'subscription_expires_at' => now()->addYear(),
+                'max_bots' => 5,
                 'max_conversations_per_month' => 5000,
-                'name'                        => 'Demo Organisation',
-                'settings'                    => [
+                'name' => 'Demo Organisation',
+                'settings' => [
                     'timezone' => 'Africa/Blantyre',
                     'currency' => 'MWK',
                 ],
@@ -38,7 +40,7 @@ class DemoTenantSeeder extends Seeder
         );
 
         $tenant->domains()->firstOrCreate(
-            ['domain' => 'demo.localhost'],
+            ['domain' => 'demo.payroll.test'],
             ['is_primary' => true]
         );
 

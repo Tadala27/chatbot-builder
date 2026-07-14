@@ -6,10 +6,12 @@ namespace App\Services\Tenant;
 
 use App\Models\Tenant;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -26,9 +28,6 @@ class TenantDatabaseManager
     // Public API
     // ══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Full provisioning flow for a new or existing tenant.
-     */
     public function provision(Tenant $tenant): void
     {
         Log::info("Tenant [{$tenant->slug}] — starting provisioning (mode: {$tenant->deployment_mode}).");
@@ -60,6 +59,7 @@ class TenantDatabaseManager
 
         try {
             $this->seedDemoUsers();
+            $this->seedDemoAccount();
             $this->seedDemoVariables();
 
             Log::info("Tenant [{$tenant->slug}] — demo data seeded.");
@@ -449,21 +449,89 @@ class TenantDatabaseManager
     {
         $admin = User::firstOrCreate(
             ['email' => 'admin@demo.com'],
-            ['name' => 'Demo Admin', 'password' => Hash::make('password')]
+            [
+                'id' => (string) Str::uuid(),
+                'name' => 'Demo Admin',
+                'password' => Hash::make('password@123'),
+            ]
         );
         $admin->assignRole('tenant-admin');
 
         $agent = User::firstOrCreate(
             ['email' => 'agent@demo.com'],
-            ['name' => 'Demo Agent', 'password' => Hash::make('password')]
+            [
+                'id' => (string) Str::uuid(),
+                'name' => 'Demo Agent',
+                'password' => Hash::make('password@123'),
+            ]
         );
         $agent->assignRole('agent');
 
         $viewer = User::firstOrCreate(
             ['email' => 'viewer@demo.com'],
-            ['name' => 'Demo Viewer', 'password' => Hash::make('password')]
+            [
+                'id' => (string) Str::uuid(),
+                'name' => 'Demo Viewer',
+                'password' => Hash::make('password@123'),
+            ]
         );
         $viewer->assignRole('viewer');
+    }
+
+    public function seedDemoAccount(): void
+    {
+        DB::table('whatsapp_accounts')->insert([
+            'id' => Str::uuid()->toString(),
+
+            // ── Identity ─────────────────────────────────────────────────────
+            'waba_id' => '2124195388053485',
+            'phone_number_id' => '632142966655683',
+            'phone_number' => '+15556569855',
+            'display_phone_number' => '+1 555 656 9855',
+            'verified_name' => 'Test Number',
+
+            // ── Onboarding ───────────────────────────────────────────────────
+            'onboarding_method' => 'embedded_signup',
+            'onboarding_status' => 'active',
+            'verification_method' => 'sms',
+            'mode' => 'managed_bot',
+
+            // ── Credentials ──────────────────────────────────────────────────
+            'access_token' => encrypt('EAARD7xiMKCkBPHIUpZCpkZBD2hdLYJnL8jZAR9DZB15OZCrKNcP6Q4CPu0ZCpNgmd19YicPcv2XVUwMqZB8ydJ8yIJYZBVYlAkJT9ovEYDmPwSlEfZAL7eMhmUp0IsmCwWrKxhKxdFGBGptZAstmMKnQZCKeQJvAdwFL5ZBDsinlGqcKgdtzAwyCVinvaHAldBIcOwZDZD'),
+            'phone_number_pin' => '123456',
+            'webhook_verify_token' => 'MySecretToken',
+
+            // ── Quality ───────────────────────────────────────────────────────
+            'quality_rating' => 'GREEN',
+            'messaging_limit' => 'TIER_1K',
+
+            // ── State ─────────────────────────────────────────────────────────
+            'is_active' => true,
+            'registered_at' => Carbon::now(),
+            'last_synced_at' => Carbon::now(),
+
+            // ── Metadata: health fields + business info ────────────────────────
+            // name_status, phone_status, code_verification_status, platform_type,
+            // throughput_level, account_review_status have no real columns in this
+            // migration — they live here and are populated/updated by sync().
+            'metadata' => json_encode([
+                'name_status' => 'APPROVED',
+                'phone_status' => 'CONNECTED',
+                'code_verification_status' => 'VERIFIED',
+                'platform_type' => 'CLOUD_API',
+                'throughput_level' => 'STANDARD',
+                'account_review_status' => 'APPROVED',
+                'health_status' => ['can_send_message' => 'AVAILABLE'],
+                'business_id' => '1029384756102938',
+                'business_name' => 'Demo Business Ltd',
+                'business_email' => 'demo@example.com',
+                'currency' => 'USD',
+                'timezone' => 'Africa/Blantyre',
+            ]),
+
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 
     /**
@@ -584,13 +652,7 @@ class TenantDatabaseManager
                 'test bots',
                 'duplicate bots',
             ],
-            'flows' => [
-                'edit flows',
-                'create nodes',
-                'edit nodes',
-                'delete nodes',
-                'validate flows',
-            ],
+
             'variables' => [
                 'view variables',
                 'create variables',
@@ -660,18 +722,15 @@ class TenantDatabaseManager
             // (that's a central admin concern)
             'tenant-admin' => '*',
 
-            // Can build and manage bots/flows, see conversations and analytics
             'bot-builder' => [
                 'view bots',
                 'create bots',
                 'edit bots',
                 'test bots',
                 'duplicate bots',
-                'edit flows',
                 'create nodes',
                 'edit nodes',
                 'delete nodes',
-                'validate flows',
                 'view variables',
                 'create variables',
                 'edit variables',

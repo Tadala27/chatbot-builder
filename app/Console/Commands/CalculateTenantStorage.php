@@ -82,7 +82,7 @@ class CalculateTenantStorage extends Command
         return 0;
     }
 
-    private function calculateSingleTenant(int $tenantId, StorageService $storageService)
+    private function calculateSingleTenant(string $tenantId, StorageService $storageService)
     {
         $tenant = Tenant::find($tenantId);
 

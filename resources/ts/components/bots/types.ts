@@ -17,10 +17,7 @@ export type ActionKind =
   | "delay"
   | "handoff";
 
-export type ConditionType =
-  | "variable"
-  | "saved_response"
-  | "api_response";
+export type ConditionType = "variable" | "saved_response" | "api_response";
 
 export type ConditionOperator =
   | "equals"
@@ -36,6 +33,7 @@ export type ConditionOperator =
   | "is_not_empty";
 
 export type DataType = "string" | "number" | "boolean" | "json" | "date";
+export type ButtonType = "reply" | "url";
 
 export interface ActionCondition {
   id: string;
@@ -43,12 +41,11 @@ export interface ActionCondition {
   variableKey?: string;
   operator?: ConditionOperator;
   conditionValue?: string;
-  optionId?: string; 
+  optionId?: string;
   responseField?: "status" | "body" | "header";
   responsePath?: string;
   apiConditionValue?: string;
 }
-
 
 export interface ConditionBranch {
   id: string;
@@ -89,6 +86,8 @@ export interface Action {
 export interface Btn {
   id: string;
   label: string;
+  type: ButtonType;
+  url?: string;
   actions: Action[];
   saveResponse: boolean;
 }
@@ -161,12 +160,15 @@ export interface FlowNode {
   mediaUrl?: string;
   mediaCaption?: string;
   mediaFilename?: string;
+  mediaFileId?: string;
   locationLatitude?: number;
   locationLongitude?: number;
   locationName?: string;
   locationAddress?: string;
   contactData?: ContactData;
   goTo?: string;
+  waitForReply?: boolean;
+  replyVariable?: string;
 }
 
 export interface NodeConfig {
@@ -227,7 +229,6 @@ export const NODE_CONFIGS: Record<NodeKind, NodeConfig> = {
   },
 };
 
-
 export interface OptionPayload {
   external_id: string;
   title: string;
@@ -240,15 +241,15 @@ export interface OptionPayload {
 
 export interface ActionPayload {
   action_type: ActionKind;
+  action_order: number;
   config: Action;
   is_active: boolean;
 }
 
-
 export interface AutoSaveDialog {
   dialog_id: string;
   kind: NodeKind;
-  label: string; 
+  label: string;
   position_x: number;
   position_y: number;
   is_entry_point: boolean;
@@ -257,7 +258,6 @@ export interface AutoSaveDialog {
   options: OptionPayload[];
   actions: ActionPayload[];
 }
-
 
 export interface AutoSavePayload {
   dialogs: AutoSaveDialog[];
@@ -294,10 +294,19 @@ export function buildAutoSavePayload(nodes: FlowNode[]): AutoSavePayload {
       position_y: index * 200,
       is_entry_point: node.isFirstNode ?? false,
       is_terminal: node.isLastNode ?? false,
-      config: node,
+      config: {
+        ...node,
+        waitForReply: node.waitForReply ?? false,
+        replyVariable: node.replyVariable ?? "",
+        buttons: node.buttons?.map((btn) => ({
+          ...btn,
+          type: btn.type ?? "reply",
+          url: btn.url ?? "",
+        })),
+      },
       options: extractOptions(node),
-      actions: (node.actions ?? []).flatMap(
-        (action: any, i: number) => flattenActionChain(action, i * 100),
+      actions: (node.actions ?? []).flatMap((action: any, i: number) =>
+        flattenActionChain(action, i * 100),
       ),
     })),
   };
@@ -308,14 +317,15 @@ function extractOptions(node: FlowNode): OptionPayload[] {
 
   if (node.kind === "buttons" && node.buttons) {
     node.buttons.forEach((btn, i) => {
+      const isReply = btn.type === "reply" || !btn.type;
       opts.push({
         external_id: btn.id,
         title: btn.label,
-        description: null,
+        description: isReply ? null : `URL: ${btn.url || "N/A"}`,
         section_title: null,
         section_order: 0,
         option_order: i,
-        save_response: btn.saveResponse,
+        save_response: isReply ? btn.saveResponse : false,
       });
     });
   }
@@ -339,17 +349,6 @@ function extractOptions(node: FlowNode): OptionPayload[] {
   return opts;
 }
 
-function extractRootActions(node: FlowNode): ActionPayload[] {
-  if (node.kind === "buttons" || node.kind === "list") return [];
-  if (!node.actions?.length) return [];
-
-  return node.actions.map((action) => ({
-    action_type: action.kind,
-    config: action,
-    is_active: true,
-  }));
-}
-
 export function parseDialogsFromBackend(dialogs: any[]): FlowNode[] {
   return dialogs
     .sort((a, b) => (a.position_y ?? 0) - (b.position_y ?? 0))
@@ -362,6 +361,13 @@ export function parseDialogsFromBackend(dialogs: any[]): FlowNode[] {
         isFirstNode: d.is_entry_point ?? config.isFirstNode ?? false,
         isLastNode: d.is_terminal ?? config.isLastNode ?? false,
         inputVariable: d.input_variable ?? config.inputVariable ?? "",
+        waitForReply: d.config?.waitForReply ?? config.waitForReply ?? false,
+        replyVariable: d.config?.replyVariable ?? config.replyVariable ?? "",
+        buttons: config.buttons?.map((btn: any) => ({
+          ...btn,
+          type: btn.type ?? "reply",
+          url: btn.url ?? "",
+        })),
       };
     });
 }

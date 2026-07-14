@@ -20,12 +20,6 @@ class WhatsAppSenderService
 
     public function send(WhatsappAccount $account, string $to, string $type, array $payload): array
     {
-        // Fail fast on oversized files BEFORE making any network call to
-        // Meta. We never download media_url ourselves (Meta fetches it
-        // directly), but a file exceeding Meta's documented limits will be
-        // rejected by them after their own fetch attempt — wasting time
-        // and surfacing a vague error. A cheap HEAD request here gives a
-        // clear, immediate error instead.
         if (in_array($type, ['image', 'document'], true) && !empty($payload['media_url'])) {
             $sizeError = $this->checkMediaUrlSize($payload['media_url']);
 
@@ -74,14 +68,6 @@ class WhatsAppSenderService
         }
     }
 
-    /**
-     * Cheap HEAD request to learn Content-Length + extension without
-     * downloading the body, then validates against Meta's documented
-     * limits via MetaMediaLimits. Returns an error message, or null if
-     * the file is fine (or size couldn't be determined — we don't block
-     * a send just because a HEAD request failed; Meta enforces its own
-     * limit regardless).
-     */
     private function checkMediaUrlSize(string $mediaUrl): ?string
     {
         try {

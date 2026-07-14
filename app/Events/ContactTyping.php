@@ -2,26 +2,30 @@
 
 namespace App\Events;
 
-use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
+// FIXED: Channel -> PrivateChannel only. Event name/payload unchanged.
 class ContactTyping implements ShouldBroadcastNow
 {
-    use Dispatchable, InteractsWithSockets, SerializesModels;
+    use Dispatchable;
+    use InteractsWithSockets;
+    use SerializesModels;
 
     public function __construct(
-        public readonly int    $conversationId,
+        public readonly string $conversationId,
         public readonly string $contactPhone,
-        public readonly bool   $isTyping,
-    ) {}
+        public readonly bool $isTyping,
+    ) {
+    }
 
     public function broadcastOn(): array
     {
         return [
-            new Channel("conversation.{$this->conversationId}"),
+            new PrivateChannel("conversation.{$this->conversationId}"),
         ];
     }
 
@@ -34,8 +38,8 @@ class ContactTyping implements ShouldBroadcastNow
     {
         return [
             'conversation_id' => $this->conversationId,
-            'contact_phone'   => $this->contactPhone,
-            'is_typing'       => $this->isTyping,
+            'contact_phone' => $this->contactPhone,
+            'is_typing' => $this->isTyping,
         ];
     }
 }

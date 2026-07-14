@@ -158,6 +158,7 @@ const props = withDefaults(
     | "footer"
     | "button"
     | "title"
+    | "url"
     | "description";
   }>(),
   {

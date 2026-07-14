@@ -3,11 +3,18 @@
 namespace Database\Seeders;
 
 use App\Models\BuiltInFunction;
+use App\Models\GlobalVariable;
 use Illuminate\Database\Seeder;
 
 class BuiltInFunctionsSeeder extends Seeder
 {
     public function run(): void
+    {
+        $this->seedFunctions();
+        $this->seedVariables();
+    }
+
+    public function seedFunctions(): void
     {
         $functions = [
             // Date/Time Functions
@@ -19,7 +26,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => [],
                 'return_type' => 'datetime',
                 'examples' => [
-                    ['input' => 'now()', 'output' => '2026-02-15 10:30:00']
+                    ['input' => 'now()', 'output' => '2026-02-15 10:30:00'],
                 ],
             ],
             [
@@ -30,7 +37,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => [],
                 'return_type' => 'date',
                 'examples' => [
-                    ['input' => 'today()', 'output' => '2026-02-15']
+                    ['input' => 'today()', 'output' => '2026-02-15'],
                 ],
             ],
             [
@@ -41,7 +48,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['date', 'days'],
                 'return_type' => 'date',
                 'examples' => [
-                    ['input' => 'addDays("2026-02-15", 5)', 'output' => '2026-02-20']
+                    ['input' => 'addDays("2026-02-15", 5)', 'output' => '2026-02-20'],
                 ],
             ],
             [
@@ -52,7 +59,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['date', 'format'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'formatDate("2026-02-15", "F j, Y")', 'output' => 'February 15, 2026']
+                    ['input' => 'formatDate("2026-02-15", "F j, Y")', 'output' => 'February 15, 2026'],
                 ],
             ],
             [
@@ -63,7 +70,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['date'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'dayOfWeek("2026-02-15")', 'output' => 'Sunday']
+                    ['input' => 'dayOfWeek("2026-02-15")', 'output' => 'Sunday'],
                 ],
             ],
 
@@ -76,7 +83,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'upper("hello")', 'output' => 'HELLO']
+                    ['input' => 'upper("hello")', 'output' => 'HELLO'],
                 ],
             ],
             [
@@ -87,7 +94,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'lower("HELLO")', 'output' => 'hello']
+                    ['input' => 'lower("HELLO")', 'output' => 'hello'],
                 ],
             ],
             [
@@ -98,7 +105,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'capitalize("hello world")', 'output' => 'Hello world']
+                    ['input' => 'capitalize("hello world")', 'output' => 'Hello world'],
                 ],
             ],
             [
@@ -109,7 +116,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'titleCase("hello world")', 'output' => 'Hello World']
+                    ['input' => 'titleCase("hello world")', 'output' => 'Hello World'],
                 ],
             ],
             [
@@ -120,7 +127,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'trim("  hello  ")', 'output' => 'hello']
+                    ['input' => 'trim("  hello  ")', 'output' => 'hello'],
                 ],
             ],
             [
@@ -131,7 +138,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'length("hello")', 'output' => '5']
+                    ['input' => 'length("hello")', 'output' => '5'],
                 ],
             ],
             [
@@ -142,7 +149,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'start', 'length'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'substring("hello world", 0, 5)', 'output' => 'hello']
+                    ['input' => 'substring("hello world", 0, 5)', 'output' => 'hello'],
                 ],
             ],
             [
@@ -153,7 +160,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'find', 'replace'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'replace("hello world", "world", "there")', 'output' => 'hello there']
+                    ['input' => 'replace("hello world", "world", "there")', 'output' => 'hello there'],
                 ],
             ],
             [
@@ -164,7 +171,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'substring'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'contains("hello world", "world")', 'output' => 'true']
+                    ['input' => 'contains("hello world", "world")', 'output' => 'true'],
                 ],
             ],
             [
@@ -175,7 +182,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'prefix'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'startsWith("hello world", "hello")', 'output' => 'true']
+                    ['input' => 'startsWith("hello world", "hello")', 'output' => 'true'],
                 ],
             ],
             [
@@ -186,7 +193,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'suffix'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'endsWith("hello world", "world")', 'output' => 'true']
+                    ['input' => 'endsWith("hello world", "world")', 'output' => 'true'],
                 ],
             ],
             [
@@ -197,7 +204,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['text', 'delimiter'],
                 'return_type' => 'array',
                 'examples' => [
-                    ['input' => 'split("a,b,c", ",")', 'output' => '["a", "b", "c"]']
+                    ['input' => 'split("a,b,c", ",")', 'output' => '["a", "b", "c"]'],
                 ],
             ],
             [
@@ -208,7 +215,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['array', 'delimiter'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'join(["a", "b", "c"], ",")', 'output' => 'a,b,c']
+                    ['input' => 'join(["a", "b", "c"], ",")', 'output' => 'a,b,c'],
                 ],
             ],
 
@@ -221,7 +228,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['condition', 'trueValue', 'falseValue'],
                 'return_type' => 'any',
                 'examples' => [
-                    ['input' => 'if(true, "yes", "no")', 'output' => 'yes']
+                    ['input' => 'if(true, "yes", "no")', 'output' => 'yes'],
                 ],
             ],
             [
@@ -232,7 +239,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['value'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'isEmpty("")', 'output' => 'true']
+                    ['input' => 'isEmpty("")', 'output' => 'true'],
                 ],
             ],
             [
@@ -243,7 +250,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['value'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'isNotEmpty("hello")', 'output' => 'true']
+                    ['input' => 'isNotEmpty("hello")', 'output' => 'true'],
                 ],
             ],
             [
@@ -254,7 +261,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['condition1', 'condition2'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'and(true, true)', 'output' => 'true']
+                    ['input' => 'and(true, true)', 'output' => 'true'],
                 ],
             ],
             [
@@ -265,7 +272,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['condition1', 'condition2'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'or(true, false)', 'output' => 'true']
+                    ['input' => 'or(true, false)', 'output' => 'true'],
                 ],
             ],
             [
@@ -276,7 +283,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['condition'],
                 'return_type' => 'boolean',
                 'examples' => [
-                    ['input' => 'not(true)', 'output' => 'false']
+                    ['input' => 'not(true)', 'output' => 'false'],
                 ],
             ],
 
@@ -289,7 +296,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number', 'decimals'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'formatNumber(1234.567, 2)', 'output' => '1,234.57']
+                    ['input' => 'formatNumber(1234.567, 2)', 'output' => '1,234.57'],
                 ],
             ],
             [
@@ -300,7 +307,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'formatCurrency(1234.56)', 'output' => '$1,234.56']
+                    ['input' => 'formatCurrency(1234.56)', 'output' => '$1,234.56'],
                 ],
             ],
             [
@@ -311,7 +318,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['phoneNumber'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'formatPhone("1234567890")', 'output' => '(123) 456-7890']
+                    ['input' => 'formatPhone("1234567890")', 'output' => '(123) 456-7890'],
                 ],
             ],
             [
@@ -322,7 +329,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number'],
                 'return_type' => 'string',
                 'examples' => [
-                    ['input' => 'formatPercentage(0.85)', 'output' => '85%']
+                    ['input' => 'formatPercentage(0.85)', 'output' => '85%'],
                 ],
             ],
 
@@ -335,7 +342,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['a', 'b'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'add(5, 3)', 'output' => '8']
+                    ['input' => 'add(5, 3)', 'output' => '8'],
                 ],
             ],
             [
@@ -346,7 +353,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['a', 'b'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'subtract(10, 3)', 'output' => '7']
+                    ['input' => 'subtract(10, 3)', 'output' => '7'],
                 ],
             ],
             [
@@ -357,7 +364,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['a', 'b'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'multiply(4, 5)', 'output' => '20']
+                    ['input' => 'multiply(4, 5)', 'output' => '20'],
                 ],
             ],
             [
@@ -368,7 +375,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['a', 'b'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'divide(10, 2)', 'output' => '5']
+                    ['input' => 'divide(10, 2)', 'output' => '5'],
                 ],
             ],
             [
@@ -379,7 +386,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number', 'decimals'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'round(3.14159, 2)', 'output' => '3.14']
+                    ['input' => 'round(3.14159, 2)', 'output' => '3.14'],
                 ],
             ],
             [
@@ -390,7 +397,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'floor(3.7)', 'output' => '3']
+                    ['input' => 'floor(3.7)', 'output' => '3'],
                 ],
             ],
             [
@@ -401,7 +408,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['number'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'ceil(3.2)', 'output' => '4']
+                    ['input' => 'ceil(3.2)', 'output' => '4'],
                 ],
             ],
             [
@@ -412,7 +419,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['numbers...'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'min(5, 2, 8, 1)', 'output' => '1']
+                    ['input' => 'min(5, 2, 8, 1)', 'output' => '1'],
                 ],
             ],
             [
@@ -423,7 +430,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['numbers...'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'max(5, 2, 8, 1)', 'output' => '8']
+                    ['input' => 'max(5, 2, 8, 1)', 'output' => '8'],
                 ],
             ],
             [
@@ -434,7 +441,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['min', 'max'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'random(1, 10)', 'output' => '7 (example)']
+                    ['input' => 'random(1, 10)', 'output' => '7 (example)'],
                 ],
             ],
 
@@ -447,7 +454,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['array'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'arrayLength([1, 2, 3])', 'output' => '3']
+                    ['input' => 'arrayLength([1, 2, 3])', 'output' => '3'],
                 ],
             ],
             [
@@ -458,7 +465,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['array'],
                 'return_type' => 'any',
                 'examples' => [
-                    ['input' => 'first([1, 2, 3])', 'output' => '1']
+                    ['input' => 'first([1, 2, 3])', 'output' => '1'],
                 ],
             ],
             [
@@ -469,7 +476,7 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['array'],
                 'return_type' => 'any',
                 'examples' => [
-                    ['input' => 'last([1, 2, 3])', 'output' => '3']
+                    ['input' => 'last([1, 2, 3])', 'output' => '3'],
                 ],
             ],
             [
@@ -480,13 +487,70 @@ class BuiltInFunctionsSeeder extends Seeder
                 'parameters' => ['array', 'item'],
                 'return_type' => 'number',
                 'examples' => [
-                    ['input' => 'indexOf([1, 2, 3], 2)', 'output' => '1']
+                    ['input' => 'indexOf([1, 2, 3], 2)', 'output' => '1'],
                 ],
             ],
         ];
 
         foreach ($functions as $function) {
             BuiltInFunction::create($function);
+        }
+    }
+
+    public function seedVariables(): void
+    {
+        $systemVariables = [
+            [
+                'key' => 'contact_name',
+                'name' => 'Contact Name',
+                'data_type' => 'string',
+                'description' => 'WhatsApp display name of the contact',
+            ],
+            [
+                'key' => 'contact_phone',
+                'name' => 'Contact Phone',
+                'data_type' => 'string',
+                'description' => 'Phone number including country code',
+            ],
+            [
+                'key' => 'contact_wa_id',
+                'name' => 'WhatsApp ID',
+                'data_type' => 'string',
+                'description' => 'WhatsApp internal user ID',
+            ],
+            [
+                'key' => 'conversation_id',
+                'name' => 'Conversation ID',
+                'data_type' => 'number',
+                'description' => 'Internal conversation record ID',
+            ],
+            [
+                'key' => 'bot_name',
+                'name' => 'Bot Name',
+                'data_type' => 'string',
+                'description' => 'Name of the current bot',
+            ],
+            [
+                'key' => 'current_date',
+                'name' => 'Current Date',
+                'data_type' => 'date',
+                'description' => "Today's date (YYYY-MM-DD)",
+            ],
+            [
+                'key' => 'current_time',
+                'name' => 'Current Time',
+                'data_type' => 'string',
+                'description' => 'Current time (HH:MM, server timezone)',
+            ],
+        ];
+
+        foreach ($systemVariables as $variable) {
+            GlobalVariable::updateOrCreate(
+                ['key' => $variable['key']],
+                array_merge($variable, [
+                    'is_encrypted' => false,
+                ])
+            );
         }
     }
 }

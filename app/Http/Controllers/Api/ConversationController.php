@@ -4,23 +4,21 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
-use App\Models\Tenant;
+use App\Models\Message;
+use App\Services\Bot\WhatsAppMessageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class ConversationController extends Controller
 {
-    // GET /api/conversations
     public function index(Request $request): JsonResponse
     {
-        $tenant = Tenant::current();
-
-        $query = Conversation::where('tenant_id', $tenant->id)
-            ->with(['flow.bot', 'whatsappAccount', 'assignedAgent']);
+        $query = Conversation::with(['bot', 'whatsappAccount', 'assignedAgent']);
 
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where(fn($q) => $q
+            $query->where(fn ($q) => $q
                 ->where('whatsapp_user_phone', 'like', "%{$s}%")
                 ->orWhere('whatsapp_user_name', 'like', "%{$s}%"));
         }
@@ -29,8 +27,8 @@ class ConversationController extends Controller
             $query->where('status', $request->status);
         }
 
-        if ($request->filled('flow_id')) {
-            $query->where('flow_id', $request->flow_id);
+        if ($request->filled('bot_id')) {
+            $query->where('bot_id', $request->bot_id);
         }
 
         if ($request->filled('whatsapp_account_id')) {
@@ -57,30 +55,109 @@ class ConversationController extends Controller
 
         $conversations->getCollection()->transform(function ($c) {
             $c->duration_formatted = $c->getFormattedDuration();
+
             return $c;
         });
 
         return response()->json($conversations);
     }
 
-    // GET /api/conversations/{conversation}
+    public function store(Request $request, Conversation $conversation): JsonResponse
+    {
+        $validated = $request->validate([
+            'text' => 'required|string|max:4096',
+            'reply_to_wamid' => 'nullable|string|max:128',
+        ]);
+
+        $account = $conversation->whatsappAccount;
+
+        if (!$account) {
+            return response()->json([
+                'message' => 'This conversation has no linked WhatsApp account — cannot send.',
+            ], 422);
+        }
+
+        if (!$account->is_active) {
+            return response()->json([
+                'message' => 'The WhatsApp account for this conversation is inactive.',
+            ], 422);
+        }
+
+        if ($conversation->isActive()) {
+            $conversation->handOff(agentId: auth()->id());
+
+            Log::info('Conversation auto-handed-off — agent sent a message', [
+                'conversation_id' => $conversation->id,
+                'agent_id' => auth()->id(),
+            ]);
+
+            $conversation->refresh();
+        }
+
+        $service = app(WhatsAppMessageService::class);
+
+        try {
+            $message = !empty($validated['reply_to_wamid'])
+                ? $service->sendReplyText(
+                    account: $account,
+                    to: $conversation->whatsapp_user_phone,
+                    text: $validated['text'],
+                    replyToWamid: $validated['reply_to_wamid'],
+                )
+                : $service->sendTextMessage(
+                    account: $account,
+                    to: $conversation->whatsapp_user_phone,
+                    text: $validated['text'],
+                );
+        } catch (\Exception $e) {
+            Log::error('Failed to send agent text message', [
+                'conversation_id' => $conversation->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to send message. Please try again.',
+            ], 502);
+        }
+
+        if ($message->reply_to_wamid) {
+            $quoted = Message::where('conversation_id', $conversation->id)
+                ->where('whatsapp_message_id', $message->reply_to_wamid)
+                ->first();
+
+            if ($quoted) {
+                $message->quoted_message = [
+                    'id' => $quoted->id,
+                    'direction' => $quoted->direction,
+                    'message_type' => $quoted->message_type,
+                    'content' => $quoted->content,
+                ];
+            }
+        }
+
+        activity()->causedBy(auth()->user())->performedOn($conversation)
+            ->withProperties(['message_id' => $message->id])->log('Agent sent message');
+
+        return response()->json(['data' => $message], 201);
+    }
+
     public function show(Conversation $conversation): JsonResponse
     {
-        $this->authorizeConversation($conversation);
+        $conversation->load(['bot', 'whatsappAccount', 'assignedAgent', 'context']);
 
-        $conversation->load(['flow.bot', 'whatsappAccount', 'assignedAgent', 'context']);
+        // ->latestMessage is null for a conversation with no messages yet —
+        // previewText() must accept that instead of blowing up with a
+        // TypeError before the response can even be built.
+        $conversation['latest_message'] = $this->previewText($conversation->latestMessage);
 
         return response()->json([
-            'conversation'      => $conversation,
-            'duration_formatted'=> $conversation->getFormattedDuration(),
+            'data' => $conversation,
+            'duration_formatted' => $conversation->getFormattedDuration(),
         ]);
     }
 
-    // GET /api/conversations/{conversation}/messages
     public function messages(Request $request, Conversation $conversation): JsonResponse
     {
-        $this->authorizeConversation($conversation);
-
         $query = $conversation->messages()->orderBy('sent_at', 'asc');
 
         if ($request->filled('direction')) {
@@ -91,24 +168,49 @@ class ConversationController extends Controller
             $query->where('message_type', $request->message_type);
         }
 
-        return response()->json($query->paginate($request->get('per_page', 50)));
+        $paginated = $query->paginate($request->get('per_page', 50));
+
+        $wamidsNeeded = $paginated->getCollection()
+            ->pluck('reply_to_wamid')
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($wamidsNeeded->isNotEmpty()) {
+            $quotedMessages = Message::where('conversation_id', $conversation->id)
+                ->whereIn('whatsapp_message_id', $wamidsNeeded)
+                ->get()
+                ->keyBy('whatsapp_message_id');
+
+            $paginated->getCollection()->transform(function ($m) use ($quotedMessages) {
+                if ($m->reply_to_wamid && $quotedMessages->has($m->reply_to_wamid)) {
+                    $quoted = $quotedMessages->get($m->reply_to_wamid);
+                    $m->quoted_message = [
+                        'id' => $quoted->id,
+                        'direction' => $quoted->direction,
+                        'message_type' => $quoted->message_type,
+                        'content' => $quoted->content,
+                    ];
+                }
+
+                return $m;
+            });
+        }
+
+        return response()->json($paginated);
     }
 
-    // POST /api/conversations/{conversation}/handoff
     public function handoff(Request $request, Conversation $conversation): JsonResponse
     {
-        $this->authorizeConversation($conversation);
-
         $validated = $request->validate([
             'assigned_agent_id' => 'nullable|exists:users,id',
-            'reason'            => 'nullable|string|max:500',
+            'reason' => 'nullable|string|max:500',
         ]);
 
-        $conversation->handoff($validated['assigned_agent_id'] ?? null);
+        $conversation->handOff(agentId: $validated['assigned_agent_id'] ?? null);
 
-        // Notify the WhatsApp user
         if ($conversation->whatsappAccount) {
-            app(\App\Services\Bot\WhatsAppMessageService::class)->sendTextMessage(
+            app(WhatsAppMessageService::class)->sendTextMessage(
                 $conversation->whatsappAccount,
                 $conversation->whatsapp_user_phone,
                 $validated['reason'] ?? 'Transferring you to an agent...'
@@ -119,16 +221,13 @@ class ConversationController extends Controller
             ->withProperties($validated)->log('Conversation handed off');
 
         return response()->json([
-            'message'      => 'Conversation handed off.',
+            'message' => 'Conversation handed off.',
             'conversation' => $conversation->fresh(),
         ]);
     }
 
-    // POST /api/conversations/{conversation}/end
     public function end(Conversation $conversation): JsonResponse
     {
-        $this->authorizeConversation($conversation);
-
         $conversation->complete();
 
         activity()->causedBy(auth()->user())->performedOn($conversation)->log('Conversation ended');
@@ -136,11 +235,8 @@ class ConversationController extends Controller
         return response()->json(['message' => 'Conversation ended.', 'conversation' => $conversation]);
     }
 
-    // DELETE /api/conversations/{conversation}
     public function destroy(Conversation $conversation): JsonResponse
     {
-        $this->authorizeConversation($conversation);
-
         if ($conversation->isActive()) {
             return response()->json(['message' => 'Cannot delete an active conversation.'], 422);
         }
@@ -152,91 +248,142 @@ class ConversationController extends Controller
         return response()->json(['message' => 'Conversation deleted.']);
     }
 
-    // GET /api/conversations/export
     public function export(Request $request): JsonResponse
     {
-        $tenant = Tenant::current();
-
         $validated = $request->validate([
-            'format'     => 'required|in:csv,json',
-            'flow_id'    => 'nullable|exists:flows,id',
-            'status'     => 'nullable|in:active,completed,abandoned,handed_off',
+            'format' => 'required|in:csv,json',
+            'bot_id' => 'nullable|exists:bots,id',
+            'status' => 'nullable|in:active,completed,abandoned,handed_off',
             'start_date' => 'nullable|date',
-            'end_date'   => 'nullable|date',
+            'end_date' => 'nullable|date',
         ]);
 
-        $query = Conversation::where('tenant_id', $tenant->id);
+        $query = Conversation::query();
 
-        if (!empty($validated['flow_id']))    $query->where('flow_id', $validated['flow_id']);
-        if (!empty($validated['status']))     $query->where('status', $validated['status']);
-        if (!empty($validated['start_date'])) $query->whereDate('started_at', '>=', $validated['start_date']);
-        if (!empty($validated['end_date']))   $query->whereDate('started_at', '<=', $validated['end_date']);
+        if (!empty($validated['bot_id'])) {
+            $query->where('bot_id', $validated['bot_id']);
+        }
+        if (!empty($validated['status'])) {
+            $query->where('status', $validated['status']);
+        }
+        if (!empty($validated['start_date'])) {
+            $query->whereDate('started_at', '>=', $validated['start_date']);
+        }
+        if (!empty($validated['end_date'])) {
+            $query->whereDate('started_at', '<=', $validated['end_date']);
+        }
 
-        $conversations = $query->with(['flow.bot', 'whatsappAccount'])->get();
+        $conversations = $query->with(['bot', 'whatsappAccount'])->get();
 
-        $filename = 'conversations_' . now()->format('Y-m-d');
+        $filename = 'conversations_'.now()->format('Y-m-d');
 
         if ($validated['format'] === 'csv') {
             return response()->json([
-                'data'     => base64_encode($this->generateCsv($conversations)),
-                'filename' => $filename . '.csv',
+                'data' => base64_encode($this->generateCsv($conversations)),
+                'filename' => $filename.'.csv',
             ]);
         }
 
-        return response()->json(['data' => $conversations, 'filename' => $filename . '.json']);
+        return response()->json(['data' => $conversations, 'filename' => $filename.'.json']);
     }
 
-    // GET /api/conversations/statistics
     public function statistics(Request $request): JsonResponse
     {
-        $tenant = Tenant::current();
+        $query = Conversation::query();
 
-        $query = Conversation::where('tenant_id', $tenant->id);
-
-        if ($request->filled('flow_id'))    $query->where('flow_id', $request->flow_id);
-        if ($request->filled('start_date')) $query->whereDate('started_at', '>=', $request->start_date);
-        if ($request->filled('end_date'))   $query->whereDate('started_at', '<=', $request->end_date);
+        if ($request->filled('bot_id')) {
+            $query->where('bot_id', $request->bot_id);
+        }
+        if ($request->filled('start_date')) {
+            $query->whereDate('started_at', '>=', $request->start_date);
+        }
+        if ($request->filled('end_date')) {
+            $query->whereDate('started_at', '<=', $request->end_date);
+        }
 
         return response()->json([
-            'total_conversations'      => (clone $query)->count(),
-            'active_conversations'     => (clone $query)->where('status', 'active')->count(),
-            'completed_conversations'  => (clone $query)->where('status', 'completed')->count(),
-            'abandoned_conversations'  => (clone $query)->where('status', 'abandoned')->count(),
+            'total_conversations' => (clone $query)->count(),
+            'active_conversations' => (clone $query)->where('status', 'active')->count(),
+            'completed_conversations' => (clone $query)->where('status', 'completed')->count(),
+            'abandoned_conversations' => (clone $query)->where('status', 'abandoned')->count(),
             'handed_off_conversations' => (clone $query)->where('status', 'handed_off')->count(),
             'average_duration_seconds' => (clone $query)->whereNotNull('ended_at')
-                ->get()->avg(fn($c) => $c->getDuration()),
-            'average_message_count'    => (clone $query)->avg('message_count'),
-            'by_status'                => (clone $query)
+                ->get()->avg(fn ($c) => $c->getDuration()),
+            'average_message_count' => (clone $query)->avg('message_count'),
+            'by_status' => (clone $query)
                 ->selectRaw('status, COUNT(*) as count')->groupBy('status')->get(),
         ]);
     }
 
     // -------------------------------------------------------------------------
 
-    private function authorizeConversation(Conversation $conversation): void
+    /**
+     * One-line, type-aware summary of a message's content — mirrors the
+     * frontend's previewText() so both layers agree on what each message
+     * type "is" as a short label. Defensive against every shape traced in
+     * content-shapes-reference: text, interactive (list/buttons, both
+     * outbound-sent and inbound-tapped shapes), media, location, contacts,
+     * sticker. Never indexes into $content without checking the key
+     * exists first.
+     *
+     * Accepts a nullable Message — a conversation with zero messages yet
+     * has ->latestMessage === null, and this must not blow up in that case
+     * (previously did: Message $message rejected null with a TypeError,
+     * crashing show() for any empty conversation).
+     */
+    private function previewText(?Message $message): string
     {
-        if ($conversation->tenant_id !== Tenant::current()->id) {
-            abort(404, 'Conversation not found.');
+        if (!$message) {
+            return 'No messages yet';
         }
+
+        $rawContent = $message->content ?? [];
+        // Defensive: if the model's `content` cast isn't (or stops being)
+        // 'array'/'json', $rawContent could arrive here as a raw JSON
+        // string instead of an array — decode it rather than crashing on
+        // "Cannot use a scalar value as an array".
+        $content = is_array($rawContent) ? $rawContent : (json_decode((string) $rawContent, true) ?? []);
+        $type = $message->message_type;
+
+        return match (true) {
+            $type === 'text' => $content['text'] ?? '',
+
+            $type === 'interactive' && ($content['type'] ?? null) === 'list' => $content['body']['text'] ?? 'List message',
+
+            $type === 'interactive' && ($content['type'] ?? null) === 'button' => $content['body']['text'] ?? 'Button message',
+
+            // user tapped a button/list row — inbound shape
+            $type === 'interactive' && isset($content['response']) => $content['response']['title'] ?? 'Selected an option',
+
+            $type === 'button' => $content['text'] ?? 'Quick reply',
+
+            in_array($type, ['image', 'video', 'audio', 'document', 'sticker'], true) => $content['caption'] ?? ucfirst($type),
+
+            $type === 'location' => $content['name'] ?? 'Location',
+
+            $type === 'contacts' => ($content['contacts'][0]['name']['formatted_name'] ?? null)
+                    ?? 'Contact card',
+
+            default => 'Message',
+        };
     }
 
     private function generateCsv($conversations): string
     {
-        $csv = "ID,Phone,Name,Flow,Bot,Status,Started At,Ended At,Duration (s),Messages\n";
+        $csv = "ID,Phone,Name,Bot,Status,Started At,Ended At,Duration (s),Messages\n";
 
         foreach ($conversations as $c) {
             $csv .= implode(',', [
                 $c->id,
                 $c->whatsapp_user_phone,
-                $c->whatsapp_user_name    ?? 'N/A',
-                $c->flow->name            ?? 'N/A',
-                $c->flow->bot->name       ?? 'N/A',
+                $c->whatsapp_user_name ?? 'N/A',
+                $c->bot->name ?? 'N/A',
                 $c->status,
                 $c->started_at->format('Y-m-d H:i:s'),
                 $c->ended_at?->format('Y-m-d H:i:s') ?? 'N/A',
-                $c->getDuration()         ?? 'N/A',
+                $c->getDuration() ?? 'N/A',
                 $c->message_count,
-            ]) . "\n";
+            ])."\n";
         }
 
         return $csv;

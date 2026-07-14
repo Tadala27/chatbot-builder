@@ -1,20 +1,3 @@
-<!--
-==============================================================================
-FILE: src/components/flowbuilder/ValidationPanel.vue  (NEW)
-PRIORITY: 1 — Companion UI for useFlowValidator
-
-WHAT: A collapsible panel that shows validation issues. Clicking an issue
-scrolls to the offending node and highlights it. Blocks the Publish button
-when errors are present.
-
-USAGE (in FlowBuilder.vue parent):
-  <ValidationPanel
-    :nodes="nodes"
-    @validate-complete="hasErrors = $event.hasErrors"
-    @focus-node="scrollToNode"
-  />
-==============================================================================
--->
 
 <template>
   <VCard class="validation-panel" variant="outlined" :class="panelClass">
@@ -101,7 +84,7 @@ USAGE (in FlowBuilder.vue parent):
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useFlowValidator, type ValidationIssue, type IssueSeverity } from '@/composables/useFlowValidator'
-import type { FlowNode } from '@/components/flowbuilder/types'
+import type { FlowNode } from '@/components/bots/types'
 
 const props = defineProps<{
   nodes: FlowNode[]

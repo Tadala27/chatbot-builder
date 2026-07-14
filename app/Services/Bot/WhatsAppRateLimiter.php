@@ -1,6 +1,5 @@
 <?php
 
-
 namespace App\Services\Bot;
 
 use Illuminate\Support\Facades\Cache;
@@ -36,11 +35,11 @@ class WhatsAppRateLimiter
      * MAX_WAIT_SECONDS. If still blocked, we return false — the caller can
      * either drop the message, queue it for later, or throw.
      */
-    public function tryAcquire(int $accountId, int $rate = null, int $burst = null): bool
+    public function tryAcquire(string $accountId, ?int $rate = null, ?int $burst = null): bool
     {
-        $rate  = $rate  ?? self::DEFAULT_RATE_PER_SECOND;
+        $rate = $rate ?? self::DEFAULT_RATE_PER_SECOND;
         $burst = $burst ?? self::DEFAULT_BURST;
-        $key   = "wa_bucket:{$accountId}";
+        $key = "wa_bucket:{$accountId}";
 
         $deadline = microtime(true) + self::MAX_WAIT_SECONDS;
 
@@ -54,9 +53,10 @@ class WhatsAppRateLimiter
 
         Log::warning('WhatsApp rate limiter: no tokens after wait', [
             'account_id' => $accountId,
-            'rate'       => $rate,
-            'burst'      => $burst,
+            'rate' => $rate,
+            'burst' => $burst,
         ]);
+
         return false;
     }
 
@@ -75,7 +75,7 @@ class WhatsAppRateLimiter
         return Cache::lock("{$key}:lock", 5)->block(2, function () use ($key, $rate, $burst) {
             $state = Cache::get($key, ['tokens' => (float) $burst, 'updated' => microtime(true)]);
 
-            $now   = microtime(true);
+            $now = microtime(true);
             $delta = $now - $state['updated'];
 
             // Refill bucket
@@ -84,11 +84,13 @@ class WhatsAppRateLimiter
             if ($tokens < 1) {
                 // Persist the refilled state anyway
                 Cache::put($key, ['tokens' => $tokens, 'updated' => $now], 60);
+
                 return false;
             }
 
-            $tokens -= 1;
+            --$tokens;
             Cache::put($key, ['tokens' => $tokens, 'updated' => $now], 60);
+
             return true;
         });
     }
@@ -132,23 +134,26 @@ return 1
 LUA;
 
         $result = $redis->eval($lua, 1, $key, $rate, $burst, microtime(true));
+
         return (int) $result === 1;
     }
 
     /**
      * For debugging — how many tokens are currently available?
      */
-    public function availableTokens(int $accountId): float
+    public function availableTokens(string $accountId): float
     {
         $state = Cache::get("wa_bucket:{$accountId}");
-        if (!$state) return (float) self::DEFAULT_BURST;
+        if (!$state) {
+            return (float) self::DEFAULT_BURST;
+        }
 
-        $delta  = microtime(true) - $state['updated'];
+        $delta = microtime(true) - $state['updated'];
         $tokens = $state['tokens'] + $delta * self::DEFAULT_RATE_PER_SECOND;
+
         return min((float) self::DEFAULT_BURST, $tokens);
     }
 }
-
 
 // =============================================================================
 // HOW TO USE — in WhatsAppMessageService::sendRequest()
@@ -185,7 +190,6 @@ LUA;
 //       default   => 20,
 //   };
 //   $this->rateLimiter->tryAcquire($account->id, $rate, $rate * 2);
-
 
 // =============================================================================
 // WHY NOT USE Laravel's built-in RateLimiter?

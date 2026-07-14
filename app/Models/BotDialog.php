@@ -3,77 +3,48 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
 
 class BotDialog extends Model
 {
+    public const KIND_MESSAGE = 'message';
+    public const KIND_BUTTONS = 'buttons';
+    public const KIND_LIST = 'list';
+
+    public const KINDS = [self::KIND_MESSAGE, self::KIND_BUTTONS, self::KIND_LIST];
+
+    /**
+     * Button/row "kind" values a config-level dialog's buttons can trigger.
+     * These map 1:1 onto SystemActionHandler::execute()'s $kind switch, so a
+     * button here and a button on a flow dialog are executed by the exact
+     * same code — no separate "config-level" execution path needed.
+     *
+     * @see \App\Services\Bot\SystemActionHandler::execute()
+     */
+    public const SYSTEM_ACTIONS = ['start_flow', 'go_home', 'go_back', 'talk_to_agent'];
+
+    protected $keyType = 'string';
+    public $incrementing = false;
+
     protected $fillable = [
+        'id',
         'bot_id',
-        'tenant_id',
         'purpose',
         'name',
         'description',
         'kind',
         'config',
-        'is_active',
         'is_entry_point',
+        'is_active',
     ];
 
     protected $casts = [
-        'config'    => 'array',
-        'is_active' => 'boolean',
+        'config' => 'array',
         'is_entry_point' => 'boolean',
+        'is_active' => 'boolean',
     ];
 
-    // ── Well-known purpose constants ──────────────────────────────────────────
-    // Use these everywhere instead of bare strings to avoid typos.
-    const PURPOSE_INVALID_INPUT     = 'invalid_input';
-    const PURPOSE_INVALID_ESCALATE  = 'invalid_escalate';
-    const PURPOSE_RETRY_NUDGE       = 'retry_nudge';
-    const PURPOSE_HANDOVER_IN_HOURS = 'handover_in_hours';
-    const PURPOSE_HANDOVER_OFF_HOURS = 'handover_off_hours';
-    const PURPOSE_SESSION_EXPIRED   = 'session_expired';
-    const PURPOSE_OPT_OUT_CONFIRM   = 'opt_out_confirm';
-    const PURPOSE_OPT_IN_CONFIRM    = 'opt_in_confirm';
-    const PURPOSE_WELCOME           = 'welcome';
-    const PURPOSE_STARTING          = 'starting';
-
-    // All purposes in display order for the UI
-    const ALL_PURPOSES = [
-        self::PURPOSE_STARTING          => 'Starting dialog',
-        self::PURPOSE_WELCOME           => 'Welcome (first contact)',
-        self::PURPOSE_INVALID_INPUT     => 'Invalid input fallback',
-        self::PURPOSE_INVALID_ESCALATE  => 'Max invalid attempts escalation',
-        self::PURPOSE_RETRY_NUDGE       => 'Re-engagement nudge',
-        self::PURPOSE_HANDOVER_IN_HOURS => 'Handover — within hours',
-        self::PURPOSE_HANDOVER_OFF_HOURS => 'Handover — off hours',
-        self::PURPOSE_SESSION_EXPIRED   => 'Session expired notice',
-        self::PURPOSE_OPT_OUT_CONFIRM   => 'Opt-out confirmation',
-        self::PURPOSE_OPT_IN_CONFIRM    => 'Opt-in confirmation',
-    ];
-
-    // ── Relationships ─────────────────────────────────────────────────────────
-
-    public function bot(): BelongsTo
+    public function bot()
     {
         return $this->belongsTo(Bot::class);
-    }
-
-    public function tenant(): BelongsTo
-    {
-        return $this->belongsTo(Tenant::class);
-    }
-
-    // ── Scopes ────────────────────────────────────────────────────────────────
-
-    public function scopeActive($query)
-    {
-        return $query->where('is_active', true);
-    }
-
-    public function scopeForPurpose($query, string $purpose)
-    {
-        return $query->where('purpose', $purpose);
     }
 }

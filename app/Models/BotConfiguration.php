@@ -2,10 +2,14 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
 class BotConfiguration extends Model
 {
+    use HasUuids;
+
     protected $fillable = [
         'bot_id',
         'tenant_id',
@@ -34,14 +38,14 @@ class BotConfiguration extends Model
     ];
 
     protected $casts = [
-        'home_keywords'     => 'array',
-        'back_keywords'     => 'array',
+        'home_keywords' => 'array',
+        'back_keywords' => 'array',
         'handover_keywords' => 'array',
-        'opt_out_keywords'  => 'array',
-        'opt_in_keywords'   => 'array',
-        'operating_hours'   => 'array',
-        'retry_enabled'     => 'boolean',
-        'handover_enabled'  => 'boolean',
+        'opt_out_keywords' => 'array',
+        'opt_in_keywords' => 'array',
+        'operating_hours' => 'array',
+        'retry_enabled' => 'boolean',
+        'handover_enabled' => 'boolean',
     ];
 
     // ── Relationships ─────────────────────────────────────────────────────────
@@ -76,13 +80,30 @@ class BotConfiguration extends Model
         return $this->belongsTo(BotDialog::class, 'retry_dialog_id');
     }
 
-    public function handoverInHoursDialog(): BelongsTo
+    public function handoverDialogInHours(): BelongsTo
     {
         return $this->belongsTo(BotDialog::class, 'handover_dialog_id_in_hours');
     }
 
-    public function handoverOffHoursDialog(): BelongsTo
+    public function handoverDialogOffHours(): BelongsTo
     {
         return $this->belongsTo(BotDialog::class, 'handover_dialog_id_off_hours');
+    }
+
+    // ── Defaults ──────────────────────────────────────────────────────────────
+    public static function defaultOperatingHours(): array
+    {
+        $weekday = ['enabled' => true, 'open' => '08:00', 'close' => '17:00', 'timezone' => null];
+        $weekend = ['enabled' => false, 'open' => null, 'close' => null, 'timezone' => null];
+
+        return [
+            'monday' => $weekday,
+            'tuesday' => $weekday,
+            'wednesday' => $weekday,
+            'thursday' => $weekday,
+            'friday' => $weekday,
+            'saturday' => $weekend,
+            'sunday' => $weekend,
+        ];
     }
 }

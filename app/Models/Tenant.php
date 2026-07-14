@@ -25,7 +25,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
             'is_active',
             'subscription_tier',
             'subscription_expires_at',
-            'max_flows',
+            'max_bots',
             'max_conversations_per_month',
         ];
     }
@@ -39,7 +39,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         'is_active',
         'subscription_tier',
         'subscription_expires_at',
-        'max_flows',
+        'max_bots',
         'max_conversations_per_month',
         'settings',                     // data bag
     ];
@@ -48,7 +48,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         'is_active' => 'boolean',
         'subscription_expires_at' => 'datetime',
         'settings' => 'array',
-        'max_flows' => 'integer',
+        'max_bots' => 'integer',
         'max_conversations_per_month' => 'integer',
     ];
 
@@ -133,14 +133,14 @@ class Tenant extends BaseTenant implements TenantWithDatabase
             || $this->subscription_expires_at->isFuture();
     }
 
-    public function canCreateFlow(): bool
+    public function canCreateBots(): bool
     {
-        return $this->bots()->count() < $this->max_flows;
+        return $this->bots()->count() < $this->max_bots;
     }
 
-    public function getRemainingFlows(): int
+    public function getRemainingBots(): int
     {
-        return max(0, $this->max_flows - $this->bots()->count());
+        return max(0, $this->max_bots - $this->bots()->count());
     }
 
     public function getConversationsThisMonth(): int

@@ -1,9 +1,8 @@
 <?php
 
-// app/Models/WhatsappAccount.php
-
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -12,42 +11,62 @@ use Illuminate\Support\Str;
 class WhatsappAccount extends Model
 {
     use SoftDeletes;
+    use HasUuids;
 
     protected $fillable = [
+        // ── Identity ──────────────────────────────────────────────────────
         'waba_id',
         'phone_number_id',
         'phone_number',
         'display_phone_number',
         'verified_name',
-        'quality_rating',
-        'messaging_limit',
-        'access_token', // nullable now — only set for managed_bot accounts
+
+        // ── Auth ─────────────────────────────────────────────────────────
+        'access_token',
+        'phone_number_pin',
         'webhook_verify_token',
-        'is_active',
-        'last_synced_at',
-        'metadata',
-        // ── connector additions ──
+
+        // ── Onboarding progress ──────────────────────────────────────────
+        'onboarding_status',
+        'registered_at',
+
+        // ── Mode ──────────────────────────────────────────────────────────
         'mode',
         'webhook_url',
-        'webhook_secret',
+        'connector_api_key',
+        'connector_api_key_rotated_at',
+
+        // ── Health / status, synced from Meta ────────────────────────────
+        'quality_rating',
+        'messaging_limit',
+        'health_status',
+        'last_synced_at',
+
+        // ── State ─────────────────────────────────────────────────────────
+        'is_active',
+        'webhook_failure_count',
+        'webhook_last_failed_at',
+        'metadata',
     ];
 
     protected $hidden = [
         'access_token',
+        'phone_number_pin',
         'webhook_verify_token',
         'connector_api_key',
-        'webhook_secret',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
         'last_synced_at' => 'datetime',
-        'metadata' => 'array',
+        'registered_at' => 'datetime',
         'connector_api_key_rotated_at' => 'datetime',
         'webhook_last_failed_at' => 'datetime',
+        'metadata' => 'array',
+        'health_status' => 'array',
     ];
 
-    // ── Connector mode helpers ──────────────────────────────────────────────
+    // ── Mode helpers ──────────────────────────────────────────────────────
 
     public function isConnectorMode(): bool
     {
@@ -60,15 +79,108 @@ class WhatsappAccount extends Model
     }
 
     /**
-     * managed_bot accounts always have an access_token (from embedded
-     * signup). connector accounts never do — they use the platform's own
-     * Tech Provider token instead. Use this helper anywhere you'd
-     * previously assumed access_token is always present.
+     * True once Embedded Signup completed but the tenant hasn't yet picked
+     * managed_bot vs connector. UI should route here before anything else.
      */
-    public function hasOwnAccessToken(): bool
+    public function needsModeSelection(): bool
     {
-        return !empty($this->access_token);
+        return $this->mode === null;
     }
+
+    // ── Onboarding / payment status ─────────────────────────────────────
+
+    public function isPendingPayment(): bool
+    {
+        return $this->onboarding_status === 'pending_payment';
+    }
+
+    public function isFullyOnboarded(): bool
+    {
+        return $this->onboarding_status === 'active';
+    }
+
+    /**
+     * Reads the last-synced health_status rollup rather than calling Meta
+     * live. Run sync() first if you need this fresh.
+     */
+    public function canSendMessages(): bool
+    {
+        return ($this->metadata['can_send_message'] ?? null) === 'AVAILABLE';
+    }
+
+    /**
+     * Get extra fields from metadata.
+     */
+    public function getMetadataField(string $key, $default = null)
+    {
+        return $this->metadata[$key] ?? $default;
+    }
+
+    /**
+     * Get phone status from metadata.
+     */
+    public function getPhoneStatusAttribute()
+    {
+        return $this->metadata['phone_status'] ?? null;
+    }
+
+    /**
+     * Get code verification status from metadata.
+     */
+    public function getCodeVerificationStatusAttribute()
+    {
+        return $this->metadata['code_verification_status'] ?? null;
+    }
+
+    /**
+     * Get name status from metadata.
+     */
+    public function getNameStatusAttribute()
+    {
+        return $this->metadata['name_status'] ?? null;
+    }
+
+    /**
+     * Get platform type from metadata.
+     */
+    public function getPlatformTypeAttribute()
+    {
+        return $this->metadata['platform_type'] ?? null;
+    }
+
+    /**
+     * Get throughput level from metadata.
+     */
+    public function getThroughputLevelAttribute()
+    {
+        return $this->metadata['throughput_level'] ?? null;
+    }
+
+    /**
+     * Get account review status from metadata.
+     */
+    public function getAccountReviewStatusAttribute()
+    {
+        return $this->metadata['account_review_status'] ?? null;
+    }
+
+    /**
+     * Get currency from metadata.
+     */
+    public function getCurrencyAttribute()
+    {
+        return $this->metadata['currency'] ?? null;
+    }
+
+    /**
+     * Get timezone ID from metadata.
+     */
+    public function getTimezoneIdAttribute()
+    {
+        return $this->metadata['timezone_id'] ?? null;
+    }
+
+    // ── Connector API key ────────────────────────────────────────────────
 
     public function rotateConnectorApiKey(): string
     {
@@ -82,13 +194,30 @@ class WhatsappAccount extends Model
         return $key;
     }
 
+    // ── Overall health ───────────────────────────────────────────────────
+
     public function isHealthy(): bool
     {
         if (!$this->is_active) {
             return false;
         }
 
+        if (!$this->isFullyOnboarded()) {
+            return false;
+        }
+
         if ($this->quality_rating === 'RED') {
+            return false;
+        }
+
+        // Check phone status from metadata
+        $phoneStatus = $this->getPhoneStatusAttribute();
+        if ($phoneStatus === 'RESTRICTED') {
+            return false;
+        }
+
+        // Check if can send messages
+        if (!$this->canSendMessages()) {
             return false;
         }
 
@@ -99,12 +228,7 @@ class WhatsappAccount extends Model
         return true;
     }
 
-    // ── Relations ────────────────────────────────────────────────────────────
-
-    public function connectorLogs(): HasMany
-    {
-        return $this->hasMany(ConnectorMessageLog::class);
-    }
+    // ── Relationships ────────────────────────────────────────────────────
 
     public function bots(): HasMany
     {

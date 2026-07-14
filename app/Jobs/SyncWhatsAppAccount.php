@@ -82,7 +82,6 @@ class SyncWhatsAppAccount implements ShouldQueue
                     'phone_number' => $this->account->phone_number,
                 ]);
 
-                // TODO: Notify tenant admins
             }
         } catch (\Exception $e) {
             Log::error('Failed to sync WhatsApp account', [

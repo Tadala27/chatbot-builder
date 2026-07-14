@@ -1,15 +1,9 @@
 /**
  * resources/ts/echo.ts
- *
- * Session/cookie-based auth (Laravel Sanctum SPA mode) — there is no bearer
- * token to read from localStorage. Echo authenticates the private/presence
- * channel handshake using the session cookie itself, the same way axios
- * requests are already authenticated.
- *
- * Public channels while debugging — swap channel() → private() later.
  */
 import Echo from "laravel-echo";
 import Pusher from "pusher-js";
+import axios from "axios";
 
 declare global {
   interface Window {
@@ -18,12 +12,13 @@ declare global {
   }
 }
 
+Pusher.logToConsole = true;
 window.Pusher = Pusher;
 
 export function initEcho(): void {
   if (window.Echo) return;
 
-  window.Echo = new Echo({
+  const echoInstance = new Echo({
     broadcaster: "reverb",
     key: import.meta.env.VITE_REVERB_APP_KEY,
     wsHost: import.meta.env.VITE_REVERB_HOST,
@@ -33,17 +28,49 @@ export function initEcho(): void {
     encrypted: false,
     disableStats: true,
     enabledTransports: ["ws", "wss"],
-
-    authEndpoint: "/api/broadcasting/auth",
-    auth: {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem("token")}`,
-        Accept: "application/json",
+    authorizer: (channel: { name: string }) => ({
+      authorize(
+        socketId: string,
+        callback: (error: Error | null, data?: any) => void,
+      ) {
+        axios
+          .post(
+            "/tenant/broadcasting/auth",
+            { socket_id: socketId, channel_name: channel.name },
+            { withCredentials: true },
+          )
+          .then((response) => callback(null, response.data))
+          .catch((error) =>
+            callback(error instanceof Error ? error : new Error(String(error))),
+          );
       },
-    },
+    }),
   });
 
-  console.info("[Echo] Initialised.");
+  window.Echo = echoInstance;
+
+  console.log("[Echo] Initialised.");
+
+  // Connection event listeners — useful for debugging Reverb connectivity
+  // during development; safe to trim once things are stable.
+  echoInstance.connector.pusher.connection.bind("connecting", () => {
+    console.log("Connecting to WebSocket...");
+  });
+  echoInstance.connector.pusher.connection.bind("connected", () => {
+    console.log("Successfully connected to WebSocket");
+  });
+  echoInstance.connector.pusher.connection.bind("disconnected", () => {
+    console.log("Disconnected from WebSocket");
+  });
+  echoInstance.connector.pusher.connection.bind("error", (error: unknown) => {
+    console.error("WebSocket connection error:", error);
+  });
+  echoInstance.connector.pusher.connection.bind(
+    "state_change",
+    (states: unknown) => {
+      console.log("Connection state changed:", states);
+    },
+  );
 }
 
 export function destroyEcho(): void {
@@ -51,6 +78,6 @@ export function destroyEcho(): void {
     window.Echo.disconnect();
     // @ts-ignore
     window.Echo = null;
-    console.info("[Echo] Disconnected.");
+    console.log("[Echo] Disconnected.");
   }
 }

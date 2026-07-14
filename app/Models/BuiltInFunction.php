@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class BuiltInFunction extends Model
 {
     use HasFactory;
+    use HasUuids;
+
+    protected $connection = 'landlord';
 
     protected $fillable = [
         'name', 'category', 'description', 'syntax',
@@ -16,8 +20,8 @@ class BuiltInFunction extends Model
 
     protected $casts = [
         'parameters' => 'array',
-        'examples'   => 'array',
-        'is_active'  => 'boolean',
+        'examples' => 'array',
+        'is_active' => 'boolean',
     ];
 
     public function scopeActive($query)

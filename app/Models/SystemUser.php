@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -14,6 +15,7 @@ class SystemUser extends Authenticatable
     use Notifiable;
     use HasRoles;
     use SoftDeletes;
+    use HasUuids;
 
     protected $connection = 'landlord';
     protected $table = 'users';

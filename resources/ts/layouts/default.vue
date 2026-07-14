@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from "vue";
 import { useTheme, useDisplay } from "vuetify";
 import LoaderWrapper from "./components/LoaderWrapper.vue";
-import ActionEditor from "./components/ActionEditor.vue";
+import ActionEditor from "./components/ActionTree.vue";
 // import Customizer from "./components/CustomizerPanel.vue";
 import IconSidebar from "./components/IconSidebar.vue";
 import VerticalHeaderVue from "./components/VerticalHeader.vue";

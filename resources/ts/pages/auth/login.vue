@@ -73,29 +73,34 @@ async function handleLogin() {
         <div class="tl-brand">
           <img src="/images/logos/NICO-White.png" width="150" alt="logo" />
         </div>
+
         <div class="tl-hero">
-          <h2 class="tl-hero-title">Payroll that<br />just works.</h2>
+          <h2 class="tl-hero-title">WhatsApp<br />Chatbot Builder.</h2>
           <p class="tl-hero-sub">
-            Multi-country. Statutory-accurate. Beautiful payslips.
+            Build intelligent conversations. Automate support. Grow your
+            business.
           </p>
         </div>
+
         <ul class="tl-features">
           <li>
-            <span class="tl-feat-icon">✓</span> PAYE auto-calculation per
-            country
+            <span class="tl-feat-icon">✓</span> No-code visual flow builder for
+            WhatsApp bots
           </li>
           <li>
-            <span class="tl-feat-icon">✓</span> Pension &amp; health levy
-            compliant
+            <span class="tl-feat-icon">✓</span> Automate customer support and
+            business workflows
           </li>
           <li>
-            <span class="tl-feat-icon">✓</span> One-click PDF payslips &amp;
-            bank export
+            <span class="tl-feat-icon">✓</span> Connect WhatsApp Cloud API and
+            manage conversations seamlessly
           </li>
           <li>
-            <span class="tl-feat-icon">✓</span> Full employee onboarding module
+            <span class="tl-feat-icon">✓</span> Multi-bot support with
+            templates, triggers, and analytics
           </li>
         </ul>
+
         <div class="tl-left-deco">
           <div class="tl-deco-ring tl-deco-ring--1"></div>
           <div class="tl-deco-ring tl-deco-ring--2"></div>
@@ -103,7 +108,6 @@ async function handleLogin() {
         </div>
       </div>
     </div>
-
     <div class="tl-right">
       <div class="tl-form-wrap">
         <div v-if="isTenantDomain" class="tl-tenant-chip">
@@ -124,21 +128,6 @@ async function handleLogin() {
         </div>
 
         <form @submit.prevent="handleLogin" class="tl-form">
-          <div v-if="!isTenantDomain" class="tl-field">
-            <label class="tl-label">Organisation Slug</label>
-            <div class="tl-input-wrap">
-              <i class="ri-building-line tl-icon-left"></i>
-              <input
-                v-model="form.tenant_slug"
-                type="text"
-                class="tl-input tl-input--left-icon"
-                placeholder="acme-corp"
-                autocomplete="organization"
-                required
-              />
-            </div>
-          </div>
-
           <div class="tl-field">
             <label class="tl-label">Email</label>
             <div class="tl-input-wrap">
@@ -219,7 +208,7 @@ async function handleLogin() {
   padding: 0;
 }
 .tl-left {
-  width: 42%;
+  width: 45%;
   flex-shrink: 0;
   background: linear-gradient(
     160deg,

@@ -5,124 +5,171 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Bot;
 use App\Models\BotDialog;
-use App\Models\BuiltInFunction;
-use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class BotDialogController extends Controller
 {
+    /**
+     * List config-level dialogs for a bot, shaped for the settings page's
+     * dialog pickers. Kept separate from BotConfigurationController::show()
+     * since this is a resource list, not part of the configuration record
+     * itself.
+     */
     public function index(Bot $bot): JsonResponse
     {
-        $this->authorizeBot($bot);
-
         $dialogs = BotDialog::where('bot_id', $bot->id)
-            ->orderByRaw("FIELD(purpose, '" . implode("','", array_keys(BotDialog::ALL_PURPOSES)) . "')")
-            ->get();
-
-        $system = collect([
-            ['id' => null, 'name' => 'phone_number', 'key' => 'phoneNumber', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'user_name', 'key' => 'userName',    'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'current_date', 'key' => 'currentDate', 'data_type' => 'date',   'is_sensitive' => false, 'is_system' => true],
-            ['id' => null, 'name' => 'current_time', 'key' => 'currentTime', 'data_type' => 'string', 'is_sensitive' => false, 'is_system' => true],
-        ]);
-        $builtIn = BuiltInFunction::where('is_active', true)
             ->orderBy('name')
             ->get()
-            ->map(function ($f) {
-                return [
-                    'id' => $f->id,
-                    'name' => $f->name,
-                    'slug' => $f->name,
-                    'description' => $f->description,
-                    'parameters' => $f->parameters,
-                    'return_type' => $f->return_type,
-                    'category' => $f->category,
-                    'syntax' => $f->syntax,
-                    'examples' => $f->examples,
-                    'function_type' => 'built_in',
-                    'is_system' => true,
-                ];
-            });
-        return response()->json([
-            'data'     => $dialogs,
-            'purposes' => BotDialog::ALL_PURPOSES,
-            'variables'   => $system,
-            'functions'  => $builtIn,
-        ]);
+            ->map(fn (BotDialog $dialog) => $this->toOption($dialog));
+
+        return response()->json(['dialogs' => $dialogs]);
     }
 
-    // ── POST /api/bots/{bot}/bot-dialogs ─────────────────────────────────────
     public function store(Request $request, Bot $bot): JsonResponse
     {
-        $this->authorizeBot($bot);
+        $validated = $this->validateDialog($request, $bot);
 
-        $validated = $request->validate([
-            'purpose'     => ['required', 'string', 'in:' . implode(',', array_keys(BotDialog::ALL_PURPOSES))],
-            'title'        => 'required|string|max:120',
-            'description' => 'nullable|string|max:500',
-            'kind'        => 'required|string|in:message,buttons,list,media,end',
-            'config'      => 'nullable|array',
-            'is_active'   => 'boolean',
-            'is_entry_point'   => 'boolean',
+        $dialog = BotDialog::create([
+            'id' => (string) Str::uuid(),
+            'bot_id' => $bot->id,
+            ...$validated,
         ]);
 
-        $dialog = BotDialog::updateOrCreate(
-            ['bot_id' => $bot->id, 'purpose' => $validated['purpose'], 'name' => $validated['title']],
-            array_merge($validated, ['tenant_id' => $bot->tenant_id])
-        );
-
-        return response()->json(['data' => $dialog], $dialog->wasRecentlyCreated ? 201 : 200);
+        return response()->json([
+            'message' => 'Dialog created.',
+            'dialog' => $this->toOption($dialog),
+        ], 201);
     }
 
-    // ── GET /api/bots/{bot}/bot-dialogs/{botDialog} ───────────────────────────
-    public function show(Bot $bot, BotDialog $botDialog): JsonResponse
+    public function update(Request $request, Bot $bot, BotDialog $dialog): JsonResponse
     {
-        $this->authorizeDialog($bot, $botDialog);
-        return response()->json(['data' => $botDialog]);
+        $this->authorizeDialogBelongsToBot($bot, $dialog);
+
+        $validated = $this->validateDialog($request, $bot, $dialog);
+        $dialog->update($validated);
+
+        return response()->json([
+            'message' => 'Dialog updated.',
+            'dialog' => $this->toOption($dialog),
+        ]);
     }
 
-    // ── PUT /api/bots/{bot}/bot-dialogs/{botDialog} ───────────────────────────
-    public function update(Request $request, Bot $bot, BotDialog $botDialog): JsonResponse
+    public function destroy(Bot $bot, BotDialog $dialog): JsonResponse
     {
-        $this->authorizeDialog($bot, $botDialog);
+        $this->authorizeDialogBelongsToBot($bot, $dialog);
 
+        if ($this->isReferencedByConfiguration($bot, $dialog)) {
+            return response()->json([
+                'message' => 'This dialog is currently selected in bot settings. Choose a different dialog there first, then delete this one.',
+            ], 422);
+        }
+
+        $dialog->delete();
+
+        return response()->json(['message' => 'Dialog deleted.']);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    private function validateDialog(Request $request, Bot $bot, ?BotDialog $dialog = null): array
+    {
         $validated = $request->validate([
-            'name'        => 'sometimes|required|string|max:120',
-            'description' => 'nullable|string|max:500',
-            'kind'        => 'sometimes|required|string|in:message,buttons,list,media,end',
-            'config'      => 'nullable|array',
-            'is_active'   => 'boolean',
-            'is_entry_point'   => 'boolean',
+            'purpose' => [
+                'required', 'string', 'max:100',
+                Rule::unique('bot_dialogs', 'purpose')
+                    ->where('bot_id', $bot->id)
+                    ->ignore($dialog?->id),
+            ],
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'kind' => ['required', Rule::in(BotDialog::KINDS)],
+            'is_entry_point' => 'boolean',
+            'is_active' => 'boolean',
+
+            'config' => 'required|array',
+            'config.text' => 'nullable|string|max:4096',
+
+            'config.buttons' => 'required_if:kind,buttons|array|max:3',
+            'config.buttons.*.id' => 'required_with:config.buttons|string',
+            'config.buttons.*.label' => 'required_with:config.buttons|string|max:20',
+            'config.buttons.*.kind' => [
+                'required_with:config.buttons',
+                Rule::in(BotDialog::SYSTEM_ACTIONS),
+            ],
+
+            'config.sections' => 'required_if:kind,list|array',
+            'config.sections.*.title' => 'nullable|string|max:24',
+            'config.sections.*.rows' => 'required_with:config.sections|array',
+            'config.sections.*.rows.*.id' => 'required_with:config.sections.*.rows|string',
+            'config.sections.*.rows.*.label' => 'required_with:config.sections.*.rows|string|max:24',
+            'config.sections.*.rows.*.kind' => [
+                'required_with:config.sections.*.rows',
+                Rule::in(BotDialog::SYSTEM_ACTIONS),
+            ],
         ]);
 
-        $botDialog->update($validated);
-
-        return response()->json(['data' => $botDialog->fresh()]);
-    }
-
-    // ── DELETE /api/bots/{bot}/bot-dialogs/{botDialog} ────────────────────────
-    public function destroy(Bot $bot, BotDialog $botDialog): JsonResponse
-    {
-        $this->authorizeDialog($bot, $botDialog);
-        $botDialog->delete();
-        return response()->json(null, 204);
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private function authorizeBot(Bot $bot): void
-    {
-        if ($bot->tenant_id !== Tenant::current()->id) {
-            abort(404, 'Bot not found.');
+        if ($validated['kind'] === BotDialog::KIND_BUTTONS) {
+            $ids = array_column($validated['config']['buttons'], 'id');
+            if (count($ids) !== count(array_unique($ids))) {
+                throw ValidationException::withMessages(['config.buttons' => ['Button IDs must be unique.']]);
+            }
         }
+
+        return $validated;
     }
 
-    private function authorizeDialog(Bot $bot, BotDialog $botDialog): void
+    private function toOption(BotDialog $dialog): array
     {
-        $this->authorizeBot($bot);
-        if ($botDialog->bot_id !== $bot->id) {
-            abort(404, 'Dialog not found.');
+        return [
+            'id' => $dialog->id,
+            'label' => $dialog->name,
+            'kind' => $dialog->kind,
+            'is_entry_point' => $dialog->is_entry_point,
+            'display' => $dialog->name.' ('.ucfirst($dialog->kind).')',
+            'config' => $dialog->config,
+            'purpose' => $dialog->purpose,
+        ];
+    }
+
+    private function authorizeDialogBelongsToBot(Bot $bot, BotDialog $dialog): void
+    {
+        abort_unless($dialog->bot_id === $bot->id, 404);
+    }
+
+    /**
+     * Guards against deleting a dialog that's actively selected somewhere in
+     * BotConfiguration — otherwise the FK would need to be nulled silently,
+     * which is more likely to surprise someone than a 422 asking them to
+     * pick a different dialog first.
+     */
+    private function isReferencedByConfiguration(Bot $bot, BotDialog $dialog): bool
+    {
+        $config = $bot->configuration;
+
+        if (!$config) {
+            return false;
         }
+
+        $referencingFields = [
+            'starting_dialog_id',
+            'welcome_dialog_id',
+            'invalid_input_dialog_id',
+            'invalid_attempts_dialog_id',
+            'retry_dialog_id',
+            'handover_dialog_id_in_hours',
+            'handover_dialog_id_off_hours',
+        ];
+
+        foreach ($referencingFields as $field) {
+            if ($config->{$field} === $dialog->id) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

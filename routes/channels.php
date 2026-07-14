@@ -2,59 +2,28 @@
 
 use App\Models\Conversation;
 use Illuminate\Support\Facades\Broadcast;
-use Illuminate\Support\Facades\Log;
 
 /*
 |--------------------------------------------------------------------------
 | Broadcast Channels
 |--------------------------------------------------------------------------
+|
+| Per-tenant-database architecture: a tenant user is only ever
+| authenticated within ONE tenant's database connection. There is no
+| tenant_id column on Conversation and no cross-tenant relation to check —
+| Conversation::find() can only ever resolve a row belonging to the same
+| tenant the authenticated user belongs to, because no other tenant's data
+| is reachable from this connection at all. Existence IS the authorization.
 */
 
-Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
-    return (int) $user->id === (int) $id;
+Broadcast::channel('conversation.{conversationId}', function ($user, string $conversationId): bool {
+    return Conversation::where('id', $conversationId)->exists();
 });
 
-/**
- * Conversation channel  →  private-conversation.{conversationId}
+/*
+ * Fixed channel name, no {tenantId} parameter — only one tenant's inbox
+ * is ever reachable from a given connection, nothing to disambiguate.
  */
-Broadcast::channel('conversation.{conversationId}', function ($user, int $conversationId): bool {
-    $conversation = Conversation::find($conversationId);
-
-    if (!$conversation) {
-        Log::warning('[Channel Auth] Conversation not found', [
-            'conversation_id' => $conversationId,
-            'user_id'         => $user->id,
-        ]);
-        return false;
-    }
-
-    $userTenantIds = $user->tenants()->pluck('tenants.id')->toArray();
-    $allowed       = in_array($conversation->tenant_id, $userTenantIds);
-
-    Log::info('[Channel Auth] conversation channel', [
-        'conversation_id'     => $conversationId,
-        'conversation_tenant' => $conversation->tenant_id,
-        'user_id'             => $user->id,
-        'user_tenant_ids'     => $userTenantIds,
-        'allowed'             => $allowed,
-    ]);
-
-    return $allowed;
-});
-
-/**
- * Tenant inbox channel  →  private-tenant.{tenantId}.inbox
- */
-Broadcast::channel('tenant.{tenantId}.inbox', function ($user, int $tenantId): bool {
-    $userTenantIds = $user->tenants()->pluck('tenants.id')->toArray();
-    $allowed       = in_array($tenantId, $userTenantIds);
-
-    Log::info('[Channel Auth] inbox channel', [
-        'requested_tenant_id' => $tenantId,
-        'user_id'             => $user->id,
-        'user_tenant_ids'     => $userTenantIds,
-        'allowed'             => $allowed,
-    ]);
-
-    return $allowed;
+Broadcast::channel('tenant.inbox', function ($user): bool {
+    return (bool) $user;
 });

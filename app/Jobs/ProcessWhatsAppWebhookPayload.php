@@ -1,12 +1,12 @@
 <?php
 
-// app/Jobs/ProcessWhatsAppWebhookPayload.php
-
 namespace App\Jobs;
 
 use App\Models\Tenant;
+use App\Models\WhatsappAccount;
 use App\Models\WhatsappPhoneIndex;
 use App\Services\Bot\WhatsAppWebhookService;
+use GuzzleHttp\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -29,8 +29,9 @@ class ProcessWhatsAppWebhookPayload implements ShouldQueue
     {
     }
 
-    public function handle(WhatsAppWebhookService $service): void
+    public function handle(WhatsAppWebhookService $managedBotService): void
     {
+        Log::debug('Here we are proccessing the message');
         $phoneNumberId = $this->extractPhoneNumberId($this->payload);
 
         if (!$phoneNumberId) {
@@ -41,7 +42,6 @@ class ProcessWhatsAppWebhookPayload implements ShouldQueue
             return;
         }
 
-        // ── Resolve tenant from the central index (landlord connection) ───
         $indexEntry = WhatsappPhoneIndex::where('phone_number_id', $phoneNumberId)
             ->where('is_active', true)
             ->first();
@@ -60,11 +60,34 @@ class ProcessWhatsAppWebhookPayload implements ShouldQueue
             return;
         }
 
-        // ── Switch into the tenant database ────────────────────────────────
         tenancy()->initialize($tenant);
 
         try {
-            $service->handleWebhook($this->payload);
+            $account = WhatsappAccount::where('phone_number_id', $phoneNumberId)->first();
+
+            if (!$account) {
+                Log::warning("WhatsApp webhook: phone_number_id [{$phoneNumberId}] indexed but no matching ".
+                    "WhatsappAccount found in tenant [{$tenant->id}].");
+
+                return;
+            }
+
+            if (!$account->is_active) {
+                Log::info('WhatsApp webhook: message received for inactive account', ['account_id' => $account->id]);
+
+                return;
+            }
+
+            // ── THE branch point ────────────────────────────────────────────
+            if ($account->isConnectorMode()) {
+                Log::debug('Using the connector mode');
+
+                $this->forwardToConnector($account);
+            } else {
+                Log::debug('Using the managed bot mode');
+
+                $managedBotService->handleWebhook($this->payload);
+            }
         } catch (\Throwable $e) {
             Log::error('Webhook processing failed', [
                 'tenant_id' => $tenant->id,
@@ -74,6 +97,27 @@ class ProcessWhatsAppWebhookPayload implements ShouldQueue
             throw $e; // let Laravel's retry/backoff handle transient failures
         } finally {
             tenancy()->end();
+        }
+    }
+
+    private function forwardToConnector(WhatsappAccount $account): void
+    {
+        if (!$account->webhook_url) {
+            Log::warning("Connector account [{$account->id}] received a message but has no webhook_url configured.");
+
+            return;
+        }
+
+        try {
+            $client = new Client(['timeout' => 5, 'connect_timeout' => 3]);
+            $client->post($account->webhook_url, ['json' => $this->payload]);
+
+            Log::info('Connector webhook forwarded', ['url' => $account->webhook_url]);
+        } catch (\Throwable $e) {
+            Log::warning('Connector webhook forward failed', [
+                'url' => $account->webhook_url,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

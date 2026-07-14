@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,16 +10,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class AnalyticsEvent extends Model
 {
     use HasFactory;
+    use HasUuids;
 
     public $timestamps = false;
 
     protected $fillable = [
-        'tenant_id', 'flow_id', 'conversation_id',
+        'tenant_id', 'bot_id', 'conversation_id',
         'event_type', 'metadata',
     ];
 
     protected $casts = [
-        'metadata'   => 'array',
+        'metadata' => 'array',
         'created_at' => 'datetime',
     ];
 
@@ -27,9 +29,9 @@ class AnalyticsEvent extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    public function flow(): BelongsTo
+    public function bot(): BelongsTo
     {
-        return $this->belongsTo(Flow::class);
+        return $this->belongsTo(Bot::class);
     }
 
     public function conversation(): BelongsTo

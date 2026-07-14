@@ -23,7 +23,7 @@ class PlatformSettingsController extends Controller
     {
         $validated = $request->validate([
             // Defaults applied to new tenants
-            'default_max_flows' => ['sometimes', 'integer', 'min:1'],
+            'default_max_bots' => ['sometimes', 'integer', 'min:1'],
             'default_max_conversations_per_month' => ['sometimes', 'integer', 'min:0'],
             'default_subscription_tier' => ['sometimes', 'string', Rule::in(['free', 'starter', 'professional', 'enterprise'])],
 
@@ -61,7 +61,7 @@ class PlatformSettingsController extends Controller
     private function defaults(): array
     {
         return [
-            'default_max_flows' => 3,
+            'default_max_bots' => 3,
             'default_max_conversations_per_month' => 1000,
             'default_subscription_tier' => 'free',
             'features' => [
