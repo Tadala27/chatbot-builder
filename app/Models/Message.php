@@ -14,9 +14,9 @@ class Message extends Model
     use HasUuids;
 
     protected $fillable = [
-        'conversation_id', 'whatsapp_message_id', 'direction',
-        'message_type', 'content', 'status', 'error_message',
-        'sent_at', 'delivered_at', 'read_at',
+        'conversation_id', 'whatsapp_message_id', 'direction','reply_to_wamid',
+        'message_type', 'content', 'status', 'error_message','metadata',
+        'sent_at', 'delivered_at', 'read_at', 'processed_at',
     ];
 
     protected $casts = [
@@ -67,10 +67,8 @@ class Message extends Model
 
     public function getMediaUrlAttribute(): ?string
     {
-        // Outbound media already has a real, non-expiring URL stored directly
-        // — no proxy needed, just use it.
-        if ($this->direction === 'outbound' && !empty($this->content['link'] ?? null)) {
-            return $this->content['link'];
+        if ($this->direction === 'outbound') {
+            return $this->content['url'] ?? $this->content['link'] ?? null;
         }
 
         $hasMediaId = !empty($this->content['id'] ?? null);
@@ -89,7 +87,7 @@ class Message extends Model
                 // Fallback: generate URL manually
                 $baseUrl = rtrim(config('app.url'), '/');
 
-                return $baseUrl.'/tenant/api/messages/'.$this->id.'/media';
+                return $baseUrl.'/tenant/messages/'.$this->id.'/media';
             }
         }
 

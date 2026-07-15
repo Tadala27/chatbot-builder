@@ -1,27 +1,7 @@
 /**
  * resources/ts/chat/useChat.ts
- *
- * One composable for the whole inbox screen:
- *  - conversation list (sidebar), kept live via the `tenant.inbox` channel
- *  - the active thread's messages, kept live via `conversation.{id}`
- *  - typing indicator (agent + contact)
- *  - optimistic send with reply-to-quote support
- *  - the interactive list/button dialog's open/close state
- *
- * Backed by:
- *   GET  /tenant/conversations              (sidebar list)
- *   GET  /tenant/conversations/{id}/messages (thread history)
- *   POST /tenant/conversations/{id}/messages (send — endpoint name
- *        is my best guess from the existing route style; point this at
- *        your real outbound-send route if it differs)
- *
- * Broadcasts consumed (from App\Events\*):
- *   message.received   → conversation.{id} AND tenant.inbox
- *   message.status     → conversation.{id}
- *   agent.typing        → conversation.{id}
- *   contact.typing       → conversation.{id}
  */
-import { computed, onUnmounted, ref, watch, type Ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import axios from "axios";
 import type { Channel } from "laravel-echo";
 import {
@@ -40,6 +20,8 @@ import {
 export interface TypingState {
   isTyping: boolean;
   label: string | null;
+  /** Who is typing — drives which side of the thread the typing bubble appears on. */
+  who: "agent" | "contact" | null;
 }
 
 export interface InteractiveDialogState {
@@ -52,6 +34,7 @@ export interface InteractiveDialogState {
 }
 
 const TYPING_TIMEOUT_MS = 8000;
+const TYPING_DEBOUNCE_MS = 3000;
 
 export function useChat() {
   /* ---------------------------------------------------------------- */
@@ -80,7 +63,6 @@ export function useChat() {
     if (target) target.unread_count = 0;
   }
 
-  /** Bumps/creates a sidebar row from a live `message.received` broadcast on the inbox channel. */
   function applyInboxActivity(summary: ConversationSummary): void {
     const idx = conversations.value.findIndex((c) => c.id === summary.id);
     if (idx === -1) {
@@ -91,8 +73,6 @@ export function useChat() {
     const merged: ConversationSummary = {
       ...conversations.value[idx],
       ...summary,
-      // Don't let the broadcast's unread_count override "0" while the
-      // agent is actively looking at this thread.
       unread_count: isActiveThread ? 0 : summary.unread_count,
     };
     conversations.value.splice(idx, 1);
@@ -137,6 +117,18 @@ export function useChat() {
 
   function appendIncoming(message: ChatMessage): void {
     if (message.conversation_id !== activeId.value) return;
+
+    // Clear the relevant typing indicator the instant the real message lands,
+    // rather than waiting on the 8s timeout.
+    if (message.direction === "inbound" && contactTyping) {
+      contactTyping = { ...contactTyping, is_typing: false };
+      refreshTypingState();
+    }
+    if (message.direction === "outbound" && agentTyping) {
+      agentTyping = { ...agentTyping, is_typing: false };
+      refreshTypingState();
+    }
+
     const existing = messages.value.findIndex((m) => m.id === message.id);
     if (existing !== -1) {
       messages.value[existing] = message;
@@ -164,8 +156,10 @@ export function useChat() {
     const conversationId = activeId.value;
     const replyToWamid = replyTarget.value?.whatsapp_message_id ?? null;
 
+    stopTyping();
+
     const optimistic: ChatMessage = {
-      id: -Date.now(), // negative temp id, replaced once the real broadcast/response arrives
+      id: String(-Date.now()),
       conversation_id: conversationId,
       whatsapp_message_id: null,
       reply_to_wamid: replyToWamid,
@@ -213,10 +207,45 @@ export function useChat() {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Agent typing → contact (debounced, auto-stops)                    */
+  /* ---------------------------------------------------------------- */
+
+  let typingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let agentIsTypingSent = false;
+
+  function notifyTyping(): void {
+    if (!activeId.value) return;
+    if (!agentIsTypingSent) {
+      agentIsTypingSent = true;
+      axios
+        .post(`/tenant/inbox/conversations/${activeId.value}/typing`, {
+          typing: true,
+        })
+        .catch(() => {
+          agentIsTypingSent = false;
+        });
+    }
+    if (typingDebounceTimer) clearTimeout(typingDebounceTimer);
+    typingDebounceTimer = setTimeout(stopTyping, TYPING_DEBOUNCE_MS);
+  }
+
+  function stopTyping(): void {
+    if (typingDebounceTimer) clearTimeout(typingDebounceTimer);
+    typingDebounceTimer = null;
+    if (agentIsTypingSent && activeId.value) {
+      const id = activeId.value;
+      agentIsTypingSent = false;
+      axios
+        .post(`/tenant/inbox/conversations/${id}/typing`, { typing: false })
+        .catch(() => {});
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Echo: conversation.{id} + tenant.inbox                            */
   /* ---------------------------------------------------------------- */
 
-  const typing = ref<TypingState>({ isTyping: false, label: null });
+  const typing = ref<TypingState>({ isTyping: false, label: null, who: null });
 
   let conversationChannel: Channel | null = null;
   let inboxChannel: Channel | null = null;
@@ -225,14 +254,17 @@ export function useChat() {
   let typingResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   function refreshTypingState(): void {
-    typing.value = {
-      isTyping: Boolean(agentTyping?.is_typing || contactTyping?.is_typing),
-      label: agentTyping?.is_typing
-        ? `${agentTyping.agent_name} is typing…`
-        : contactTyping?.is_typing
-          ? "Typing…"
-          : null,
-    };
+    if (contactTyping?.is_typing) {
+      typing.value = { isTyping: true, label: "Typing…", who: "contact" };
+    } else if (agentTyping?.is_typing) {
+      typing.value = {
+        isTyping: true,
+        label: `${agentTyping.agent_name} is typing…`,
+        who: "agent",
+      };
+    } else {
+      typing.value = { isTyping: false, label: null, who: null };
+    }
   }
 
   function resetTypingAfterTimeout(): void {
@@ -256,18 +288,18 @@ export function useChat() {
   function joinConversationChannel(id: string): void {
     if (!window.Echo) return;
     conversationChannel = window.Echo.private(`conversation.${id}`)
-      .listen("message.received", (payload: MessageReceivedPayload) =>
+      .listen(".message.received", (payload: MessageReceivedPayload) =>
         appendIncoming(payload.message),
       )
-      .listen("message.status", (payload: MessageStatusPayload) =>
+      .listen(".message.status", (payload: MessageStatusPayload) =>
         applyStatus(payload),
       )
-      .listen("agent.typing", (payload: AgentTypingPayload) => {
+      .listen(".agent.typing", (payload: AgentTypingPayload) => {
         agentTyping = payload;
         refreshTypingState();
         resetTypingAfterTimeout();
       })
-      .listen("contact.typing", (payload: ContactTypingPayload) => {
+      .listen(".contact.typing", (payload: ContactTypingPayload) => {
         contactTyping = payload;
         refreshTypingState();
         resetTypingAfterTimeout();
@@ -277,7 +309,7 @@ export function useChat() {
   function joinInboxChannel(): void {
     if (!window.Echo || inboxChannel) return;
     inboxChannel = window.Echo.private("tenant.inbox").listen(
-      "message.received",
+      ".message.received",
       (payload: MessageReceivedPayload) =>
         applyInboxActivity(payload.conversation),
     );
@@ -291,6 +323,7 @@ export function useChat() {
 
   watch(activeId, (id, previousId) => {
     if (previousId) leaveConversationChannel(previousId);
+    stopTyping();
     messages.value = [];
     replyTarget.value = null;
     if (id) {
@@ -300,7 +333,7 @@ export function useChat() {
   });
 
   /* ---------------------------------------------------------------- */
-  /* Interactive (list/button) dialog — view-only, never sends         */
+  /* Interactive (list/button) dialog                                  */
   /* ---------------------------------------------------------------- */
 
   const dialog = ref<InteractiveDialogState>({
@@ -341,6 +374,7 @@ export function useChat() {
   }
 
   onUnmounted(() => {
+    stopTyping();
     if (activeId.value) leaveConversationChannel(activeId.value);
     leaveInboxChannel();
     if (typingResetTimer) clearTimeout(typingResetTimer);
@@ -358,6 +392,8 @@ export function useChat() {
     setReplyTarget,
     sendText,
     typing,
+    notifyTyping,
+    stopTyping,
     dialog,
     openInteractive,
     closeInteractive,

@@ -83,6 +83,7 @@
     "exceljs": "^4.4.0",
     "fullcalendar": "^6.1.9",
     "lodash": "^4.17.21",
+    "lucide-vue-next": "^1.0.0",
     "maska": "3.0.4",
     "moment": "^2.30.1",
     "ofetch": "1.4.1",

@@ -4,7 +4,7 @@ import type {
   Btn,
   Row,
   SavedResponse,
-} from "@/components/flowbuilder/types";
+} from "@/components/bots/types";
 
 interface ActionEditorState {
   show: boolean;

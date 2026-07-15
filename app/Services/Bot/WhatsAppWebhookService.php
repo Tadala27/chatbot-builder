@@ -71,6 +71,7 @@ class WhatsAppWebhookService
 
         if (!isset($payload['entry'])) {
             Log::warning('[Webhook] Payload missing entry field');
+
             return;
         }
 
@@ -105,11 +106,13 @@ class WhatsAppWebhookService
             $contact = $data['contacts'][0] ?? null;
             $replyToWamid = $message['context']['id'] ?? null;
 
+
             if (!$metadata || !$message) {
                 Log::warning('[Webhook] Missing metadata or message', [
                     'has_metadata' => $metadata !== null,
                     'has_message' => $message !== null,
                 ]);
+
                 return;
             }
 
@@ -120,6 +123,7 @@ class WhatsAppWebhookService
                 Log::warning('[Webhook] Account not found', [
                     'phone_number_id' => $metadata['phone_number_id'],
                 ]);
+
                 return;
             }
 
@@ -127,6 +131,7 @@ class WhatsAppWebhookService
                 Log::info('[Webhook] Message received for inactive account', [
                     'account_id' => $account->id,
                 ]);
+
                 return;
             }
 
@@ -144,6 +149,7 @@ class WhatsAppWebhookService
                 Log::info('[Webhook] Duplicate — message already stored', [
                     'whatsapp_message_id' => $message['id'],
                 ]);
+
                 return;
             }
 
@@ -160,6 +166,7 @@ class WhatsAppWebhookService
                 Log::warning('[Webhook] No active bot with published version', [
                     'account_id' => $account->id,
                 ]);
+
                 return;
             }
 
@@ -192,13 +199,13 @@ class WhatsAppWebhookService
                         ]);
                     } else {
                         // ── Existing conversation ──────────────────────────────
-                        
+
                         // Check if the conversation is on an outdated version
                         // and upgrade if needed
                         $wasUpgraded = false;
                         if ($conversation->bot_version_id !== $publishedVersion->id) {
                             $wasUpgraded = $conversation->upgradeToLatestVersion();
-                            
+
                             // If upgraded, refresh to get the new version ID
                             if ($wasUpgraded) {
                                 $conversation->refresh();
@@ -253,6 +260,7 @@ class WhatsAppWebhookService
                 Log::info('[Webhook] Message stored by concurrent worker — skipping', [
                     'whatsapp_message_id' => $message['id'],
                 ]);
+
                 return;
             }
 
@@ -460,6 +468,7 @@ class WhatsAppWebhookService
 
             if (empty($mediaData['url'])) {
                 Log::error('[Webhook] Media lookup returned no URL', ['media_id' => $mediaId]);
+
                 return null;
             }
 
@@ -475,6 +484,7 @@ class WhatsAppWebhookService
                 'media_id' => $mediaId,
                 'error' => $e->getMessage(),
             ]);
+
             return null;
         }
     }

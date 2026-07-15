@@ -34,6 +34,7 @@ const selected = computed(
     <div class="d-flex gap-2 align-center">
       <select
         :value="modelValue"
+        clearable
         class="field__input"
         @change="
           emit(
@@ -42,7 +43,7 @@ const selected = computed(
           )
         "
       >
-        <option :value="null">No dialog selected</option>
+        <option value="">No dialog selected</option>
         <option v-for="d in dialogs" :key="d.id" :value="d.id">
           {{ d.display }}
         </option>

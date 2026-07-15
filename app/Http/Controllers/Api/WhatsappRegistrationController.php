@@ -9,17 +9,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Backs the 4-step phone registration form for the tech-provider model.
- *
- * Endpoints:
- *   POST   /tenant/api/whatsapp/register/add-number    → addNumber()
- *   POST   /tenant/api/whatsapp/register/request-code  → requestCode()
- *   POST   /tenant/api/whatsapp/register/verify-code   → verifyCode()
- *   POST   /tenant/api/whatsapp/register/complete       → completeRegistration()
- *   GET    /tenant/api/whatsapp/accounts/{id}/health    → health()
- *   POST   /tenant/api/whatsapp/accounts/{id}/sync      → sync()
- */
 class WhatsappRegistrationController extends Controller
 {
     public function __construct(

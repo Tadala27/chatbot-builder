@@ -46,7 +46,6 @@ class TenantController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'id' => ['required', 'string', 'max:100', 'unique:tenants,id', 'alpha_dash'],
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:100', 'unique:tenants,slug', 'alpha_dash'],
             'subscription_tier' => ['required', Rule::in(['free', 'starter', 'professional', 'enterprise'])],
@@ -62,9 +61,10 @@ class TenantController extends Controller
 
         // Observer is enabled — it will call provision() automatically
         $tenant = Tenant::create([
-            'id' => $validated['id'],
             'slug' => $validated['slug'],
             'name' => $validated['name'],
+            'db_schema' => 'tenant_'.$validated['slug'],
+            'deployment_mode' => 'shared',
             'subscription_tier' => $validated['subscription_tier'],
             'subscription_expires_at' => $validated['subscription_expires_at'] ?? null,
             'max_bots' => $validated['max_bots'] ?? 3,
@@ -76,7 +76,6 @@ class TenantController extends Controller
         $tenant->domains()->create([
             'domain' => $validated['domain'],
             'is_primary' => true,
-            'type' => $validated['domain_type'] ?? 'subdomain',
         ]);
 
         return response()->json([

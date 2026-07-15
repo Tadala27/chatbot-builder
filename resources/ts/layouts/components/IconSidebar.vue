@@ -80,6 +80,11 @@ function navigate(item: FlatItem): void {
     window.open(item.href, "_blank");
   }
 }
+
+function logout(): void {
+  userStore.logout();
+  router.push("/login");
+}
 </script>
 
 <template>
@@ -132,8 +137,21 @@ function navigate(item: FlatItem): void {
       </template>
     </ul>
 
-    <!-- Bottom: user avatar shortcut -->
+    <!-- Bottom: logout + user avatar shortcut -->
     <div class="icon-sidebar__footer">
+      <VTooltip location="right" text="Log out" :open-delay="120">
+        <template #activator="{ props: tip }">
+          <button
+            v-bind="tip"
+            class="icon-sidebar__btn me-4"
+            aria-label="Log out"
+            @click="logout"
+          >
+            <VIcon icon="$logout" size="20" />
+          </button>
+        </template>
+      </VTooltip>
+
       <VTooltip
         location="right"
         :text="userStore.displayName || 'Profile'"
@@ -290,11 +308,12 @@ function navigate(item: FlatItem): void {
   width: 100%;
   padding: 10px 0 14px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
   border-top: 1px solid var(--sidebar-border);
   flex-shrink: 0;
 }
-
 .icon-sidebar__avatar {
   width: 32px;
   height: 32px;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import MessageMeta from "./MessageMeta.vue";
 import {
   interactiveCopy,
   interactiveKind,
@@ -18,9 +19,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** Agent clicked "reply" on this bubble — composer should quote it. */
   reply: [message: ChatMessage];
-  /** Agent clicked an interactive (list/button) bubble — open the read-only dialog. */
   "open-interactive": [message: ChatMessage];
 }>();
 
@@ -34,10 +33,6 @@ const isInteractiveOutbound = computed(() => {
   );
 });
 
-// "list" → rich card (header/body/footer + divider + single centered row
-// that opens the picker). "button" → copy block + each real button as its
-// own full-width row. null → not an outbound interactive message at all
-// (e.g. the inbound "user tapped X" shape).
 const interactiveKindValue = computed(() =>
   interactiveKind(props.message.content, props.message.message_type),
 );
@@ -50,9 +45,6 @@ const listCardButtonLabel = computed(() =>
   listButtonLabel(props.message.content, props.message.message_type),
 );
 
-// For button-type interactive messages: the header/body copy shown above
-// the buttons, and the flat list of buttons themselves (each rendered as
-// its own full-width row, exactly like WhatsApp's own button-message UI).
 const buttonCardCopy = computed(() =>
   interactiveCopy(props.message.content, props.message.message_type),
 );
@@ -76,26 +68,14 @@ const quotedPreview = computed(() => {
   };
 });
 
-const statusGlyph = computed(() => {
-  // Single check = sent/delivered, matches the reference. Read state
-  // could later swap this to a filled/colored variant if desired.
-  if (!isOutbound.value) return null;
-  return props.message.status === "failed" ? "!" : "check";
-});
-
-// ─────────────────────────────────────────────────────────────────────────
-// Media field extraction — matches the FLAT MediaContent shape from
-// chat.ts: { caption?, url?, mime_type?, sha256?, filename?, file_size? }.
-// There is no nested content.image / content.document / content.sticker —
-// every image/video/audio/document/sticker message uses this same shape.
-// ─────────────────────────────────────────────────────────────────────────
-
 const textContent = computed(() =>
   previewText(props.message.content, props.message.message_type),
 );
 
-function mediaUrl(content: unknown): string | null {
-  return (content as MediaContent)?.url ?? null;
+function mediaUrl(message: unknown): string | null {
+  const m = message as ChatMessage;
+  const c = m.content as MediaContent & { link?: string };
+  return c?.url ?? c?.link ?? m.media_url ?? null;
 }
 
 function mediaCaption(content: unknown): string | null {
@@ -109,8 +89,6 @@ function formatBytes(bytes?: number | null): string | null {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-// filename isn't guaranteed on MediaContent — fall back to the last path
-// segment of the URL when the backend didn't send one.
 function filenameFromUrl(url: string | null): string {
   if (!url) return "Document";
   try {
@@ -197,13 +175,6 @@ function getInitials(name: string | null | undefined): string {
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Emoji-only detection — a text message made up only of 1-3 emoji (no other
-// characters) renders jumbo-sized with no bubble background, matching
-// WhatsApp's own behavior. More than 3, or emoji mixed with other text,
-// falls back to a normal text bubble.
-// ─────────────────────────────────────────────────────────────────────────
-
 function isEmojiOnly(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -230,12 +201,6 @@ function handleReplyClick(event: MouseEvent) {
 function handleMapError(event: Event) {
   (event.target as HTMLImageElement).style.display = "none";
 }
-
-function formatTime(iso: string): string {
-  return new Date(iso)
-    .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    .toLowerCase();
-}
 </script>
 
 <template>
@@ -258,13 +223,18 @@ function formatTime(iso: string): string {
         :class="isOutbound ? 'bubble-row--out' : 'bubble-row--in'"
       >
         <div class="bubble-wrap">
-          <!-- Jumbo emoji — no bubble background at all -->
+          <!-- Jumbo emoji -->
           <div
             v-if="isEmojiOnlyMessage"
             class="bubble bubble--emoji"
             :class="isOutbound ? 'bubble--out-emoji' : 'bubble--in-emoji'"
           >
-            {{ textContent }}
+            <div>{{ textContent }}</div>
+            <MessageMeta
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
           </div>
 
           <!-- Plain text bubble -->
@@ -274,45 +244,36 @@ function formatTime(iso: string): string {
             :class="isOutbound ? 'bubble--out' : 'bubble--in'"
           >
             {{ textContent }}
-            <span
-              v-if="statusGlyph"
-              class="bubble__check"
-              :class="{ 'bubble__check--failed': statusGlyph === '!' }"
-            >
-              <svg
-                v-if="statusGlyph === 'check'"
-                width="11"
-                height="11"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <path
-                  d="M5 13l4 4L19 7"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              <span v-else>!</span>
-            </span>
+            <MessageMeta
+              class="meta-float"
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
+            <span class="meta-clear" />
           </div>
 
-          <!-- Sticker — transparent, no bubble, no caption/time overlay on
-               the image itself (time still shows in the meta row below). -->
+          <!-- Sticker -->
           <div
             v-else-if="message.message_type === 'sticker'"
             class="bubble bubble--sticker"
             @click="handleBubbleClick"
           >
             <img
-              :src="mediaUrl(message.content) ?? ''"
+              :src="mediaUrl(message) ?? ''"
               alt="Sticker"
               class="sticker__img"
             />
+            <MessageMeta
+              class="sticker__meta"
+              overlay
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
           </div>
 
-          <!-- Image (and video, sharing the same card shape) -->
+          <!-- Image / video -->
           <div
             v-else-if="
               message.message_type === 'image' ||
@@ -323,7 +284,7 @@ function formatTime(iso: string): string {
           >
             <div class="media__frame">
               <img
-                :src="mediaUrl(message.content) ?? ''"
+                :src="mediaUrl(message) ?? ''"
                 alt="Attachment"
                 class="media__img"
               />
@@ -337,53 +298,28 @@ function formatTime(iso: string): string {
                   <path d="M6 4.5v15l13-7.5-13-7.5z" fill="currentColor" />
                 </svg>
               </button>
-              <span
-                v-if="!mediaCaption(message.content) && statusGlyph"
+              <MessageMeta
+                v-if="!mediaCaption(message.content)"
                 class="media__time-overlay"
-              >
-                {{ formatTime(message.created_at) }}
-                <svg
-                  v-if="statusGlyph === 'check'"
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
+                overlay
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </div>
-            <div
-              v-if="mediaCaption(message.content)"
-              class="media__caption-row"
-            >
-              <span class="media__caption-text">{{
-                mediaCaption(message.content)
-              }}</span>
-              <span class="media__caption-time">
-                {{ formatTime(message.created_at) }}
-                <svg
-                  v-if="statusGlyph === 'check'"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
+            <div class="media__caption-row">
+              <span
+                v-if="mediaCaption(message.content)"
+                class="media__caption-text"
+                >{{ mediaCaption(message.content) }}</span
+              >
+              <span v-else />
+              <MessageMeta
+                v-if="mediaCaption(message.content)"
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </div>
           </div>
 
@@ -419,28 +355,16 @@ function formatTime(iso: string): string {
                 <p class="document__subtitle">{{ documentMeta.subtitle }}</p>
               </div>
             </div>
-            <div v-if="documentMeta.caption" class="media__caption-row">
-              <span class="media__caption-text">{{
+            <div class="media__caption-row">
+              <span v-if="documentMeta.caption" class="media__caption-text">{{
                 documentMeta.caption
               }}</span>
-              <span class="media__caption-time">
-                {{ formatTime(message.created_at) }}
-                <svg
-                  v-if="statusGlyph === 'check'"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
+              <span v-else />
+              <MessageMeta
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </div>
           </div>
 
@@ -472,24 +396,11 @@ function formatTime(iso: string): string {
               <span class="location__label">{{
                 locationMeta.name ?? locationMeta.address ?? "Location"
               }}</span>
-              <span class="media__caption-time">
-                {{ formatTime(message.created_at) }}
-                <svg
-                  v-if="statusGlyph === 'check'"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
+              <MessageMeta
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </div>
           </div>
 
@@ -500,19 +411,25 @@ function formatTime(iso: string): string {
             :class="isOutbound ? 'bubble--out' : 'bubble--in'"
             @click="handleBubbleClick"
           >
-            <span class="contact__avatar">{{ contactMeta.initials }}</span>
-            <div class="contact__meta">
-              <p class="contact__name">{{ contactMeta.name }}</p>
-              <p v-if="contactMeta.phone" class="contact__phone">
-                {{ contactMeta.phone }}
-              </p>
+            <div class="contact__top">
+              <span class="contact__avatar">{{ contactMeta.initials }}</span>
+              <div class="contact__meta">
+                <p class="contact__name">{{ contactMeta.name }}</p>
+                <p v-if="contactMeta.phone" class="contact__phone">
+                  {{ contactMeta.phone }}
+                </p>
+              </div>
+            </div>
+            <div class="contact__meta-row">
+              <MessageMeta
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </div>
           </div>
 
-          <!-- Interactive LIST message — rich card: header/body/footer text,
-               a divider, then the single centered row showing the list's
-               action.button label. Tapping opens the read-only options dialog;
-               this never shows the individual rows directly in the bubble. -->
+          <!-- Interactive LIST -->
           <button
             v-else-if="
               message.message_type === 'interactive' &&
@@ -557,13 +474,16 @@ function formatTime(iso: string): string {
                 listCardButtonLabel
               }}</span>
             </div>
+            <div class="list-card__meta-row">
+              <MessageMeta
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
+            </div>
           </button>
 
-          <!-- Interactive BUTTON message — copy block, then each actual
-               button rendered as its own full-width centered row with a
-               divider above it, matching WhatsApp's own button-message UI.
-               Clicking any row (or the bubble) only opens the read-only
-               options dialog — it never simulates tapping that button. -->
+          <!-- Interactive BUTTON -->
           <div
             v-else-if="
               message.message_type === 'interactive' &&
@@ -583,9 +503,12 @@ function formatTime(iso: string): string {
               <p v-if="buttonCardCopy.body" class="buttons-card__body">
                 {{ buttonCardCopy.body }}
               </p>
-              <span class="buttons-card__time">{{
-                formatTime(message.created_at)
-              }}</span>
+              <MessageMeta
+                class="buttons-card__time"
+                :time="message.created_at"
+                :is-outbound="isOutbound"
+                :status="message.status"
+              />
             </button>
 
             <button
@@ -608,6 +531,13 @@ function formatTime(iso: string): string {
             :class="isOutbound ? 'bubble--out' : 'bubble--in'"
           >
             {{ previewText(message.content, message.message_type) }}
+            <MessageMeta
+              class="meta-float"
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
+            <span class="meta-clear" />
           </div>
 
           <!-- Voice note bubble -->
@@ -624,41 +554,40 @@ function formatTime(iso: string): string {
             <span class="audio__duration">{{
               previewText(message.content, message.message_type)
             }}</span>
+            <MessageMeta
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
           </div>
 
-          <!-- Fallback for any other/unknown message type -->
+          <!-- Fallback -->
           <div
             v-else
             class="bubble bubble--text"
             :class="isOutbound ? 'bubble--out' : 'bubble--in'"
           >
             {{ previewText(message.content, message.message_type) }}
+            <MessageMeta
+              class="meta-float"
+              :time="message.created_at"
+              :is-outbound="isOutbound"
+              :status="message.status"
+            />
+            <span class="meta-clear" />
           </div>
         </div>
       </div>
 
-      <!-- Meta row: time pinned to the outer edge (right for outbound, left
-           for inbound), reply button always centered between the two edges. -->
+      <!-- Reply button row (time/ticks now always live inside the bubble) -->
       <div
         class="row__meta"
         :class="isOutbound ? 'row__meta--out' : 'row__meta--in'"
       >
-        <span class="row__meta-edge row__meta-edge--left">
-          <span v-if="!isOutbound" class="row__time">{{
-            formatTime(message.created_at)
-          }}</span>
-        </span>
-
         <button class="row__reply" type="button" @click="handleReplyClick">
           <VIcon size="small">$replyOutline</VIcon>
           Reply
         </button>
-
-        <span class="row__meta-edge row__meta-edge--right">
-          <span v-if="isOutbound" class="row__time">{{
-            formatTime(message.created_at)
-          }}</span>
-        </span>
       </div>
     </div>
   </div>
@@ -727,48 +656,36 @@ function formatTime(iso: string): string {
   text-overflow: ellipsis;
 }
 
-/* Text bubble */
+/* Text bubble — float trick: meta hugs the last line of short text,
+   wraps below on its own line for long text (WhatsApp's own behavior). */
 .bubble--text {
   position: relative;
-  padding: 5px 10px;
+  padding: 5px 10px 6px;
   border-radius: 12px;
   max-width: 400px;
   font-size: 14px;
   line-height: 1.45;
+  word-wrap: break-word;
+}
+.meta-float {
+  float: right;
+  margin: 4px 0 0 8px;
+}
+.meta-clear {
+  display: block;
+  clear: both;
 }
 
 .bubble--out {
   background: #ffffff;
   color: #2a2d30;
-  padding-right: 30px;
 }
-
 .bubble--in {
   background: #cdd1d8;
   border-bottom-left-radius: 6px;
 }
 
-.bubble__check {
-  position: absolute;
-  right: -6px;
-  bottom: -6px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #ffffff;
-  color: #18c97a;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-}
-.bubble__check--failed {
-  color: #e0524d;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-/* Jumbo emoji — no bubble at all */
+/* Jumbo emoji */
 .bubble--emoji {
   font-size: 44px;
   line-height: 1.15;
@@ -781,9 +698,14 @@ function formatTime(iso: string): string {
 .bubble--in-emoji {
   text-align: left;
 }
+.bubble--emoji .msg-meta {
+  font-size: 11px;
+  opacity: 0.7;
+}
 
-/* Sticker — transparent, image only */
+/* Sticker */
 .bubble--sticker {
+  position: relative;
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -793,6 +715,11 @@ function formatTime(iso: string): string {
   height: 130px;
   object-fit: contain;
   display: block;
+}
+.sticker__meta {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
 }
 
 /* Image / video / document / location — shared "media card" shell */
@@ -841,14 +768,6 @@ function formatTime(iso: string): string {
   position: absolute;
   right: 8px;
   bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  font-size: 11px;
 }
 .location__pin {
   position: absolute;
@@ -869,15 +788,6 @@ function formatTime(iso: string): string {
 .media__caption-text {
   font-size: 14px;
   line-height: 1.4;
-}
-.media__caption-time {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  opacity: 0.6;
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 .location__label {
   font-size: 14px;
@@ -931,9 +841,6 @@ function formatTime(iso: string): string {
 
 /* Contact card */
 .bubble--contact {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   width: 240px;
   max-width: 100%;
   padding: 12px;
@@ -942,6 +849,11 @@ function formatTime(iso: string): string {
 }
 .bubble--contact.bubble--in {
   border-bottom-left-radius: 6px;
+}
+.contact__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .contact__avatar {
   width: 40px;
@@ -972,11 +884,13 @@ function formatTime(iso: string): string {
   opacity: 0.6;
   margin: 2px 0 0;
 }
+.contact__meta-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
 
-/* Interactive BUTTON message — copy block on top, then each button as its
-   own full-width centered row with a divider above it, matching WhatsApp's
-   own button-message layout (no individual rounded corners on the rows;
-   only the outer bubble carries the radius). */
+/* Interactive BUTTON message */
 .bubble--buttons {
   display: flex;
   flex-direction: column;
@@ -1017,8 +931,6 @@ function formatTime(iso: string): string {
   position: absolute;
   right: 14px;
   bottom: 10px;
-  font-size: 11.5px;
-  opacity: 0.55;
 }
 
 .buttons-card__row {
@@ -1040,9 +952,7 @@ function formatTime(iso: string): string {
   border-top: 1px solid rgba(22, 25, 28, 0.1);
 }
 
-/* Interactive LIST message — rich card, modeled on WhatsApp's own list-message
-   layout: stacked header/body/footer copy, a divider, then a single centered
-   row showing the list's action-button label (NOT the individual rows). */
+/* Interactive LIST message */
 .bubble--list {
   display: flex;
   flex-direction: column;
@@ -1105,9 +1015,13 @@ function formatTime(iso: string): string {
   font-size: 14.5px;
   font-weight: 600;
 }
-
 .list-card__action-icon {
   flex-shrink: 0;
+}
+.list-card__meta-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 14px 10px;
 }
 
 /* Audio bubble */
@@ -1142,34 +1056,22 @@ function formatTime(iso: string): string {
 }
 .audio__duration {
   font-size: 13px;
+  flex: 1;
 }
 
 .row__meta {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
+  display: flex;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 4px;
   padding: 0 4px;
 }
-.row__meta-edge {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-.row__meta-edge--left {
-  justify-content: flex-start;
-}
-.row__meta-edge--right {
+.row__meta--out {
   justify-content: flex-end;
 }
-.row__time {
-  font-size: 12.5px;
-  color: #97a39d;
-  white-space: nowrap;
+.row__meta--in {
+  justify-content: flex-start;
 }
 .row__reply {
-  justify-self: center;
   display: flex;
   align-items: center;
   gap: 3px;

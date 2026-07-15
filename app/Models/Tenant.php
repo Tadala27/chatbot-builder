@@ -133,6 +133,17 @@ class Tenant extends BaseTenant implements TenantWithDatabase
             || $this->subscription_expires_at->isFuture();
     }
 
+    // Accessor — required so ->append(['isSubscriptionActive']) in
+    // TenantController::show() works. Laravel resolves an appended attribute
+    // name directly to a method called get{StudlyKey}Attribute — here that's
+    // getIsSubscriptionActiveAttribute() — not to the plain isSubscriptionActive()
+    // method above, which is why append() was throwing a BadMethodCallException
+    // and falling through to tenancy's ForwardsCalls magic method handling.
+    public function getIsSubscriptionActiveAttribute(): bool
+    {
+        return $this->isSubscriptionActive();
+    }
+
     public function canCreateBots(): bool
     {
         return $this->bots()->count() < $this->max_bots;

@@ -70,12 +70,14 @@ class ActionExecutorService
 
     private function executeHandoff(Conversation $conversation, Dialog $dialog, array $action): ?string
     {
+        $resumeAt = $action['resumeAt'] ?? null;
+
         $conversation->handOff(
             sourceDialogId: $dialog->id,
-            resumeAt: $action['resumeAt'] ?? null,
+            resumeAt: $resumeAt,
         );
 
-        return null;
+        return '__system:handoff__';
     }
 
     // ── Condition ─────────────────────────────────────────────────────────────

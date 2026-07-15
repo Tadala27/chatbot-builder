@@ -1,5 +1,5 @@
 <?php
-
+// routes/tenant.php
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiIntegrationController;
 use App\Http\Controllers\Api\AuthController;
@@ -143,15 +143,15 @@ Route::middleware(['auth:tenant'])->group(function () {
         Route::put('settings', [BotConfigurationController::class, 'upsert']);
 
         // Bot dialogs (fixed-purpose, version-independent)
-        Route::get('bot-dialogs', [BotDialogController::class, 'index'])
+        Route::get('dialogs', [BotDialogController::class, 'index'])
             ->middleware('permission:view bots');
-        Route::post('bot-dialogs', [BotDialogController::class, 'store'])
+        Route::post('dialogs', [BotDialogController::class, 'store'])
             ->middleware('permission:edit bots');
-        Route::get('bot-dialogs/{botDialog}', [BotDialogController::class, 'show'])
+        Route::get('dialogs/{dialog}', [BotDialogController::class, 'show'])
             ->middleware('permission:view bots');
-        Route::put('bot-dialogs/{botDialog}', [BotDialogController::class, 'update'])
+        Route::put('dialogs/{dialog}', [BotDialogController::class, 'update'])
             ->middleware('permission:edit bots');
-        Route::delete('bot-dialogs/{botDialog}', [BotDialogController::class, 'destroy'])
+        Route::delete('dialogs/{dialog}', [BotDialogController::class, 'destroy'])
             ->middleware('permission:edit bots');
 
         // Bot configuration (legacy alias — kept for backwards compat)
@@ -239,7 +239,10 @@ Route::middleware(['auth:tenant'])->group(function () {
     Route::get('media/{media}/serve/stream', [MediaController::class, 'serveStream'])
         ->middleware('permission:view bots')
         ->name('tenant.media.serve.stream');
-
+        
+Route::get('media/by-filename/{filename}', [MediaController::class, 'serveByFilename'])
+    ->middleware('permission:view bots')
+    ->name('tenant.media.serve-by-filename');
     // Upload a stored BotMediaFile to Meta's media API → returns a media_id.
     Route::post('media/{media}/meta-upload', [MediaController::class, 'uploadToMeta'])
         ->middleware('permission:edit bots')

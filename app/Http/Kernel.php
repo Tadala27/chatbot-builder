@@ -7,7 +7,10 @@ use Illuminate\Foundation\Http\Kernel as HttpKernel;
 class Kernel extends HttpKernel
 {
     // ── Global middleware — runs on every request ─────────────────────────────
+    // EnforceSessionDomain prepended here (was $middleware->prepend(...) in
+    // Laravel 11 bootstrap syntax — not valid inside this class).
     protected $middleware = [
+        Middleware\EnforceSessionDomain::class,
         Middleware\TrustProxies::class,
         \Illuminate\Http\Middleware\HandleCors::class,
         Middleware\PreventRequestsDuringMaintenance::class,
@@ -23,6 +26,7 @@ class Kernel extends HttpKernel
             \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
             \Illuminate\Session\Middleware\StartSession::class,
             \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+            Middleware\VerifyCsrfToken::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
 
@@ -39,7 +43,6 @@ class Kernel extends HttpKernel
         ],
 
         // ── Tenant API (/tenant/*) ────────────────────────────────────────────
-        //
         'tenant' => [
             Middleware\ForceJsonResponse::class,
             Middleware\EncryptCookies::class,

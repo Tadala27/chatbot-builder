@@ -19,41 +19,6 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * Handles everything related to bot media files:
- *
- *   TENANT STORAGE (all routes inside authenticated tenant middleware)
- *   ─────────────────────────────────────────────────────────────────
- *   POST   /tenant/api/bots/{bot}/media              → upload()
- *   GET    /tenant/api/bots/{bot}/media              → index()
- *   DELETE /tenant/api/media/{media}                 → destroy()
- *   GET    /tenant/api/media/{media}/serve           → serve()
- *   GET    /tenant/api/media/{media}/serve/stream    → serveStream()
- *
- *   WHATSAPP CLOUD API
- *   ─────────────────────────────────────────────────────────────────
- *   POST   /tenant/api/media/{media}/meta-upload     → uploadToMeta()
- *     Uploads a stored file to Meta's media API and returns a media_id.
- *     Called by the bot flow executor when processing a media dialog node
- *     before sending the message to WhatsApp.
- *
- *   GET    /tenant/api/messages/{message}/media      → stream()
- *     Proxies inbound media from Meta's CDN back to the agent UI.
- *
- *   GET    /tenant/api/messages/{message}/media/info → info()
- *     Returns Meta's metadata for an inbound media message.
- *
- * WHY serve() IS IN TENANT AUTH (not a public route):
- *   The file is served to the agent UI and to the Vue node editor — both
- *   authenticated requests inside the tenant context. The tenant database
- *   connection is already switched by middleware before this controller runs,
- *   so BotMediaFile queries hit the right DB with no extra resolver needed.
- *
- *   For sending media TO WhatsApp, the bot flow calls uploadToMeta() to get
- *   a media_id, then passes that id to WhatsAppMessageService — Meta fetches
- *   the file from their own CDN using that id, not from your serve() endpoint.
- *   So serve() never needs to be public.
- */
 class MediaController extends Controller
 {
     private const MAX_SIZES = [
@@ -176,6 +141,15 @@ class MediaController extends Controller
         return response()->json(['message' => 'Media deleted.']);
     }
 
+    public function serveByFilename(string $filename): StreamedResponse|Response
+    {
+        $media = BotMediaFile::where('stored_filename', $filename)
+            ->whereNull('deleted_at')
+            ->firstOrFail();
+
+        return $this->serve($media);
+    }
+
     /**
      * Serve a file to the authenticated agent UI / node editor.
      * Tenant DB connection is already correct — no resolver needed.
@@ -246,7 +220,7 @@ class MediaController extends Controller
      * The media_id is cached per file for 6 hours to avoid redundant uploads
      * on repeated sends of the same media node.
      *
-     * POST /tenant/api/media/{media}/meta-upload
+     * POST /tenant/media/{media}/meta-upload
      */
     public function uploadToMeta(Request $request, BotMediaFile $media): JsonResponse
     {
@@ -362,7 +336,7 @@ class MediaController extends Controller
 
     /**
      * Proxy inbound media from Meta's CDN to the agent UI.
-     * GET /tenant/api/messages/{message}/media.
+     * GET /tenant/messages/{message}/media.
      */
     public function stream(Request $request, Message $message): StreamedResponse|JsonResponse
     {
@@ -431,7 +405,7 @@ class MediaController extends Controller
 
     /**
      * Return Meta's metadata for an inbound media message without downloading.
-     * GET /tenant/api/messages/{message}/media/info.
+     * GET /tenant/messages/{message}/media/info.
      */
     public function info(Message $message): JsonResponse
     {
@@ -486,15 +460,11 @@ class MediaController extends Controller
 
     /**
      * Serve URL for the agent UI — internal authenticated route, not public.
-     * Format: /tenant/api/media/{id}/serve.
+     * Format: /tenant/media/{id}/serve.
      */
     private function serveUrl(string $storedFilename): string
     {
-        // We store the filename; the actual URL is built at query time in index()
-        // using the media record's id once it exists. For the upload response
-        // we return the route by stored_filename as a temporary reference —
-        // the node editor will use the id-based route after the record is saved.
-        return rtrim(config('app.url'), '/').'/tenant/api/media/by-filename/'.$storedFilename;
+        return rtrim(config('app.url'), '/').'/tenant/media/by-filename/'.$storedFilename;
     }
 
     private function metaCacheKey(string $mediaId, ?string $accountId = null): string

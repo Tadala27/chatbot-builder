@@ -228,57 +228,32 @@ class Conversation extends Model
         }
     }
 
-    /**
-     * Hand off the conversation to a human agent.
-     * Only transitions if not already handed off.
-     */
     public function handOff(?string $sourceDialogId = null, ?string $resumeAt = null, ?string $agentId = null): void
-    {
-        // Skip if already handed off
-        if ($this->isHandedOff()) {
-            Log::info('[Conversation] Already handed off, skipping transition', [
-                'conversation_id' => $this->id,
-            ]);
-
-            // Still update metadata if needed
-            $metadata = $this->metadata ?? [];
-            if (!isset($metadata['handoff_at'])) {
-                $this->update([
-                    'assigned_agent_id' => $agentId,
-                    'metadata' => array_merge($metadata, [
-                        'handoff_source_dialog' => $sourceDialogId,
-                        'handoff_resume_at' => $resumeAt,
-                        'handoff_at' => now()->toISOString(),
-                        'handoff_updated_at' => now()->toISOString(),
-                    ]),
-                ]);
-            }
-
-            return;
-        }
-
-        // Only transition if not already handed off
-        $this->state->transitionTo(\App\States\HandedOff::class);
-        $this->update([
-            'assigned_agent_id' => $agentId,
-            'metadata' => array_merge($this->metadata ?? [], [
-                'handoff_source_dialog' => $sourceDialogId,
-                'handoff_resume_at' => $resumeAt,
-                'handoff_at' => now()->toISOString(),
-            ]),
-        ]);
-
-        Log::info('[Conversation] Handed off', [
+{
+    if ($this->isHandedOff()) {
+        Log::info('[Conversation] Already handed off, skipping transition', [
             'conversation_id' => $this->id,
-            'source_dialog' => $sourceDialogId,
-            'agent_id' => $agentId,
         ]);
+        return;  // Don't update metadata on repeat calls — the first call wins
     }
 
-    /**
-     * Reactivate a conversation (agent returns to bot).
-     * Only transitions if not already active.
-     */
+    $this->state->transitionTo(\App\States\HandedOff::class);
+    $this->update([
+        'assigned_agent_id' => $agentId,
+        'metadata' => array_merge($this->metadata ?? [], [
+            'handoff_source_dialog' => $sourceDialogId,
+            'handoff_resume_at'     => $resumeAt,  // flow node to resume at when bot takes back
+            'handoff_at'            => now()->toISOString(),
+        ]),
+    ]);
+
+    Log::info('[Conversation] Handed off', [
+        'conversation_id' => $this->id,
+        'source_dialog'   => $sourceDialogId,
+        'resume_at'       => $resumeAt,
+        'agent_id'        => $agentId,
+    ]);
+}
     public function reactivate(): void
     {
         if ($this->isActive()) {

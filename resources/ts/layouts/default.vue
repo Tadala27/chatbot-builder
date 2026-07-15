@@ -16,12 +16,10 @@ const theme = useTheme();
 const customizer = useCustomizerStore();
 const { lgAndUp } = useDisplay();
 
-// Set the initial direction attribute when the component is mounted
 onMounted(() => {
   DirAttrSet(customizer.isRtl ? "rtl" : "ltr");
 });
 
-// Watch for changes in the isRtl property and update the direction attribute accordingly
 watch(
   () => customizer.isRtl,
   (newValue) => {
@@ -29,7 +27,6 @@ watch(
   },
 );
 
-// Define the computed property to calculate the dynamic style object
 const dynamicStyle = computed(() => ({
   "--v-theme-primary": HexToRgb(theme.current.value.colors.primary),
   "--v-theme-darkprimary": HexToRgb(theme.current.value.colors.darkprimary),
@@ -58,40 +55,23 @@ const mobileDrawer = ref(false);
         customizer.themeContrast ? 'contrast' : '',
       ]"
     >
-      <!-- Action editor drawer — same level as Customizer -->
       <ActionEditor />
       <!-- <Customizer /> -->
 
-      <!-- ── Vertical layout: icon sidebar + header ────────────────────── -->
       <template v-if="!customizer.isHorizontalLayout">
-        <!-- Desktop: permanent icon sidebar -->
-        <IconSidebar v-if="lgAndUp" />
-
-        <!-- Mobile: icon sidebar inside a temporary drawer -->
-        <VNavigationDrawer
-          v-if="!lgAndUp"
-          v-model="mobileDrawer"
-          temporary
-          width="56"
-        >
-          <IconSidebar
-            style="position: static; box-shadow: none; border-right: none"
-          />
-        </VNavigationDrawer>
+        <IconSidebar />
 
         <VerticalHeaderVue @s-toggle="mobileDrawer = !mobileDrawer" />
       </template>
 
-      <!-- ── Horizontal layout: unchanged ───────────────────────────────── -->
       <template v-else>
         <HorizontalHeader />
         <HorizontalSidebar />
       </template>
+
       <VMain
         class="page-wrapper"
-        :style="
-          !customizer.isHorizontalLayout && lgAndUp ? 'padding-left: 30px;' : ''
-        "
+        :style="!customizer.isHorizontalLayout ? 'padding-left: 30px;' : ''"
       >
         <VContainer fluid>
           <div :class="customizer.boxed ? 'maxWidth' : ''">

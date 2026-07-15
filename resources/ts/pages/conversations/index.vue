@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import MessageBubble from "./MessageBubble.vue";
 import InteractiveOptionsDialog from "./ListDialog.vue";
+import MessagePreview from "./MessagePreview.vue";
 import { useChat } from "@/chat/useChat";
 
 const {
@@ -15,6 +16,8 @@ const {
   setReplyTarget,
   sendText,
   typing,
+  notifyTyping,
+  stopTyping,
   dialog,
   openInteractive,
   closeInteractive,
@@ -30,10 +33,18 @@ async function sendDraft() {
   if (!text.trim()) return;
   draft.value = "";
   await sendText(text).catch(() => {
-    // sendText already marks the optimistic row as 'failed'; hook your
-    // toast/snackbar system in here if you want a visible error too.
+    // sendText already marks the optimistic row as 'failed'.
   });
 }
+
+function onComposerInput() {
+  if (draft.value.trim()) {
+    notifyTyping();
+  } else {
+    stopTyping();
+  }
+}
+
 function getInitials(name: string | null | undefined): string {
   if (!name) return "?";
   const parts = name.trim().split(/\s+/);
@@ -138,11 +149,16 @@ function getInitials(name: string | null | undefined): string {
                       conversation.id === activeId && typing.isTyping,
                   }"
                 >
-                  {{
-                    conversation.id === activeId && typing.isTyping
-                      ? typing.label
-                      : (conversation.last_message_preview ?? "")
-                  }}
+                  <template
+                    v-if="conversation.id === activeId && typing.isTyping"
+                  >
+                    {{ typing.label }}
+                  </template>
+                  <MessagePreview
+                    v-else
+                    :type="conversation.last_message_preview_type ?? 'text'"
+                    :text="conversation.last_message_preview ?? ''"
+                  />
                 </span>
                 <span v-if="conversation.unread_count" class="item__badge">{{
                   conversation.unread_count
@@ -261,6 +277,22 @@ function getInitials(name: string | null | undefined): string {
             @reply="setReplyTarget"
             @open-interactive="openInteractive"
           />
+
+          <!-- Live typing bubble: right side for the agent, left for the contact -->
+          <div
+            v-if="typing.isTyping"
+            class="row"
+            :class="typing.who === 'agent' ? 'row--out' : 'row--in'"
+          >
+            <div class="stack" :class="typing.who === 'agent' ? 'stack--out' : 'stack--in'">
+              <div
+                class="typing-bubble"
+                :class="typing.who === 'agent' ? 'typing-bubble--out' : 'typing-bubble--in'"
+              >
+                <span class="typing-dots"><span></span><span></span><span></span></span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-if="replyPreview" class="chat__reply-preview">
@@ -279,7 +311,9 @@ function getInitials(name: string | null | undefined): string {
             v-model="draft"
             type="text"
             placeholder="Write a Message"
+            @input="onComposerInput"
             @keyup.enter="sendDraft"
+            @blur="stopTyping"
           />
           <button
             class="chat__send"
@@ -307,7 +341,6 @@ function getInitials(name: string | null | undefined): string {
 </template>
 
 <style scoped>
-/* Design tokens scoped to this page, lifted from the reference screenshots. */
 .messages-page {
   --color-sidebar-bg: #fdfcfc;
   --color-chat-bg: #ececec;
@@ -403,7 +436,6 @@ function getInitials(name: string | null | undefined): string {
   gap: 0;
 }
 
-/* Conversation list item */
 .item {
   display: flex;
   align-items: center;
@@ -502,6 +534,10 @@ function getInitials(name: string | null | undefined): string {
 }
 
 .item__preview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   font-size: 13px;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -674,6 +710,71 @@ function getInitials(name: string | null | undefined): string {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+/* Live typing bubble */
+.row {
+  display: flex;
+  margin-bottom: 22px;
+}
+.row--out {
+  justify-content: flex-end;
+}
+.row--in {
+  justify-content: flex-start;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  max-width: 72%;
+}
+.stack--out {
+  align-items: flex-end;
+}
+.stack--in {
+  align-items: flex-start;
+}
+.typing-bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+.typing-bubble--in {
+  background: #cdd1d8;
+  border-bottom-left-radius: 6px;
+}
+.typing-bubble--out {
+  background: #ffffff;
+  border-bottom-right-radius: 6px;
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #97a39d;
+  display: inline-block;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 @media (max-width: 860px) {

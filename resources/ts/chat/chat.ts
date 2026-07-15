@@ -98,6 +98,7 @@ export interface TextContent {
 export interface MediaContent {
   caption?: string;
   url?: string;
+  link?: string;
   mime_type?: string;
   sha256?: string;
   filename?: string;
@@ -151,6 +152,7 @@ export interface ChatMessage {
   read_at: string | null;
   created_at: string;
   quoted_message?: QuotedMessage | null;
+  media_url? : string | null;
 }
 
 export interface ConversationSummary {

@@ -18,14 +18,30 @@ window.Pusher = Pusher;
 export function initEcho(): void {
   if (window.Echo) return;
 
+  // Determine the correct protocol based on the scheme
+  const scheme = import.meta.env.VITE_REVERB_SCHEME || 'http';
+  const host = import.meta.env.VITE_REVERB_HOST || '127.0.0.1';
+  const port = import.meta.env.VITE_REVERB_PORT || 8081;
+  
+  // Force TLS to false for http, true for https
+  const forceTLS = scheme === 'https';
+
+  console.log('[Echo] Connecting with config:', {
+    scheme,
+    host,
+    port,
+    forceTLS,
+    key: import.meta.env.VITE_REVERB_APP_KEY,
+  });
+
   const echoInstance = new Echo({
     broadcaster: "reverb",
     key: import.meta.env.VITE_REVERB_APP_KEY,
-    wsHost: import.meta.env.VITE_REVERB_HOST,
-    wsPort: import.meta.env.VITE_REVERB_PORT,
-    wssPort: import.meta.env.VITE_REVERB_PORT,
-    forceTLS: false,
-    encrypted: false,
+    wsHost: host,
+    wsPort: port,
+    wssPort: port,
+    forceTLS: forceTLS,
+    encrypted: forceTLS,
     disableStats: true,
     enabledTransports: ["ws", "wss"],
     authorizer: (channel: { name: string }) => ({
@@ -52,23 +68,22 @@ export function initEcho(): void {
   console.log("[Echo] Initialised.");
 
   // Connection event listeners — useful for debugging Reverb connectivity
-  // during development; safe to trim once things are stable.
   echoInstance.connector.pusher.connection.bind("connecting", () => {
-    console.log("Connecting to WebSocket...");
+    console.log("[Echo] Connecting to WebSocket...");
   });
   echoInstance.connector.pusher.connection.bind("connected", () => {
-    console.log("Successfully connected to WebSocket");
+    console.log("[Echo] Successfully connected to WebSocket");
   });
   echoInstance.connector.pusher.connection.bind("disconnected", () => {
-    console.log("Disconnected from WebSocket");
+    console.log("[Echo] Disconnected from WebSocket");
   });
   echoInstance.connector.pusher.connection.bind("error", (error: unknown) => {
-    console.error("WebSocket connection error:", error);
+    console.error("[Echo] WebSocket connection error:", error);
   });
   echoInstance.connector.pusher.connection.bind(
     "state_change",
     (states: unknown) => {
-      console.log("Connection state changed:", states);
+      console.log("[Echo] Connection state changed:", states);
     },
   );
 }

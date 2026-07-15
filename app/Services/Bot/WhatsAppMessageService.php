@@ -2,6 +2,7 @@
 
 namespace App\Services\Bot;
 
+use App\Events\MessageSent;
 use App\Models\BotMediaFile;
 use App\Models\Conversation;
 use App\Models\Message;
@@ -880,7 +881,7 @@ class WhatsAppMessageService
         $conversation->update(['last_message_at' => now()]);
 
         try {
-            broadcast(new \App\Events\MessageSent($message, $conversation->fresh()));
+            broadcast(new MessageSent($message, $conversation->fresh()));
         } catch (\Exception $e) {
             Log::warning('[WhatsApp] MessageSent broadcast failed', [
                 'message_id' => $message->id,

@@ -11,6 +11,14 @@ declare global {
   const DirAttrSet: typeof import('./resources/ts/utils/utils')['DirAttrSet']
   const EffectScope: typeof import('vue')['EffectScope']
   const HexToRgb: typeof import('./resources/ts/utils/utils')['HexToRgb']
+  const PURPOSE_FLOW_INVALID_INPUT: typeof import('./resources/ts/composables/botSettings')['PURPOSE_FLOW_INVALID_INPUT']
+  const PURPOSE_GREETING: typeof import('./resources/ts/composables/botSettings')['PURPOSE_GREETING']
+  const PURPOSE_HANDOVER_IN_HOURS: typeof import('./resources/ts/composables/botSettings')['PURPOSE_HANDOVER_IN_HOURS']
+  const PURPOSE_HANDOVER_OFF_HOURS: typeof import('./resources/ts/composables/botSettings')['PURPOSE_HANDOVER_OFF_HOURS']
+  const PURPOSE_INVALID_INPUT: typeof import('./resources/ts/composables/botSettings')['PURPOSE_INVALID_INPUT']
+  const PURPOSE_MAIN_MENU: typeof import('./resources/ts/composables/botSettings')['PURPOSE_MAIN_MENU']
+  const PURPOSE_RETRY: typeof import('./resources/ts/composables/botSettings')['PURPOSE_RETRY']
+  const PURPOSE_SLOTS: typeof import('./resources/ts/composables/botSettings')['PURPOSE_SLOTS']
   const SYSTEM_ACTION_OPTIONS: typeof import('./resources/ts/composables/botSettings')['SYSTEM_ACTION_OPTIONS']
   const VALIDATION_BOUNDS: typeof import('./resources/ts/composables/botSettings')['VALIDATION_BOUNDS']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
@@ -396,6 +404,14 @@ declare module 'vue' {
     readonly DirAttrSet: UnwrapRef<typeof import('./resources/ts/utils/utils')['DirAttrSet']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly HexToRgb: UnwrapRef<typeof import('./resources/ts/utils/utils')['HexToRgb']>
+    readonly PURPOSE_FLOW_INVALID_INPUT: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_FLOW_INVALID_INPUT']>
+    readonly PURPOSE_GREETING: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_GREETING']>
+    readonly PURPOSE_HANDOVER_IN_HOURS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_HANDOVER_IN_HOURS']>
+    readonly PURPOSE_HANDOVER_OFF_HOURS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_HANDOVER_OFF_HOURS']>
+    readonly PURPOSE_INVALID_INPUT: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_INVALID_INPUT']>
+    readonly PURPOSE_MAIN_MENU: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_MAIN_MENU']>
+    readonly PURPOSE_RETRY: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_RETRY']>
+    readonly PURPOSE_SLOTS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['PURPOSE_SLOTS']>
     readonly SYSTEM_ACTION_OPTIONS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['SYSTEM_ACTION_OPTIONS']>
     readonly VALIDATION_BOUNDS: UnwrapRef<typeof import('./resources/ts/composables/botSettings')['VALIDATION_BOUNDS']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>

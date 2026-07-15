@@ -130,7 +130,7 @@ class BotConfigurationController extends Controller
             'invalid_input_dialog_id',
             'invalid_attempts_dialog_id',
             'retry_dialog_id',
-            'handover_dialog_id_in_hours',
+            // 'handover_dialog_id_in_hours',
             'handover_dialog_id_off_hours',
         ];
 

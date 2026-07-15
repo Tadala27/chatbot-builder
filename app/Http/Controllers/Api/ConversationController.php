@@ -14,7 +14,11 @@ class ConversationController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Conversation::with(['bot', 'whatsappAccount', 'assignedAgent']);
+        // FIX: `latestMessage` was never eager-loaded here, so every list
+        // item had nothing to build a preview from — this is why the chat
+        // list preview wasn't showing anything for sticker/media messages
+        // (or any message at all). show() computed it, index() didn't.
+        $query = Conversation::with(['bot', 'whatsappAccount', 'assignedAgent', 'latestMessage']);
 
         if ($request->filled('search')) {
             $s = $request->search;
@@ -55,6 +59,9 @@ class ConversationController extends Controller
 
         $conversations->getCollection()->transform(function ($c) {
             $c->duration_formatted = $c->getFormattedDuration();
+            $preview = $this->buildMessagePreview($c->latestMessage);
+            $c->last_message_preview = $preview['text'];
+            $c->last_message_preview_type = $preview['type'];
 
             return $c;
         });
@@ -146,9 +153,11 @@ class ConversationController extends Controller
         $conversation->load(['bot', 'whatsappAccount', 'assignedAgent', 'context']);
 
         // ->latestMessage is null for a conversation with no messages yet —
-        // previewText() must accept that instead of blowing up with a
-        // TypeError before the response can even be built.
-        $conversation['latest_message'] = $this->previewText($conversation->latestMessage);
+        // buildMessagePreview() must accept that instead of blowing up
+        // before the response can even be built.
+        $preview = $this->buildMessagePreview($conversation->latestMessage);
+        $conversation['latest_message'] = $preview['text'];
+        $conversation['latest_message_type'] = $preview['type'];
 
         return response()->json([
             'data' => $conversation,
@@ -318,23 +327,30 @@ class ConversationController extends Controller
     // -------------------------------------------------------------------------
 
     /**
-     * One-line, type-aware summary of a message's content — mirrors the
-     * frontend's previewText() so both layers agree on what each message
-     * type "is" as a short label. Defensive against every shape traced in
-     * content-shapes-reference: text, interactive (list/buttons, both
-     * outbound-sent and inbound-tapped shapes), media, location, contacts,
-     * sticker. Never indexes into $content without checking the key
-     * exists first.
+     * Type-aware summary of a message's content, mirroring how WhatsApp
+     * itself renders a chat-list preview: media/sticker/location/contact
+     * messages show a fixed icon + label (e.g. "Sticker", "Photo"), not
+     * their raw payload. Returns both the label text and a `type` key so
+     * the frontend can pick the matching icon — the text alone isn't
+     * enough to distinguish "a photo with no caption" from "a message that
+     * literally says Photo".
+     *
+     * Defensive against every shape traced in content-shapes-reference:
+     * text, interactive (list/buttons, both outbound-sent and
+     * inbound-tapped shapes), media, location, contacts, sticker. Never
+     * indexes into $content without checking the key exists first.
      *
      * Accepts a nullable Message — a conversation with zero messages yet
      * has ->latestMessage === null, and this must not blow up in that case
-     * (previously did: Message $message rejected null with a TypeError,
-     * crashing show() for any empty conversation).
+     * (a plain `Message $message` type-hint previously rejected null with
+     * a TypeError, crashing show() for any empty conversation).
+     *
+     * @return array{type: string, text: string}
      */
-    private function previewText(?Message $message): string
+    private function buildMessagePreview(?Message $message): array
     {
         if (!$message) {
-            return 'No messages yet';
+            return ['type' => 'none', 'text' => 'No messages yet'];
         }
 
         $rawContent = $message->content ?? [];
@@ -346,25 +362,34 @@ class ConversationController extends Controller
         $type = $message->message_type;
 
         return match (true) {
-            $type === 'text' => $content['text'] ?? '',
+            $type === 'text' => ['type' => 'text', 'text' => $content['text'] ?? ''],
 
-            $type === 'interactive' && ($content['type'] ?? null) === 'list' => $content['body']['text'] ?? 'List message',
+            $type === 'interactive' && ($content['type'] ?? null) === 'list' => ['type' => 'list', 'text' => $content['body']['text'] ?? 'List message'],
 
-            $type === 'interactive' && ($content['type'] ?? null) === 'button' => $content['body']['text'] ?? 'Button message',
+            $type === 'interactive' && ($content['type'] ?? null) === 'button' => ['type' => 'buttons', 'text' => $content['body']['text'] ?? 'Button message'],
 
             // user tapped a button/list row — inbound shape
-            $type === 'interactive' && isset($content['response']) => $content['response']['title'] ?? 'Selected an option',
+            $type === 'interactive' && isset($content['response']) => ['type' => 'reply', 'text' => $content['response']['title'] ?? 'Selected an option'],
 
-            $type === 'button' => $content['text'] ?? 'Quick reply',
+            $type === 'button' => ['type' => 'reply', 'text' => $content['text'] ?? 'Quick reply'],
 
-            in_array($type, ['image', 'video', 'audio', 'document', 'sticker'], true) => $content['caption'] ?? ucfirst($type),
+            $type === 'image' => ['type' => 'image', 'text' => $content['caption'] ?? 'Photo'],
+            $type === 'video' => ['type' => 'video', 'text' => $content['caption'] ?? 'Video'],
+            $type === 'audio' => ['type' => 'audio', 'text' => $content['caption'] ?? 'Audio'],
+            $type === 'document' => [
+                'type' => 'document',
+                'text' => $content['caption'] ?? ($content['filename'] ?? 'Document'),
+            ],
+            $type === 'sticker' => ['type' => 'sticker', 'text' => 'Sticker'],
 
-            $type === 'location' => $content['name'] ?? 'Location',
+            $type === 'location' => ['type' => 'location', 'text' => $content['name'] ?? 'Location'],
 
-            $type === 'contacts' => ($content['contacts'][0]['name']['formatted_name'] ?? null)
-                    ?? 'Contact card',
+            $type === 'contacts' => [
+                'type' => 'contact',
+                'text' => ($content['contacts'][0]['name']['formatted_name'] ?? null) ?? 'Contact card',
+            ],
 
-            default => 'Message',
+            default => ['type' => 'unknown', 'text' => 'Message'],
         };
     }
 

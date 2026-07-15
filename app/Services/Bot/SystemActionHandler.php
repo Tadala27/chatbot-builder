@@ -12,6 +12,8 @@ class SystemActionHandler
     public function __construct(
         private WhatsAppMessageService $messageService,
         private ConversationStateManager $state,
+        private BotConfigDialogRenderer $configDialogRenderer,
+        private HandoverAvailability $availability,
     ) {
     }
 
@@ -75,11 +77,10 @@ class SystemActionHandler
         $prevId = $this->state->popPreviousDialog($conversation);
 
         if ($prevId) {
-            // FIX: dialogs.id is a UUID primary key, not an auto-increment
-            // integer. The previous `(int) $prevId` cast silently truncated
-            // any real UUID to 0 (or similar garbage), so find() always
-            // returned null and go_back fell through to doGoHome() every
-            // time — the "go back" button behaved like "go home" instead.
+            // dialogs.id is a UUID primary key, not an auto-increment
+            // integer — casting to (int) here used to silently truncate any
+            // real UUID to 0, so find() always returned null and go_back
+            // fell through to doGoHome() every time.
             $prev = $version->dialogs()->find((string) $prevId);
             if ($prev) {
                 return $prev;
@@ -93,6 +94,21 @@ class SystemActionHandler
         return $this->doGoHome($conversation, $version);
     }
 
+    /**
+     * Hands the conversation off to a human agent.
+     *
+     * FIX: this previously read `$botConfig->agent_dialog_id`, a column
+     * that doesn't exist anywhere in the schema, and tried to look it up in
+     * the flow-graph `dialogs` table. The real config is
+     * `handover_dialog_id_in_hours` / `handover_dialog_id_off_hours` on
+     * BotConfiguration, and those point at `bot_dialogs` (config-level
+     * dialogs), not flow dialogs — so this now picks in-hours vs off-hours
+     * via HandoverAvailability and renders the result as a BotDialog
+     * directly, instead of trying to return it as a flow ?Dialog to
+     * continue the graph. That's correct either way: handover always ends
+     * with conversation status = handed_off, so there's nothing for the
+     * flow to continue into.
+     */
     private function doTalkToAgent(
         Conversation $conversation,
         Dialog $sourceDialog,
@@ -108,32 +124,42 @@ class SystemActionHandler
         ]);
 
         $botConfig = $conversation->bot?->configuration;
-        $agentDialog = null;
+        $inHours = $this->availability->isInHours($botConfig?->operating_hours ?? null);
 
-        if ($botConfig && !empty($botConfig->agent_dialog_id)) {
-            // Same UUID fix as doGoBack() above.
-            $agentDialog = $version->dialogs()->find((string) $botConfig->agent_dialog_id);
-        }
+        $handoverDialogId = $inHours
+            ? $botConfig?->handover_dialog_id_in_hours
+            : $botConfig?->handover_dialog_id_off_hours;
 
-        if ($agentDialog) {
-            Log::info('talk_to_agent: routing to agent dialog', [
+        $handoverDialog = $handoverDialogId
+            ? \App\Models\BotDialog::find($handoverDialogId)
+            : null;
+
+        if ($handoverDialog) {
+            $this->configDialogRenderer->render($conversation, $handoverDialog);
+
+            Log::info('talk_to_agent: sent handover dialog', [
                 'conversation_id' => $conversation->id,
-                'agent_dialog_id' => $agentDialog->id,
+                'dialog_id' => $handoverDialog->id,
+                'in_hours' => $inHours,
             ]);
 
-            return $agentDialog;
+            return null;
         }
 
-        // No agent dialog configured — send a default message
+        $fallback = (!$inHours && $botConfig?->handover_unavailable_message)
+            ? $botConfig->handover_unavailable_message
+            : 'You are being connected to a live agent. Please wait…';
+
         $this->messageService->sendTextMessage(
             $conversation->whatsappAccount,
             $conversation->whatsapp_user_phone,
-            'You are being connected to a live agent. Please wait…',
+            $fallback,
             []
         );
 
-        Log::info('talk_to_agent: no agent dialog — sent default message', [
+        Log::info('talk_to_agent: no handover dialog configured — sent fallback message', [
             'conversation_id' => $conversation->id,
+            'in_hours' => $inHours,
         ]);
 
         return null;

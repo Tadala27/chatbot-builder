@@ -7,27 +7,6 @@ import Swal from "sweetalert2";
 const router = useRouter();
 const isSaving = ref(false);
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-
-const tabs = ["basic", "domain", "limits"] as const;
-const currentTabIndex = ref(0);
-const tab = computed({
-  get: () => tabs[currentTabIndex.value],
-  set: (value) => {
-    const index = tabs.findIndex((t) => t === value);
-    if (index !== -1) currentTabIndex.value = index;
-  },
-});
-
-const nextTab = () => {
-  if (currentTabIndex.value < tabs.length - 1) currentTabIndex.value++;
-};
-const previousTab = () => {
-  if (currentTabIndex.value > 0) currentTabIndex.value--;
-};
-const isFirstTab = computed(() => currentTabIndex.value === 0);
-const isLastTab = computed(() => currentTabIndex.value === tabs.length - 1);
-
 // ── Form — fields exactly match TenantController::store validation ──────────
 
 const form = ref({
@@ -44,7 +23,6 @@ const form = ref({
   max_conversations_per_month: 1000,
   is_active: true,
   settings: {} as Record<string, any>,
-  // Primary domain
   domain: "",
   domain_type: "subdomain" as "custom" | "subdomain",
 });
@@ -52,7 +30,6 @@ const form = ref({
 const slugManuallyEdited = ref(false);
 const idManuallyEdited = ref(false);
 
-// Auto-generate slug/id from name unless the user has typed into them directly
 const onNameInput = () => {
   const generated = form.value.name
     .toLowerCase()
@@ -65,8 +42,7 @@ const onNameInput = () => {
   if (!idManuallyEdited.value) form.value.id = generated;
 };
 
-// Suggest a subdomain based on the slug, unless the user has overridden it
-const baseDomain = "payroll.test"; // adjust to your actual app domain / .env value
+const baseDomain = "payroll.test";
 const suggestedDomain = computed(() =>
   form.value.slug ? `${form.value.slug}.${baseDomain}` : "",
 );
@@ -114,15 +90,7 @@ const validateForm = (): boolean => {
   if (form.value.max_conversations_per_month < 100)
     errors.value.max_conversations_per_month = "Must be at least 100.";
 
-  if (Object.keys(errors.value).length > 0) {
-    // Jump back to whichever tab has the first error
-    if (errors.value.id || errors.value.name || errors.value.slug)
-      currentTabIndex.value = 0;
-    else if (errors.value.domain) currentTabIndex.value = 1;
-    else currentTabIndex.value = 2;
-    return false;
-  }
-  return true;
+  return Object.keys(errors.value).length === 0;
 };
 
 // ── Submit ────────────────────────────────────────────────────────────────────
@@ -133,18 +101,16 @@ const submit = async () => {
   isSaving.value = true;
   try {
     // POST /api/admin/tenants — TenantController::store.
-    // The TenantObserver (enabled by default) calls TenantDatabaseManager::provision()
-    // automatically after the row is created: creates the shared schema (or verifies
-    // dedicated/self-hosted connection), runs tenant migrations, then seeds default
-    // permissions and roles. This can take several seconds for shared-mode tenants.
+    // TenantObserver calls TenantDatabaseManager::provision() automatically
+    // after the row is created: creates the shared schema (or verifies
+    // dedicated/self-hosted connection), runs tenant migrations, seeds
+    // default permissions/roles. Can take several seconds for shared mode.
     const { data } = await axios.post("/api/admin/tenants", form.value);
 
     await Swal.fire({
       title: "Tenant Created",
-      html: `
-        <p><strong>${form.value.name}</strong> has been created and provisioned.</p>
-        <p class="text-caption mt-2">Domain: <code>${form.value.domain}</code></p>
-      `,
+      html: `<p><strong>${form.value.name}</strong> has been created and provisioned.</p>
+             <p class="text-caption mt-2">Domain: <code>${form.value.domain}</code></p>`,
       icon: "success",
       confirmButtonText: "View Tenant",
     });
@@ -157,7 +123,6 @@ const submit = async () => {
         Object.entries(serverErrors).map(([k, v]) => [k, (v as string[])[0]]),
       );
     }
-
     await Swal.fire({
       title: "Error",
       text:
@@ -172,295 +137,423 @@ const submit = async () => {
 </script>
 
 <template>
-  <VCard elevation="0">
-    <VCardTitle class="d-flex align-center pa-6 bg-primary text-white">
-      <VIcon icon="mdi-plus" size="28" class="mr-3" />
-      <span class="text-h5">Create New Tenant</span>
-    </VCardTitle>
-
-    <VDivider />
-
-    <VTabs v-model="tab" color="primary" align-tabs="center" grow>
-      <VTab value="basic">
-        <VIcon start>mdi-office-building</VIcon>
-        Basic Information
-      </VTab>
-      <VTab value="domain">
-        <VIcon start>mdi-web</VIcon>
-        Domain &amp; Provisioning
-      </VTab>
-      <VTab value="limits">
-        <VIcon start>mdi-tune</VIcon>
-        Limits &amp; Subscription
-      </VTab>
-    </VTabs>
-
-    <VDivider />
-
-    <VWindow v-model="tab">
-      <!-- ── Tab 1: Basic Information ──────────────────────────────────── -->
-      <VWindowItem value="basic">
-        <VCardText class="pa-6">
-          <VRow>
-            <VCol cols="12">
-              <VAlert
-                type="info"
-                variant="tonal"
-                density="compact"
-                class="mb-4"
-              >
-                <template #prepend><VIcon>mdi-information</VIcon></template>
-                The tenant ID is permanent once created and is used as the
-                primary key.
-              </VAlert>
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.name"
-                label="Company Name *"
-                variant="outlined"
-                density="compact"
-                placeholder="e.g., Acme Holdings"
-                :error-messages="errors.name"
-                @update:model-value="onNameInput"
-              />
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.id"
-                label="Tenant ID *"
-                variant="outlined"
-                density="compact"
-                placeholder="e.g., acme"
-                hint="Lowercase, hyphenated, permanent. Used as the primary key."
-                persistent-hint
-                :error-messages="errors.id"
-                @update:model-value="idManuallyEdited = true"
-              />
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.slug"
-                label="Slug *"
-                variant="outlined"
-                density="compact"
-                placeholder="e.g., acme"
-                hint="Used in URLs and as the basis for the subdomain suggestion."
-                persistent-hint
-                :error-messages="errors.slug"
-                @update:model-value="
-                  (v: string) => {
-                    slugManuallyEdited = true;
-                    onSlugInput();
-                  }
-                "
-              />
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VSwitch
-                v-model="form.is_active"
-                label="Active on Creation"
-                color="success"
-                hint="Inactive tenants cannot log in until activated."
-                persistent-hint
-              />
-            </VCol>
-          </VRow>
-        </VCardText>
-      </VWindowItem>
-
-      <!-- ── Tab 2: Domain & Provisioning ──────────────────────────────── -->
-      <VWindowItem value="domain">
-        <VCardText class="pa-6">
-          <VRow>
-            <VCol cols="12">
-              <VAlert
-                type="info"
-                variant="tonal"
-                density="compact"
-                class="mb-4"
-              >
-                <template #prepend><VIcon>mdi-information</VIcon></template>
-                Creating the tenant automatically provisions its database:
-                creates the schema, runs tenant migrations, and seeds default
-                roles &amp; permissions. This can take a few seconds for
-                shared-mode tenants.
-              </VAlert>
-            </VCol>
-
-            <VCol cols="12" md="5">
-              <VSelect
-                v-model="form.domain_type"
-                :items="domainTypeOptions"
-                label="Domain Type"
-                variant="outlined"
-                density="compact"
-                @update:model-value="onSlugInput"
-              />
-            </VCol>
-
-            <VCol cols="12" md="7">
-              <VTextField
-                v-model="form.domain"
-                label="Primary Domain *"
-                variant="outlined"
-                density="compact"
-                :placeholder="
-                  form.domain_type === 'subdomain'
-                    ? suggestedDomain || 'acme.payroll.test'
-                    : 'payroll.acme.com'
-                "
-                hint="Must be unique across all tenants. This becomes the tenant's login URL."
-                persistent-hint
-                :error-messages="errors.domain"
-                @update:model-value="domainManuallyEdited = true"
-              />
-            </VCol>
-
-            <VCol cols="12" v-if="form.domain">
-              <VCard variant="outlined" color="success">
-                <VCardText class="d-flex align-center gap-3">
-                  <VIcon color="success">mdi-check-circle</VIcon>
-                  <div>
-                    <p class="text-body-2 mb-0">
-                      Tenant will be reachable at
-                      <strong
-                        >{{
-                          form.domain_type === "custom"
-                            ? "https://"
-                            : "https://"
-                        }}{{ form.domain }}</strong
-                      >
-                    </p>
-                    <p class="text-caption text-medium-emphasis mb-0">
-                      {{
-                        form.domain_type === "custom"
-                          ? "Make sure DNS for this custom domain points to your application server before going live."
-                          : "Subdomain routing is handled automatically by the InitializeTenancyByDomain middleware."
-                      }}
-                    </p>
-                  </div>
-                </VCardText>
-              </VCard>
-            </VCol>
-          </VRow>
-        </VCardText>
-      </VWindowItem>
-
-      <!-- ── Tab 3: Limits & Subscription ──────────────────────────────── -->
-      <VWindowItem value="limits">
-        <VCardText class="pa-6">
-          <VRow>
-            <VCol cols="12">
-              <h6 class="text-h6 mb-3">Subscription</h6>
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VSelect
-                v-model="form.subscription_tier"
-                :items="tierOptions"
-                label="Subscription Tier"
-                variant="outlined"
-                density="compact"
-              />
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model="form.subscription_expires_at"
-                type="date"
-                label="Subscription Expires (optional)"
-                variant="outlined"
-                density="compact"
-                hint="Leave empty for no expiry."
-                persistent-hint
-              />
-            </VCol>
-
-            <VCol cols="12">
-              <h6 class="text-h6 mb-3 mt-4">Usage Limits</h6>
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model.number="form.max_flows"
-                type="number"
-                label="Max Flows"
-                variant="outlined"
-                density="compact"
-                min="1"
-                :error-messages="errors.max_flows"
-              />
-            </VCol>
-
-            <VCol cols="12" md="6">
-              <VTextField
-                v-model.number="form.max_conversations_per_month"
-                type="number"
-                label="Max Conversations / Month"
-                variant="outlined"
-                density="compact"
-                min="100"
-                step="100"
-                :error-messages="errors.max_conversations_per_month"
-              />
-            </VCol>
-          </VRow>
-        </VCardText>
-      </VWindowItem>
-    </VWindow>
-
-    <VDivider />
-
-    <!-- ── Actions ────────────────────────────────────────────────────── -->
-    <VCardActions class="pa-6">
+  <div class="ax-page">
+    <div class="ax-header mb-3">
+      <div>
+        <h1 class="ax-title">Add tenant</h1>
+        <p class="ax-subtitle">
+          Creating a tenant automatically provisions its database — schema,
+          migrations, and default roles &amp; permissions. This can take a few
+          seconds for shared-mode tenants.
+        </p>
+      </div>
       <VBtn
         variant="text"
-        color="error"
-        prepend-icon="mdi-close"
+        class="ax-vbtn ax-vbtn--ghost"
+        prepend-icon="mdi-arrow-left"
         @click="router.push('/administration/tenants')"
       >
-        Cancel
+        Back
       </VBtn>
+    </div>
 
-      <VSpacer />
+    <div class="ax-form-grid">
+      <!-- ── Basic information ─────────────────────────────────────────── -->
+      <VCard variant="flat" class="ax-card">
+        <div class="ax-section-head">
+          <div class="ax-section-icon">
+            <VIcon icon="mdi-office-building" size="18" />
+          </div>
+          <div>
+            <p class="ax-section-title">Basic information</p>
+            <p class="ax-section-sub">
+              The tenant ID is permanent once created — used as the primary key.
+            </p>
+          </div>
+        </div>
 
+        <div class="ax-field-grid">
+          <div class="ax-field ax-field--half">
+            <label class="ax-label"
+              >Company name <span class="ax-req">*</span></label
+            >
+            <VTextField
+              v-model="form.name"
+              variant="outlined"
+              density="comfortable"
+              placeholder="e.g., Acme Holdings"
+              hide-details="auto"
+              :error-messages="errors.name"
+              class="ax-input"
+              @update:model-value="onNameInput"
+            />
+          </div>
+
+          <div class="ax-field ax-field--half">
+            <label class="ax-label"
+              >Tenant ID <span class="ax-req">*</span></label
+            >
+            <VTextField
+              v-model="form.id"
+              variant="outlined"
+              density="comfortable"
+              placeholder="e.g., acme"
+              hide-details="auto"
+              :error-messages="errors.id"
+              class="ax-input"
+              @update:model-value="idManuallyEdited = true"
+            />
+            <p class="ax-hint">Lowercase, hyphenated, permanent.</p>
+          </div>
+
+          <div class="ax-field ax-field--half">
+            <label class="ax-label">Slug <span class="ax-req">*</span></label>
+            <VTextField
+              v-model="form.slug"
+              variant="outlined"
+              density="comfortable"
+              placeholder="e.g., acme"
+              hide-details="auto"
+              :error-messages="errors.slug"
+              class="ax-input"
+              @update:model-value="
+                (v: string) => {
+                  slugManuallyEdited = true;
+                  onSlugInput();
+                }
+              "
+            />
+            <p class="ax-hint">Used in URLs and as the subdomain suggestion.</p>
+          </div>
+
+          <div class="ax-field ax-field--half d-flex align-center">
+            <div class="ax-switch-row">
+              <VSwitch
+                v-model="form.is_active"
+                color="success"
+                hide-details
+                density="compact"
+              />
+              <div>
+                <p class="ax-label mb-0">Active on creation</p>
+                <p class="ax-hint mb-0">
+                  Inactive tenants cannot log in until activated.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </VCard>
+
+      <!-- ── Domain & provisioning ────────────────────────────────────── -->
+      <VCard variant="flat" class="ax-card">
+        <div class="ax-section-head">
+          <div class="ax-section-icon"><VIcon icon="mdi-web" size="18" /></div>
+          <div>
+            <p class="ax-section-title">Domain &amp; provisioning</p>
+            <p class="ax-section-sub">
+              This becomes the tenant's login URL and must be unique.
+            </p>
+          </div>
+        </div>
+
+        <div class="ax-field-grid">
+          <div class="ax-field ax-field--third">
+            <label class="ax-label">Domain type</label>
+            <VSelect
+              v-model="form.domain_type"
+              :items="domainTypeOptions"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+              class="ax-input"
+              @update:model-value="onSlugInput"
+            />
+          </div>
+
+          <div class="ax-field ax-field--twothirds">
+            <label class="ax-label"
+              >Primary domain <span class="ax-req">*</span></label
+            >
+            <VTextField
+              v-model="form.domain"
+              variant="outlined"
+              density="comfortable"
+              :placeholder="
+                form.domain_type === 'subdomain'
+                  ? suggestedDomain || 'acme.payroll.test'
+                  : 'payroll.acme.com'
+              "
+              hide-details="auto"
+              :error-messages="errors.domain"
+              class="ax-input"
+              @update:model-value="domainManuallyEdited = true"
+            />
+          </div>
+
+          <div v-if="form.domain" class="ax-field ax-field--full">
+            <div class="ax-domain-preview">
+              <VIcon color="success" size="20">mdi-check-circle</VIcon>
+              <div>
+                <p class="mb-0 fs-13">
+                  Tenant will be reachable at
+                  <strong>https://{{ form.domain }}</strong>
+                </p>
+                <p class="ax-hint mb-0">
+                  {{
+                    form.domain_type === "custom"
+                      ? "Make sure DNS for this custom domain points to your application server before going live."
+                      : "Subdomain routing is handled automatically by the InitializeTenancyByDomain middleware."
+                  }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </VCard>
+
+      <!-- ── Limits & subscription ───────────────────────────────────── -->
+      <VCard variant="flat" class="ax-card">
+        <div class="ax-section-head">
+          <div class="ax-section-icon"><VIcon icon="mdi-tune" size="18" /></div>
+          <div>
+            <p class="ax-section-title">Limits &amp; subscription</p>
+            <p class="ax-section-sub">Configure tier and usage ceilings.</p>
+          </div>
+        </div>
+
+        <div class="ax-field-grid">
+          <div class="ax-field ax-field--half">
+            <label class="ax-label">Subscription tier</label>
+            <VSelect
+              v-model="form.subscription_tier"
+              :items="tierOptions"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+              class="ax-input"
+            />
+          </div>
+
+          <div class="ax-field ax-field--half">
+            <label class="ax-label"
+              >Subscription expires
+              <span class="ax-hint">(optional)</span></label
+            >
+            <VTextField
+              v-model="form.subscription_expires_at"
+              type="date"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+              class="ax-input"
+            />
+          </div>
+
+          <div class="ax-field ax-field--half">
+            <label class="ax-label"
+              >Max flows <span class="ax-req">*</span></label
+            >
+            <VTextField
+              v-model.number="form.max_flows"
+              type="number"
+              min="1"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+              :error-messages="errors.max_flows"
+              class="ax-input"
+            />
+          </div>
+
+          <div class="ax-field ax-field--half">
+            <label class="ax-label"
+              >Max conversations / month <span class="ax-req">*</span></label
+            >
+            <VTextField
+              v-model.number="form.max_conversations_per_month"
+              type="number"
+              min="100"
+              step="100"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+              :error-messages="errors.max_conversations_per_month"
+              class="ax-input"
+            />
+          </div>
+        </div>
+      </VCard>
+    </div>
+
+    <div class="ax-form-actions">
       <VBtn
-        v-if="!isFirstTab"
         variant="text"
-        color="grey"
-        prepend-icon="mdi-arrow-left"
-        size="large"
-        @click="previousTab"
+        class="ax-vbtn ax-vbtn--ghost"
+        @click="router.push('/administration/tenants')"
+        >Cancel</VBtn
       >
-        Previous
-      </VBtn>
-
       <VBtn
-        v-if="!isLastTab"
-        variant="text"
         color="primary"
-        append-icon="mdi-arrow-right"
-        size="large"
-        @click="nextTab"
-      >
-        Next
-      </VBtn>
-
-      <VBtn
-        v-if="isLastTab"
-        color="success"
+        class="ax-vbtn"
         prepend-icon="mdi-check"
         :loading="isSaving"
         :disabled="isSaving"
         @click="submit"
       >
-        Create &amp; Provision Tenant
+        Create &amp; provision tenant
       </VBtn>
-    </VCardActions>
-  </VCard>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap");
+
+.ax-page {
+  font-family: "Outfit", sans-serif;
+}
+
+.ax-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.ax-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.ax-subtitle {
+  font-size: 13px;
+  color: var(--bs-secondary-color, #6b7280);
+  margin: 0;
+  max-width: 640px;
+}
+
+.ax-vbtn {
+  text-transform: none;
+  font-weight: 600;
+  border-radius: 10px;
+  letter-spacing: normal;
+}
+.ax-vbtn--ghost {
+  color: inherit;
+}
+
+.ax-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.ax-card {
+  border: 1px solid var(--bs-border-color, #e5e7eb) !important;
+  border-radius: 14px !important;
+  padding: 22px !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04) !important;
+}
+
+.ax-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.ax-section-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(81, 153, 174, 0.1);
+  color: #3f7f91;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ax-section-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin: 0;
+}
+.ax-section-sub {
+  font-size: 12px;
+  color: var(--bs-secondary-color, #6b7280);
+  margin: 2px 0 0;
+}
+
+.ax-field-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+}
+.ax-field--half {
+  grid-column: span 3;
+}
+.ax-field--third {
+  grid-column: span 2;
+}
+.ax-field--twothirds {
+  grid-column: span 4;
+}
+.ax-field--full {
+  grid-column: span 6;
+}
+@media (max-width: 700px) {
+  .ax-field--half,
+  .ax-field--third,
+  .ax-field--twothirds {
+    grid-column: span 6;
+  }
+}
+
+.ax-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bs-secondary-color, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  display: block;
+}
+.ax-req {
+  color: #dc2626;
+}
+.ax-hint {
+  font-size: 11px;
+  color: var(--bs-secondary-color, #6b7280);
+  margin-top: 4px;
+}
+
+.ax-input :deep(.v-field) {
+  border-radius: 9px;
+}
+
+.ax-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ax-domain-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(22, 163, 74, 0.06);
+  border: 1px solid rgba(22, 163, 74, 0.2);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.ax-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--bs-border-color, #e5e7eb);
+}
+</style>

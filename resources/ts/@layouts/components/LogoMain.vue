@@ -4,7 +4,7 @@ import { useCustomizerStore } from '@layouts/stores/customizer'
 
 // Import both logo variants
 import LogoFull from '@images/logos/NICO-Tech.png'
-import LogoCollapsed from '@images/logos/nicomw.png'
+import LogoCollapsed from '@images/logos/logo.png'
 
 const customizer = useCustomizerStore()
 
@@ -17,7 +17,7 @@ const currentLogo = computed(() =>
 <template>
   <div class="logo">
     <RouterLink :to="{ name: 'dashboard' }" aria-label="logo">
-      <img :src="currentLogo" alt="Logo" :width="customizer.miniSidebar ? 50 : 140" class="rounded-md" />
+      <img :src="LogoCollapsed" alt="Logo" width="70" height="70" class="rounded-md" />
     </RouterLink>
   </div>
 </template>
