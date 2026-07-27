@@ -72,6 +72,11 @@ const COND_TYPES = [
     title: "User Selected",
     icon: "$cursorDefaultClick",
   },
+  {
+    value: "user_input",
+    title: "User Input",
+    icon: "$chatProcessingOutline",
+  },
   { value: "api_response", title: "API Response", icon: "$api" },
 ];
 
@@ -771,6 +776,35 @@ function close() {
                           style="flex: 1"
                           @update:model-value="
                             updateCondCond(idx, bi, ci, 'source', $event)
+                          "
+                        />
+                      </template>
+                      <template v-else-if="cond.type === 'user_input'">
+                        <VAutocomplete
+                          :model-value="cond.operator"
+                          :items="COND_OPERATORS"
+                          item-title="title"
+                          item-value="value"
+                          variant="outlined"
+                          density="compact"
+                          rounded="lg"
+                          hide-details
+                          style="flex: 1.1; min-width: 130px"
+                          @update:model-value="
+                            updateCondCond(idx, bi, ci, 'operator', $event)
+                          "
+                        />
+                        <VTextField
+                          v-if="needsValue(cond.operator)"
+                          :model-value="cond.value"
+                          variant="outlined"
+                          density="compact"
+                          rounded="lg"
+                          hide-details
+                          placeholder="e.g. yes"
+                          style="flex: 1.2; min-width: 100px"
+                          @update:model-value="
+                            updateCondCond(idx, bi, ci, 'value', $event)
                           "
                         />
                       </template>

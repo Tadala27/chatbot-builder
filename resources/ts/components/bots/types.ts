@@ -179,12 +179,6 @@ export interface NodeConfig {
 }
 
 export const NODE_CONFIGS: Record<NodeKind, NodeConfig> = {
-  trigger: {
-    label: "Trigger",
-    color: "#10b981",
-    icon: "$lightningBoltOutline",
-    desc: "Entry point",
-  },
   message: {
     label: "Message",
     color: "#3b82f6",

@@ -13,7 +13,10 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
         // $schedule->command('inspire')->hourly();
-         $schedule->command('bots:send-retry-nudges')->everyMinute();
+        $schedule->command('bots:send-retry-nudges')->everyMinute();
+        $schedule->command('conversations:auto-resolve --hours=24')
+    ->hourly()
+    ->withoutOverlapping();
     }
 
     /**

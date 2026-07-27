@@ -19,7 +19,7 @@ const form = ref({
   whatsapp_account_id: null as number | null,
 
   default_language: "en",
-  is_active: true,
+  is_active: false,
 });
 
 const errors = ref<Record<string, string>>({});
@@ -34,13 +34,14 @@ const languageOptions = [
 const fetchAccounts = async () => {
   loadingAccounts.value = true;
   try {
-    const { data } = await axios.get("/tenant/whatsapp-accounts");
+    const { data } = await axios.get(
+      "/tenant/whatsapp-accounts?mode=managed_bot",
+    );
     whatsappAccounts.value = data.data ?? data;
   } finally {
     loadingAccounts.value = false;
   }
 };
-
 const submit = async () => {
   errors.value = {};
   if (!form.value.name) {
@@ -92,7 +93,7 @@ onMounted(fetchAccounts);
     <VCard variant="flat" border rounded="lg">
       <VCardText class="pa-6">
         <VRow>
-          <VCol cols="12" md="6">
+          <VCol cols="12" md="4">
             <VTextField
               v-model="form.name"
               label="Bot Name *"
@@ -102,7 +103,7 @@ onMounted(fetchAccounts);
               :error-messages="errors.name"
             />
           </VCol>
-          <VCol cols="12" md="6">
+          <VCol cols="12" md="4">
             <VSelect
               v-model="form.whatsapp_account_id"
               :items="whatsappAccounts"
@@ -124,18 +125,7 @@ onMounted(fetchAccounts);
               </template>
             </VSelect>
           </VCol>
-          <VCol cols="12">
-            <VTextarea
-              v-model="form.description"
-              label="Description"
-              rows="2"
-              variant="outlined"
-              density="comfortable"
-              rounded="lg"
-            />
-          </VCol>
-
-          <VCol cols="12" md="6">
+          <VCol cols="12" md="4">
             <VSelect
               v-model="form.default_language"
               :items="languageOptions"
@@ -145,8 +135,15 @@ onMounted(fetchAccounts);
               rounded="lg"
             />
           </VCol>
-          <VCol cols="12" md="6" class="d-flex align-center">
-            <VSwitch v-model="form.is_active" label="Active" color="success" />
+          <VCol cols="12">
+            <VTextarea
+              v-model="form.description"
+              label="Description"
+              rows="2"
+              variant="outlined"
+              density="comfortable"
+              rounded="lg"
+            />
           </VCol>
         </VRow>
       </VCardText>

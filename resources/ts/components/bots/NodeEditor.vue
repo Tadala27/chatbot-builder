@@ -298,40 +298,9 @@ function onMediaTypeChange() {
 <template>
   <div>
     <!-- ══════════════════════════════════════════════════════════════════
-         TRIGGER
-    ══════════════════════════════════════════════════════════════════ -->
-    <template v-if="node.kind === 'trigger'">
-      <v-select
-        v-model="node.triggerType"
-        label="Trigger Type"
-        :items="[
-          { value: 'any', title: 'Any message' },
-          { value: 'first', title: 'First message ever' },
-          { value: 'keyword', title: 'Keyword match' },
-          { value: 'opt_in', title: 'Opt-in' },
-        ]"
-        variant="outlined"
-        density="compact"
-        hint="When should this flow start?"
-        persistent-hint
-      />
-      <v-text-field
-        v-if="node.triggerType === 'keyword'"
-        v-model="node.keywords"
-        label="Keywords (comma-separated)"
-        placeholder="hello, start, hi, menu"
-        class="mt-4"
-        variant="outlined"
-        density="compact"
-        hint="Users typing any of these words will trigger this flow"
-        persistent-hint
-      />
-    </template>
-
-    <!-- ══════════════════════════════════════════════════════════════════
          MESSAGE
     ══════════════════════════════════════════════════════════════════ -->
-    <template v-else-if="node.kind === 'message'">
+    <template v-if="node.kind === 'message'">
       <RichTextEditor
         v-model="node.text"
         label="Message text"
@@ -404,7 +373,7 @@ function onMediaTypeChange() {
               variant="outlined"
               density="compact"
               hide-details
-              style="max-width: 170px; min-width: 100px;"
+              style="max-width: 170px; min-width: 100px"
             />
 
             <RichTextField
@@ -415,14 +384,13 @@ function onMediaTypeChange() {
               :max-length="20"
               show-variable-picker
               density="compact"
-              class="flex-grow-1"
+              class="flex-grow-1 mt-5"
             />
 
             <v-tooltip location="top">
               <template #activator="{ props: tip }">
                 <v-btn
                   v-bind="tip"
-                  class="mt-md-5"
                   icon="$cog"
                   size="x-small"
                   variant="text"
@@ -438,7 +406,6 @@ function onMediaTypeChange() {
               <template #activator="{ props: tip }">
                 <v-btn
                   v-bind="tip"
-                  class="mt-md-5"
                   icon="$trashCan"
                   size="x-small"
                   variant="text"
@@ -464,7 +431,8 @@ function onMediaTypeChange() {
               persistent-hint
             />
             <div class="text-caption text-medium-emphasis mt-1">
-              URL buttons open in the user's browser. You can use variables in the URL.
+              URL buttons open in the user's browser. You can use variables in
+              the URL.
             </div>
           </div>
 
@@ -640,7 +608,6 @@ function onMediaTypeChange() {
                     <template #activator="{ props: tip }">
                       <v-btn
                         v-bind="tip"
-                        class="mt-n5"
                         icon="$cog"
                         size="x-small"
                         variant="text"
@@ -656,7 +623,6 @@ function onMediaTypeChange() {
                     <template #activator="{ props: tip }">
                       <v-btn
                         v-bind="tip"
-                        class="mt-n5"
                         icon="$trashCan"
                         size="x-small"
                         variant="text"
@@ -1306,17 +1272,6 @@ function onMediaTypeChange() {
               @click="removePhone(pIdx)"
             />
           </div>
-          <v-text-field
-            v-if="phone.type === 'Mobile'"
-            v-model="phone.wa_id"
-            label="WhatsApp ID (optional)"
-            placeholder="1234567890"
-            variant="outlined"
-            density="compact"
-            class="mt-2"
-            hint="Phone number without + or country code"
-            persistent-hint
-          />
         </v-card-text>
       </v-card>
 

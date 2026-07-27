@@ -16,7 +16,6 @@ const emit = defineEmits<{
 
 const menuStep = ref<"root" | "message" | "interactive">("root");
 
-
 // In AddNodeMenu.vue
 const menuLocation = computed(() => {
   const viewportHeight = window.innerHeight;
@@ -65,15 +64,6 @@ function addNode(kind: NodeKind, mediaType?: string) {
             Add Node
           </div>
           <v-list density="compact">
-            <v-list-item
-              @click="addNode('trigger')"
-              prepend-icon="$lightningBoltOutline"
-            >
-              <v-list-item-title>Trigger</v-list-item-title>
-              <v-list-item-subtitle
-                >Start the conversation</v-list-item-subtitle
-              >
-            </v-list-item>
             <v-list-item
               @click="menuStep = 'message'"
               prepend-icon="$messageText"

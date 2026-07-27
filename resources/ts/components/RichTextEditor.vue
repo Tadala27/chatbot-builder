@@ -1,19 +1,33 @@
+<!-- RichTextArea.vue -->
+
 <template>
   <div class="whatsapp-editor-wrapper">
     <v-label v-if="label" class="mb-2 text-subtitle-1 font-weight-medium">
       {{ label }}
     </v-label>
 
-    <div ref="editorContainer" class="editor-container" :class="{
-      'is-focused': isFocused,
-      'has-error': errorMessages?.length || isOverLimit,
-      'is-disabled': disabled,
-    }" @click="focusEditor">
+    <div
+      ref="editorContainer"
+      class="editor-container"
+      :class="[
+        `editor-container--density-${density}`,
+        `editor-container--variant-${variant}`,
+        {
+          'is-focused': isFocused,
+          'has-error': errorMessages?.length || isOverLimit,
+          'is-disabled': disabled,
+        },
+      ]"
+      @click="focusEditor"
+    >
       <!-- Floating Label -->
-      <label class="editor-label" :class="{
-        'editor-label-floating': isFocused || hasContent,
-        'text-error': errorMessages?.length || isOverLimit,
-      }">
+      <label
+        class="editor-label"
+        :class="{
+          'editor-label-floating': isFocused || hasContent,
+          'text-error': errorMessages?.length || isOverLimit,
+        }"
+      >
         {{ placeholder }}
       </label>
 
@@ -25,58 +39,127 @@
 
       <!-- Bottom Toolbar -->
       <div class="editor-bottom-toolbar">
-        <div v-if="editor && showFormatting" class="formatting-toolbar" @click.stop>
-          <v-btn icon size="x-small" variant="tonal" :color="editor.isActive('whatsappBold') ? 'primary' : 'default'"
-            :class="{ 'active-format': editor.isActive('whatsappBold') }" :disabled="disabled || isOverLimit"
-            title="Bold (Ctrl+B)" @click="toggleBold"><v-icon>$formatBold</v-icon></v-btn>
+        <div
+          v-if="editor && showFormatting"
+          class="formatting-toolbar"
+          @click.stop
+        >
+          <v-btn
+            icon
+            size="x-small"
+            variant="tonal"
+            :color="editor.isActive('whatsappBold') ? 'primary' : 'default'"
+            :class="{ 'active-format': editor.isActive('whatsappBold') }"
+            :disabled="disabled || isOverLimit"
+            title="Bold (Ctrl+B)"
+            @click="toggleBold"
+            ><v-icon>$formatBold</v-icon></v-btn
+          >
 
-          <v-btn icon size="x-small" variant="tonal" :color="editor.isActive('whatsappItalic') ? 'primary' : 'default'"
-            :class="{ 'active-format': editor.isActive('whatsappItalic') }" :disabled="disabled || isOverLimit"
-            title="Italic (Ctrl+I)" @click="toggleItalic"><v-icon>$formatItalic</v-icon></v-btn>
+          <v-btn
+            icon
+            size="x-small"
+            variant="tonal"
+            :color="editor.isActive('whatsappItalic') ? 'primary' : 'default'"
+            :class="{ 'active-format': editor.isActive('whatsappItalic') }"
+            :disabled="disabled || isOverLimit"
+            title="Italic (Ctrl+I)"
+            @click="toggleItalic"
+            ><v-icon>$formatItalic</v-icon></v-btn
+          >
 
-          <v-btn icon size="x-small" variant="tonal" :color="editor.isActive('whatsappStrike') ? 'primary' : 'default'"
-            :class="{ 'active-format': editor.isActive('whatsappStrike') }" :disabled="disabled || isOverLimit"
+          <v-btn
+            icon
+            size="x-small"
+            variant="tonal"
+            :color="editor.isActive('whatsappStrike') ? 'primary' : 'default'"
+            :class="{ 'active-format': editor.isActive('whatsappStrike') }"
+            :disabled="disabled || isOverLimit"
             title="Strikethrough (Ctrl+Shift+X)"
-            @click="toggleStrike"><v-icon>$formatStrikethroughVariant</v-icon></v-btn>
+            @click="toggleStrike"
+            ><v-icon>$formatStrikethroughVariant</v-icon></v-btn
+          >
 
-          <v-btn icon size="x-small" variant="tonal" :color="editor.isActive('whatsappCode') ? 'primary' : 'default'"
-            :class="{ 'active-format': editor.isActive('whatsappCode') }" :disabled="disabled || isOverLimit"
-            title="Monospace (Ctrl+E)" @click="toggleCode"><v-icon>$codeTags</v-icon></v-btn>
+          <v-btn
+            icon
+            size="x-small"
+            variant="tonal"
+            :color="editor.isActive('whatsappCode') ? 'primary' : 'default'"
+            :class="{ 'active-format': editor.isActive('whatsappCode') }"
+            :disabled="disabled || isOverLimit"
+            title="Monospace (Ctrl+E)"
+            @click="toggleCode"
+            ><v-icon>$codeTags</v-icon></v-btn
+          >
         </div>
 
         <div class="d-flex align-center offset-md-3">
           <!-- Variable Picker -->
           <div v-if="editor && availableVariables?.length" @click.stop>
-            <v-menu v-model="variableMenu" :close-on-content-click="false" :close-on-back="false">
+            <v-menu
+              v-model="variableMenu"
+              :close-on-content-click="false"
+              :close-on-back="false"
+            >
               <template #activator="{ props: menuProps }">
-                <v-btn v-bind="menuProps" icon size="x-small" variant="text" color="default"
-                  :disabled="disabled || isOverLimit" title="Insert variable"><v-icon>$xml</v-icon></v-btn>
+                <v-btn
+                  v-bind="menuProps"
+                  icon
+                  size="x-small"
+                  variant="text"
+                  color="default"
+                  :disabled="disabled || isOverLimit"
+                  title="Insert variable"
+                  ><v-icon>$xml</v-icon></v-btn
+                >
               </template>
 
               <v-card min-width="280" max-width="320" @click.stop>
                 <v-card-text class="pa-3">
-                  <div class="d-flex align-center mb-2" style="gap:8px">
-                    <v-text-field v-model="variableSearch" placeholder="Search variables..." density="compact"
-                      variant="outlined" hide-details prepend-inner-icon="$magnify" class="flex-grow-1" autofocus
-                      @keyup.esc="closeVariableMenu" />
-                    <v-btn icon size="small" variant="text" title="Close" @click="closeVariableMenu">
+                  <div class="d-flex align-center mb-2" style="gap: 8px">
+                    <v-text-field
+                      v-model="variableSearch"
+                      placeholder="Search variables..."
+                      density="compact"
+                      variant="outlined"
+                      hide-details
+                      prepend-inner-icon="$magnify"
+                      class="flex-grow-1"
+                      autofocus
+                      @keyup.esc="closeVariableMenu"
+                    />
+                    <v-btn
+                      icon
+                      size="small"
+                      variant="text"
+                      title="Close"
+                      @click="closeVariableMenu"
+                    >
                       <v-icon>$close</v-icon>
                     </v-btn>
                   </div>
                   <div class="var-list-outer">
                     <PerfectScrollbar class="var-list-ps">
                       <v-list density="compact" class="pa-0">
-                        <v-list-item v-for="variable in filteredVariables" :key="variable" class="cursor-pointer"
-                          @click="insertVariable(variable)">
+                        <v-list-item
+                          v-for="variable in filteredVariables"
+                          :key="variable"
+                          class="cursor-pointer"
+                          @click="insertVariable(variable)"
+                        >
                           {{ variable }}
                         </v-list-item>
                         <v-list-item v-if="filteredVariables.length === 0">
-                          <span class="text-caption text-medium-emphasis">No variables found</span>
+                          <span class="text-caption text-medium-emphasis"
+                            >No variables found</span
+                          >
                         </v-list-item>
                       </v-list>
                     </PerfectScrollbar>
                   </div>
-                  <p class="text-caption text-medium-emphasis text-center mt-2 mb-0">
+                  <p
+                    class="text-caption text-medium-emphasis text-center mt-2 mb-0"
+                  >
                     Esc or × to close
                   </p>
                 </v-card-text>
@@ -86,38 +169,71 @@
 
           <!-- Function Picker -->
           <div v-if="editor && availableFunctions?.length" @click.stop>
-            <v-menu v-model="functionMenu" :close-on-content-click="false" :close-on-back="false">
+            <v-menu
+              v-model="functionMenu"
+              :close-on-content-click="false"
+              :close-on-back="false"
+            >
               <template #activator="{ props: menuProps }">
-                <v-btn v-bind="menuProps" icon size="x-small" variant="text" color="default"
-                  :disabled="disabled || isOverLimit" title="Insert function">
+                <v-btn
+                  v-bind="menuProps"
+                  icon
+                  size="x-small"
+                  variant="text"
+                  color="default"
+                  :disabled="disabled || isOverLimit"
+                  title="Insert function"
+                >
                   <v-icon>$function</v-icon>
                 </v-btn>
               </template>
 
               <v-card min-width="280" max-width="320" @click.stop>
                 <v-card-text class="pa-3">
-                  <div class="d-flex align-center mb-2" style="gap:8px">
-                    <v-text-field v-model="functionSearch" placeholder="Search functions..." density="compact"
-                      variant="outlined" hide-details prepend-inner-icon="$magnify" class="flex-grow-1" autofocus
-                      @keyup.esc="closeFunctionMenu" />
-                    <v-btn icon size="small" variant="text" title="Close" @click="closeFunctionMenu">
+                  <div class="d-flex align-center mb-2" style="gap: 8px">
+                    <v-text-field
+                      v-model="functionSearch"
+                      placeholder="Search functions..."
+                      density="compact"
+                      variant="outlined"
+                      hide-details
+                      prepend-inner-icon="$magnify"
+                      class="flex-grow-1"
+                      autofocus
+                      @keyup.esc="closeFunctionMenu"
+                    />
+                    <v-btn
+                      icon
+                      size="small"
+                      variant="text"
+                      title="Close"
+                      @click="closeFunctionMenu"
+                    >
                       <v-icon>$close</v-icon>
                     </v-btn>
                   </div>
                   <div class="var-list-outer">
                     <PerfectScrollbar class="var-list-ps">
                       <v-list density="compact" class="pa-0">
-                        <v-list-item v-for="fn in filteredFunctions" :key="fn" class="cursor-pointer"
-                          @click="insertFunction(fn)">
+                        <v-list-item
+                          v-for="fn in filteredFunctions"
+                          :key="fn"
+                          class="cursor-pointer"
+                          @click="insertFunction(fn)"
+                        >
                           {{ fn }}
                         </v-list-item>
                         <v-list-item v-if="filteredFunctions.length === 0">
-                          <span class="text-caption text-medium-emphasis">No functions found</span>
+                          <span class="text-caption text-medium-emphasis"
+                            >No functions found</span
+                          >
                         </v-list-item>
                       </v-list>
                     </PerfectScrollbar>
                   </div>
-                  <p class="text-caption text-medium-emphasis text-center mt-2 mb-0">
+                  <p
+                    class="text-caption text-medium-emphasis text-center mt-2 mb-0"
+                  >
                     Esc or × to close
                   </p>
                 </v-card-text>
@@ -134,19 +250,30 @@
         <span v-if="errorMessages?.length" class="text-error text-caption">
           {{ Array.isArray(errorMessages) ? errorMessages[0] : errorMessages }}
         </span>
-        <span v-else-if="hint" class="text-caption text-medium-emphasis">{{ hint }}</span>
+        <span v-else-if="hint" class="text-caption text-medium-emphasis">{{
+          hint
+        }}</span>
       </div>
 
       <!-- Character Counter -->
-      <div v-if="showCharacterCount" class="text-caption mr-3" :class="{
-        'text-error': isOverLimit,
-        'text-disabled': !isOverLimit && characterCount > 0,
-        'text-grey': characterCount === 0,
-      }">
+      <div
+        v-if="showCharacterCount"
+        class="text-caption mr-3"
+        :class="{
+          'text-error': isOverLimit,
+          'text-disabled': !isOverLimit && characterCount > 0,
+          'text-grey': characterCount === 0,
+        }"
+      >
         {{ characterCount }} / {{ effectiveMaxLength }} characters
         <v-tooltip v-if="effectiveMaxLength" location="top">
           <template #activator="{ props }">
-            <v-icon v-bind="props" size="x-small" class="ml-1" :color="isOverLimit ? 'error' : 'grey'">
+            <v-icon
+              v-bind="props"
+              size="x-small"
+              class="ml-1"
+              :color="isOverLimit ? 'error' : 'grey'"
+            >
               $information
             </v-icon>
           </template>
@@ -154,12 +281,18 @@
         </v-tooltip>
       </div>
     </div>
-
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import {
+  ref,
+  computed,
+  watch,
+  onMounted,
+  onBeforeUnmount,
+  nextTick,
+} from "vue";
 import { Editor, EditorContent } from "@tiptap/vue-3";
 import { Node, Mark } from "@tiptap/core";
 import { PerfectScrollbar } from "vue3-perfect-scrollbar";
@@ -181,13 +314,17 @@ const props = withDefaults(
     maxLength?: number;
     minRows?: number;
     maxRows?: number;
+    /** Same density scale as RichTextField — default / comfortable / compact. */
+    density?: "default" | "comfortable" | "compact";
+    /** "outlined" (default) or "plain" (frameless, inline contexts). */
+    variant?: "outlined" | "plain";
     fieldType?:
-    | "header"
-    | "body"
-    | "footer"
-    | "button"
-    | "title"
-    | "description";
+      | "header"
+      | "body"
+      | "footer"
+      | "button"
+      | "title"
+      | "description";
   }>(),
   {
     placeholder: "Type here...",
@@ -197,8 +334,10 @@ const props = withDefaults(
     maxLength: 255,
     minRows: 3,
     maxRows: 10,
+    density: "default",
+    variant: "outlined",
     fieldType: "body",
-  }
+  },
 );
 
 const emit = defineEmits<{
@@ -237,7 +376,9 @@ const effectiveMaxLength = computed(() => {
   return FIELD_LIMITS[props.fieldType] || 255;
 });
 
-const isOverLimit = computed(() => characterCount.value > effectiveMaxLength.value);
+const isOverLimit = computed(
+  () => characterCount.value > effectiveMaxLength.value,
+);
 const showCharacterCount = computed(() => !props.hideDetails);
 const minHeightPx = computed(() => props.minRows * LINE_HEIGHT);
 const maxHeightPx = computed(() => props.maxRows * LINE_HEIGHT);
@@ -245,13 +386,13 @@ const maxHeightPx = computed(() => props.maxRows * LINE_HEIGHT);
 const filteredVariables = computed(() => {
   const vars = props.availableVariables ?? [];
   const q = variableSearch.value.toLowerCase().trim();
-  return q ? vars.filter(v => v.toLowerCase().includes(q)) : vars;
+  return q ? vars.filter((v) => v.toLowerCase().includes(q)) : vars;
 });
 
 const filteredFunctions = computed(() => {
   const fns = props.availableFunctions ?? [];
   const q = functionSearch.value.toLowerCase().trim();
-  return q ? fns.filter(f => f.toLowerCase().includes(q)) : fns;
+  return q ? fns.filter((f) => f.toLowerCase().includes(q)) : fns;
 });
 
 // ── hasDocumentContent ─────────────────────────────────────────────────────
@@ -286,170 +427,335 @@ function updateEditorHeight() {
   if (!wrapper || !inner) return;
 
   const naturalHeight = inner.scrollHeight;
-  const clamped = Math.min(Math.max(naturalHeight, minHeightPx.value), maxHeightPx.value);
+  const clamped = Math.min(
+    Math.max(naturalHeight, minHeightPx.value),
+    maxHeightPx.value,
+  );
 
   wrapper.style.height = `${clamped}px`;
-  wrapper.style.overflowY = naturalHeight > maxHeightPx.value ? "auto" : "hidden";
+  wrapper.style.overflowY =
+    naturalHeight > maxHeightPx.value ? "auto" : "hidden";
 }
 
 // ── Menu helpers ───────────────────────────────────────────────────────────
-const closeVariableMenu = () => { variableMenu.value = false; variableSearch.value = ""; };
-const closeFunctionMenu = () => { functionMenu.value = false; functionSearch.value = ""; };
+const closeVariableMenu = () => {
+  variableMenu.value = false;
+  variableSearch.value = "";
+};
+const closeFunctionMenu = () => {
+  functionMenu.value = false;
+  functionSearch.value = "";
+};
 
 const insertVariable = (variable: string) => {
   if (isOverLimit.value) return;
-  editor.value?.chain().focus().insertContent({ type: "variable", attrs: { name: variable } }).run();
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({ type: "variable", attrs: { name: variable } })
+    .run();
   // keep menu open so user can insert multiple
 };
 
 const insertFunction = (fn: string) => {
   if (isOverLimit.value) return;
-  editor.value?.chain().focus().insertContent({ type: "function", attrs: { name: fn } }).run();
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({ type: "function", attrs: { name: fn } })
+    .run();
   // keep menu open so user can insert multiple
 };
 
 // ── Editor actions ─────────────────────────────────────────────────────────
-const focusEditor = () => { if (!props.disabled) editor.value?.commands.focus(); };
-const toggleBold = () => { if (!isOverLimit.value) editor.value?.chain().focus().toggleMark("whatsappBold").run(); };
-const toggleItalic = () => { if (!isOverLimit.value) editor.value?.chain().focus().toggleMark("whatsappItalic").run(); };
-const toggleStrike = () => { if (!isOverLimit.value) editor.value?.chain().focus().toggleMark("whatsappStrike").run(); };
-const toggleCode = () => { if (!isOverLimit.value) editor.value?.chain().focus().toggleMark("whatsappCode").run(); };
+const focusEditor = () => {
+  if (!props.disabled) editor.value?.commands.focus();
+};
+const toggleBold = () => {
+  if (!isOverLimit.value)
+    editor.value?.chain().focus().toggleMark("whatsappBold").run();
+};
+const toggleItalic = () => {
+  if (!isOverLimit.value)
+    editor.value?.chain().focus().toggleMark("whatsappItalic").run();
+};
+const toggleStrike = () => {
+  if (!isOverLimit.value)
+    editor.value?.chain().focus().toggleMark("whatsappStrike").run();
+};
+const toggleCode = () => {
+  if (!isOverLimit.value)
+    editor.value?.chain().focus().toggleMark("whatsappCode").run();
+};
 
 // ── TipTap marks ───────────────────────────────────────────────────────────
 const WhatsAppBold = Mark.create({
-  name: "whatsappBold", priority: 1000, keepOnSplit: false,
-  parseHTML() { return [{ tag: "strong" }, { style: "font-weight", getAttrs: (v: any) => v === "bold" && null }]; },
-  renderHTML() { return ["strong", 0]; },
-  addCommands() { return { toggleWhatsAppBold: () => ({ commands }: any) => commands.toggleMark(this.name) }; },
-  addKeyboardShortcuts() { return { "Mod-b": () => this.editor.commands.toggleMark(this.name) }; },
+  name: "whatsappBold",
+  priority: 1000,
+  keepOnSplit: false,
+  parseHTML() {
+    return [
+      { tag: "strong" },
+      { style: "font-weight", getAttrs: (v: any) => v === "bold" && null },
+    ];
+  },
+  renderHTML() {
+    return ["strong", 0];
+  },
+  addCommands() {
+    return {
+      toggleWhatsAppBold:
+        () =>
+        ({ commands }: any) =>
+          commands.toggleMark(this.name),
+    };
+  },
+  addKeyboardShortcuts() {
+    return { "Mod-b": () => this.editor.commands.toggleMark(this.name) };
+  },
 });
 
 const WhatsAppItalic = Mark.create({
-  name: "whatsappItalic", priority: 1000, keepOnSplit: false,
-  parseHTML() { return [{ tag: "em" }, { style: "font-style", getAttrs: (v: any) => v === "italic" && null }]; },
-  renderHTML() { return ["em", 0]; },
-  addCommands() { return { toggleWhatsAppItalic: () => ({ commands }: any) => commands.toggleMark(this.name) }; },
-  addKeyboardShortcuts() { return { "Mod-i": () => this.editor.commands.toggleMark(this.name) }; },
+  name: "whatsappItalic",
+  priority: 1000,
+  keepOnSplit: false,
+  parseHTML() {
+    return [
+      { tag: "em" },
+      { style: "font-style", getAttrs: (v: any) => v === "italic" && null },
+    ];
+  },
+  renderHTML() {
+    return ["em", 0];
+  },
+  addCommands() {
+    return {
+      toggleWhatsAppItalic:
+        () =>
+        ({ commands }: any) =>
+          commands.toggleMark(this.name),
+    };
+  },
+  addKeyboardShortcuts() {
+    return { "Mod-i": () => this.editor.commands.toggleMark(this.name) };
+  },
 });
 
 const WhatsAppStrike = Mark.create({
-  name: "whatsappStrike", priority: 1000, keepOnSplit: false,
+  name: "whatsappStrike",
+  priority: 1000,
+  keepOnSplit: false,
   parseHTML() {
     return [
-      { tag: "s" }, { tag: "del" }, { tag: "strike" },
-      { style: "text-decoration", getAttrs: (v: any) => v === "line-through" && null },
+      { tag: "s" },
+      { tag: "del" },
+      { tag: "strike" },
+      {
+        style: "text-decoration",
+        getAttrs: (v: any) => v === "line-through" && null,
+      },
     ];
   },
-  renderHTML() { return ["s", 0]; },
-  addCommands() { return { toggleWhatsAppStrike: () => ({ commands }: any) => commands.toggleMark(this.name) }; },
-  addKeyboardShortcuts() { return { "Mod-Shift-x": () => this.editor.commands.toggleMark(this.name) }; },
+  renderHTML() {
+    return ["s", 0];
+  },
+  addCommands() {
+    return {
+      toggleWhatsAppStrike:
+        () =>
+        ({ commands }: any) =>
+          commands.toggleMark(this.name),
+    };
+  },
+  addKeyboardShortcuts() {
+    return { "Mod-Shift-x": () => this.editor.commands.toggleMark(this.name) };
+  },
 });
 
 const WhatsAppCode = Mark.create({
-  name: "whatsappCode", priority: 1000, keepOnSplit: false, inclusive: false,
-  parseHTML() { return [{ tag: "code" }]; },
-  renderHTML() { return ["code", 0]; },
-  addCommands() { return { toggleWhatsAppCode: () => ({ commands }: any) => commands.toggleMark(this.name) }; },
-  addKeyboardShortcuts() { return { "Mod-e": () => this.editor.commands.toggleMark(this.name) }; },
+  name: "whatsappCode",
+  priority: 1000,
+  keepOnSplit: false,
+  inclusive: false,
+  parseHTML() {
+    return [{ tag: "code" }];
+  },
+  renderHTML() {
+    return ["code", 0];
+  },
+  addCommands() {
+    return {
+      toggleWhatsAppCode:
+        () =>
+        ({ commands }: any) =>
+          commands.toggleMark(this.name),
+    };
+  },
+  addKeyboardShortcuts() {
+    return { "Mod-e": () => this.editor.commands.toggleMark(this.name) };
+  },
 });
 
 // ── TipTap nodes ───────────────────────────────────────────────────────────
 const VariableNode = Node.create({
-  name: "variable", group: "inline", inline: true, atom: true,
-  addAttributes() { return { name: { default: "" } }; },
-  parseHTML() { return [{ tag: "span[data-variable]" }]; },
+  name: "variable",
+  group: "inline",
+  inline: true,
+  atom: true,
+  addAttributes() {
+    return { name: { default: "" } };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-variable]" }];
+  },
   renderHTML({ node }) {
-    return ["span", {
-      "data-variable": node.attrs.name,
-      class: "variable-badge",
-      contenteditable: "false",
-    }, `$${node.attrs.name}`];
+    return [
+      "span",
+      {
+        "data-variable": node.attrs.name,
+        class: "variable-badge",
+        contenteditable: "false",
+      },
+      `$${node.attrs.name}`,
+    ];
   },
   addKeyboardShortcuts() {
     return {
-      Backspace: () => this.editor.commands.command(({ tr, state }) => {
-        const { empty, $from } = state.selection;
-        if (!empty) return false;
-        const n = $from.nodeBefore;
-        if (n?.type.name === "variable") { tr.delete($from.pos - n.nodeSize, $from.pos); return true; }
-        return false;
-      }),
-      Delete: () => this.editor.commands.command(({ tr, state }) => {
-        const { empty, $from } = state.selection;
-        if (!empty) return false;
-        const n = $from.nodeAfter;
-        if (n?.type.name === "variable") { tr.delete($from.pos, $from.pos + n.nodeSize); return true; }
-        return false;
-      }),
+      Backspace: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeBefore;
+          if (n?.type.name === "variable") {
+            tr.delete($from.pos - n.nodeSize, $from.pos);
+            return true;
+          }
+          return false;
+        }),
+      Delete: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeAfter;
+          if (n?.type.name === "variable") {
+            tr.delete($from.pos, $from.pos + n.nodeSize);
+            return true;
+          }
+          return false;
+        }),
     };
   },
 });
 
 const FunctionNode = Node.create({
-  name: "function", group: "inline", inline: true, atom: true,
-  addAttributes() { return { name: { default: "" } }; },
-  parseHTML() { return [{ tag: "span[data-function]" }]; },
+  name: "function",
+  group: "inline",
+  inline: true,
+  atom: true,
+  addAttributes() {
+    return { name: { default: "" } };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-function]" }];
+  },
   renderHTML({ node }) {
-    return ["span", {
-      "data-function": node.attrs.name,
-      class: "function-badge",
-      contenteditable: "false",
-    }, `f(x) ${node.attrs.name}`];
+    return [
+      "span",
+      {
+        "data-function": node.attrs.name,
+        class: "function-badge",
+        contenteditable: "false",
+      },
+      `f(x) ${node.attrs.name}`,
+    ];
   },
   addKeyboardShortcuts() {
     return {
-      Backspace: () => this.editor.commands.command(({ tr, state }) => {
-        const { empty, $from } = state.selection;
-        if (!empty) return false;
-        const n = $from.nodeBefore;
-        if (n?.type.name === "function") { tr.delete($from.pos - n.nodeSize, $from.pos); return true; }
-        return false;
-      }),
-      Delete: () => this.editor.commands.command(({ tr, state }) => {
-        const { empty, $from } = state.selection;
-        if (!empty) return false;
-        const n = $from.nodeAfter;
-        if (n?.type.name === "function") { tr.delete($from.pos, $from.pos + n.nodeSize); return true; }
-        return false;
-      }),
+      Backspace: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeBefore;
+          if (n?.type.name === "function") {
+            tr.delete($from.pos - n.nodeSize, $from.pos);
+            return true;
+          }
+          return false;
+        }),
+      Delete: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          const { empty, $from } = state.selection;
+          if (!empty) return false;
+          const n = $from.nodeAfter;
+          if (n?.type.name === "function") {
+            tr.delete($from.pos, $from.pos + n.nodeSize);
+            return true;
+          }
+          return false;
+        }),
     };
   },
 });
 
-const DocumentNode = Node.create({ name: "doc", topNode: true, content: "block+" });
+const DocumentNode = Node.create({
+  name: "doc",
+  topNode: true,
+  content: "block+",
+});
 const ParagraphNode = Node.create({
-  name: "paragraph", group: "block", content: "inline*",
-  parseHTML() { return [{ tag: "p" }]; },
-  renderHTML() { return ["p", 0]; },
+  name: "paragraph",
+  group: "block",
+  content: "inline*",
+  parseHTML() {
+    return [{ tag: "p" }];
+  },
+  renderHTML() {
+    return ["p", 0];
+  },
 });
 const TextNode = Node.create({ name: "text", group: "inline" });
 
 // ── Serialise ──────────────────────────────────────────────────────────────
 function serializeEditorState(ed: Editor): string {
-  return (ed.getJSON().content ?? []).map((block: any) => {
-    if (!block?.content) return "";
-    return block.content.map((node: any) => {
-      if (node.type === "variable") return `$${node.attrs.name}`;
-      if (node.type === "function") return `f(x) ${node.attrs.name}`;
-      let t = node.text ?? "";
-      if (node.marks) {
-        const order: Record<string, number> = {
-          whatsappBold: 1, whatsappItalic: 2, whatsappStrike: 3, whatsappCode: 4,
-        };
-        [...node.marks]
-          .sort((a, b) => (order[a.type] ?? 99) - (order[b.type] ?? 99))
-          .forEach((mark: any) => {
-            switch (mark.type) {
-              case "whatsappBold": t = `*${t}*`; break;
-              case "whatsappItalic": t = `_${t}_`; break;
-              case "whatsappStrike": t = `~${t}~`; break;
-              case "whatsappCode": t = `\`${t}\``; break;
-            }
-          });
-      }
-      return t;
-    }).join("");
-  }).join("\n");
+  return (ed.getJSON().content ?? [])
+    .map((block: any) => {
+      if (!block?.content) return "";
+      return block.content
+        .map((node: any) => {
+          if (node.type === "variable") return `$${node.attrs.name}`;
+          if (node.type === "function") return `f(x) ${node.attrs.name}`;
+          let t = node.text ?? "";
+          if (node.marks) {
+            const order: Record<string, number> = {
+              whatsappBold: 1,
+              whatsappItalic: 2,
+              whatsappStrike: 3,
+              whatsappCode: 4,
+            };
+            [...node.marks]
+              .sort((a, b) => (order[a.type] ?? 99) - (order[b.type] ?? 99))
+              .forEach((mark: any) => {
+                switch (mark.type) {
+                  case "whatsappBold":
+                    t = `*${t}*`;
+                    break;
+                  case "whatsappItalic":
+                    t = `_${t}_`;
+                    break;
+                  case "whatsappStrike":
+                    t = `~${t}~`;
+                    break;
+                  case "whatsappCode":
+                    t = `\`${t}\``;
+                    break;
+                }
+              });
+          }
+          return t;
+        })
+        .join("");
+    })
+    .join("\n");
 }
 
 function parseFormattedText(text: string): any[] {
@@ -472,12 +778,15 @@ function parseFormattedText(text: string): any[] {
 
   const nodes: any[] = [];
   let last = 0;
-  matches.forEach(match => {
-    if (match.index > last) nodes.push({ type: "text", text: text.slice(last, match.index) });
-    parseFormattedText(match.content).forEach(n => {
-      nodes.push(n.type === "text"
-        ? { ...n, marks: [...(n.marks ?? []), { type: match.type }] }
-        : n);
+  matches.forEach((match) => {
+    if (match.index > last)
+      nodes.push({ type: "text", text: text.slice(last, match.index) });
+    parseFormattedText(match.content).forEach((n) => {
+      nodes.push(
+        n.type === "text"
+          ? { ...n, marks: [...(n.marks ?? []), { type: match.type }] }
+          : n,
+      );
     });
     last = match.index + match.fullMatch.length;
   });
@@ -489,15 +798,18 @@ function parseValue(value: string | null | undefined): any {
   if (!value) return { type: "doc", content: [{ type: "paragraph" }] };
   return {
     type: "doc",
-    content: value.split(/\r?\n/).map(line => {
+    content: value.split(/\r?\n/).map((line) => {
       // Match $varName OR f(x) funcName
-      const tokenRe = /\$([a-zA-Z_][a-zA-Z0-9_]*)|f\(x\)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      const tokenRe =
+        /\$([a-zA-Z_][a-zA-Z0-9_]*)|f\(x\)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
       const tokenMatches = Array.from(line.matchAll(tokenRe));
-      if (!tokenMatches.length) return { type: "paragraph", content: parseFormattedText(line) };
+      if (!tokenMatches.length)
+        return { type: "paragraph", content: parseFormattedText(line) };
       const nodes: any[] = [];
       let pos = 0;
-      tokenMatches.forEach(m => {
-        if (m.index! > pos) nodes.push(...parseFormattedText(line.slice(pos, m.index)));
+      tokenMatches.forEach((m) => {
+        if (m.index! > pos)
+          nodes.push(...parseFormattedText(line.slice(pos, m.index)));
         if (m[1] !== undefined) {
           nodes.push({ type: "variable", attrs: { name: m[1] } });
         } else {
@@ -516,9 +828,15 @@ onMounted(() => {
   editor.value = new Editor({
     content: parseValue(props.modelValue),
     extensions: [
-      DocumentNode, ParagraphNode, TextNode,
-      WhatsAppBold, WhatsAppItalic, WhatsAppStrike, WhatsAppCode,
-      VariableNode, FunctionNode,
+      DocumentNode,
+      ParagraphNode,
+      TextNode,
+      WhatsAppBold,
+      WhatsAppItalic,
+      WhatsAppStrike,
+      WhatsAppCode,
+      VariableNode,
+      FunctionNode,
     ],
     onUpdate: ({ editor: ed }) => {
       const content = serializeEditorState(ed);
@@ -533,8 +851,14 @@ onMounted(() => {
       hasContent.value = hasDocumentContent(ed);
       nextTick(updateEditorHeight);
     },
-    onFocus: () => { isFocused.value = true; emit("focus"); },
-    onBlur: () => { isFocused.value = false; emit("blur"); },
+    onFocus: () => {
+      isFocused.value = true;
+      emit("focus");
+    },
+    onBlur: () => {
+      isFocused.value = false;
+      emit("blur");
+    },
     onTransaction: ({ transaction }) => {
       if (transaction.docChanged) nextTick(updateEditorHeight);
     },
@@ -553,19 +877,31 @@ onMounted(() => {
   });
 });
 
-watch(() => props.modelValue, (newVal) => {
-  if (!editor.value) return;
-  if (newVal !== serializeEditorState(editor.value)) {
-    editor.value.commands.setContent(parseValue(newVal));
-    // Walk the tree — don't rely on textContent for atom nodes
-    hasContent.value = hasDocumentContent(editor.value);
-    characterCount.value = editor.value.state.doc.textContent.length;
-    nextTick(() => { updateEditorHeight(); setTimeout(updateEditorHeight, 10); });
-  }
-}, { deep: true });
+watch(
+  () => props.modelValue,
+  (newVal) => {
+    if (!editor.value) return;
+    if (newVal !== serializeEditorState(editor.value)) {
+      editor.value.commands.setContent(parseValue(newVal));
+      // Walk the tree — don't rely on textContent for atom nodes
+      hasContent.value = hasDocumentContent(editor.value);
+      characterCount.value = editor.value.state.doc.textContent.length;
+      nextTick(() => {
+        updateEditorHeight();
+        setTimeout(updateEditorHeight, 10);
+      });
+    }
+  },
+  { deep: true },
+);
 
-watch([() => props.minRows, () => props.maxRows], () => nextTick(updateEditorHeight));
-watch(() => props.disabled, d => editor.value?.setEditable(!d));
+watch([() => props.minRows, () => props.maxRows], () =>
+  nextTick(updateEditorHeight),
+);
+watch(
+  () => props.disabled,
+  (d) => editor.value?.setEditable(!d),
+);
 
 onBeforeUnmount(() => editor.value?.destroy());
 </script>
@@ -582,8 +918,11 @@ onBeforeUnmount(() => editor.value?.destroy());
   border-radius: 9px;
   padding-left: 12px;
   padding-right: 12px;
-  min-height: max(var(--v-input-control-height, 56px),
-      1.5rem + var(--v-field-input-padding-top) + var(--v-field-input-padding-bottom));
+  min-height: max(
+    var(--v-input-control-height, 56px),
+    1.5rem + var(--v-field-input-padding-top) +
+      var(--v-field-input-padding-bottom)
+  );
   display: flex;
   flex-direction: column;
   transition: border-color 0.2s ease;
@@ -602,6 +941,41 @@ onBeforeUnmount(() => editor.value?.destroy());
   opacity: 0.6;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* ── Density variants — same scale as RichTextField ─────────────────────── */
+.editor-container--density-comfortable {
+  min-height: 48px;
+}
+
+.editor-container--density-compact {
+  min-height: 40px;
+}
+
+.editor-container--density-compact .editor-bottom-toolbar {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  margin-top: 2px;
+}
+
+.editor-container--density-compact .editor-label {
+  font-size: 13px;
+}
+
+/* ── Variant: plain ───────────────────────────────────────────────────────
+   Frameless look for inline contexts, matching RichTextField's plain variant. */
+.editor-container--variant-plain {
+  border-color: transparent;
+  background: transparent;
+}
+
+.editor-container--variant-plain.is-focused {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgb(var(--v-theme-surface));
+}
+
+.editor-container--variant-plain.has-error {
+  border-color: rgb(var(--v-theme-error));
 }
 
 .editor-label {

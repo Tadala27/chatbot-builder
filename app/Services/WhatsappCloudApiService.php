@@ -120,7 +120,7 @@ class WhatsappCloudApiService
             return $data;
         } catch (RequestException $e) {
             $errorData = $e->response->json();
-            $message = $errorData['error']['message'] ?? $e->getMessage();
+            $message = $errorData['error']['error_user_msg'] ?? $e->getMessage();
 
             Log::error('WhatsApp API error', [
                 'message' => $message,
@@ -149,7 +149,7 @@ class WhatsappCloudApiService
             return $data;
         } catch (RequestException $e) {
             $errorData = $e->response->json();
-            $message = $errorData['error']['message'] ?? $e->getMessage();
+            $message = $errorData['error']['error_user_msg'] ?? $e->getMessage();
 
             Log::error('WhatsApp API error', [
                 'message' => $message,

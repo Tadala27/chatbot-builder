@@ -131,7 +131,7 @@ return [
      * (view the latest version of this package's migration file)
      */
 
-    'guard_name' => 'tenant', // default for tenant users
+    'guard_name' => 'system', // default for tenant users
 
     'teams' => false, // unless you want team-scoped permissions
 

@@ -31,6 +31,7 @@ class WhatsappPhoneIndexSync
         WhatsappPhoneIndex::on($this->landlordConnection())->updateOrCreate(
             ['phone_number_id' => $account->phone_number_id],
             [
+                'phone_number' => $account->phone_number,
                 'tenant_id' => $tenant->id,
                 'verify_token' => $account->webhook_verify_token,
             ]

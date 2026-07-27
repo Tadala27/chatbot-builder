@@ -44,7 +44,7 @@ onMounted(async () => {
     elevation="0"
     :priority="priority"
     height="55"
-    class="px-sm-10 px-5"
+    class="px-sm-10 px-5 bg-white"
   >
     <!-- Search mobile -->
     <VMenu

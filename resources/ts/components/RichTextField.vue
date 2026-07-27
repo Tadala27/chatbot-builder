@@ -1,3 +1,5 @@
+<!-- RichTextField.vue -->
+
 <template>
   <div class="variable-text-field">
     <!-- Label -->
@@ -6,16 +8,28 @@
     </v-label>
 
     <!-- Field Container -->
-    <div ref="fieldContainer" class="field-container" :class="{
-      'is-focused': isFocused,
-      'has-error': errorMessages?.length || isOverLimit,
-      'is-disabled': disabled,
-    }" @click="focusEditor">
+    <div
+      ref="fieldContainer"
+      class="field-container"
+      :class="[
+        `field-container--density-${density}`,
+        `field-container--variant-${variant}`,
+        {
+          'is-focused': isFocused,
+          'has-error': errorMessages?.length || isOverLimit,
+          'is-disabled': disabled,
+        },
+      ]"
+      @click="focusEditor"
+    >
       <!-- Floating Label -->
-      <label class="field-label" :class="{
-        'field-label-floating': isFocused || hasContent,
-        'text-error': errorMessages?.length || isOverLimit,
-      }">
+      <label
+        class="field-label"
+        :class="{
+          'field-label-floating': isFocused || hasContent,
+          'text-error': errorMessages?.length || isOverLimit,
+        }"
+      >
         {{ placeholder }}
       </label>
 
@@ -24,25 +38,44 @@
 
       <!-- Pickers row — positioned at bottom-right like original variable picker -->
       <div class="pickers-row" @click.stop>
-
         <!-- Variable Picker -->
         <div v-if="editor && availableVariables?.length">
           <v-menu v-model="variableMenu" :close-on-content-click="false">
             <template #activator="{ props: menuProps }">
-              <v-btn v-bind="menuProps" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
-                title="Insert Variable">
+              <v-btn
+                v-bind="menuProps"
+                icon
+                size="x-small"
+                variant="text"
+                :disabled="disabled || isOverLimit"
+                title="Insert Variable"
+              >
                 <v-icon>$xml</v-icon>
               </v-btn>
             </template>
 
             <v-card min-width="250" max-width="300">
               <v-card-text class="pa-2">
-                <v-text-field v-model="variableSearch" placeholder="Search variables..." density="compact"
-                  variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
+                <v-text-field
+                  v-model="variableSearch"
+                  placeholder="Search variables..."
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  prepend-inner-icon="$magnify"
+                  class="mb-2"
+                />
 
-                <v-list density="compact" style="max-height: 250px; overflow-y: auto">
-                  <v-list-item v-for="variable in filteredVariables" :key="variable" class="cursor-pointer"
-                    @click="insertVariable(variable)">
+                <v-list
+                  density="compact"
+                  style="max-height: 250px; overflow-y: auto"
+                >
+                  <v-list-item
+                    v-for="variable in filteredVariables"
+                    :key="variable"
+                    class="cursor-pointer"
+                    @click="insertVariable(variable)"
+                  >
                     <v-list-item-title>
                       <v-chip size="small" color="primary" variant="tonal">
                         ${{ variable }}
@@ -65,20 +98,40 @@
         <div v-if="editor && availableFunctions?.length">
           <v-menu v-model="functionMenu" :close-on-content-click="false">
             <template #activator="{ props: menuProps }">
-              <v-btn v-bind="menuProps" icon size="x-small" variant="text" :disabled="disabled || isOverLimit"
-                title="Insert Function">
+              <v-btn
+                v-bind="menuProps"
+                icon
+                size="x-small"
+                variant="text"
+                :disabled="disabled || isOverLimit"
+                title="Insert Function"
+              >
                 <v-icon>$function</v-icon>
               </v-btn>
             </template>
 
             <v-card min-width="250" max-width="300">
               <v-card-text class="pa-2">
-                <v-text-field v-model="functionSearch" placeholder="Search functions..." density="compact"
-                  variant="outlined" hide-details prepend-inner-icon="$magnify" class="mb-2" />
+                <v-text-field
+                  v-model="functionSearch"
+                  placeholder="Search functions..."
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  prepend-inner-icon="$magnify"
+                  class="mb-2"
+                />
 
-                <v-list density="compact" style="max-height: 250px; overflow-y: auto">
-                  <v-list-item v-for="fn in filteredFunctions" :key="fn" class="cursor-pointer"
-                    @click="insertFunction(fn)">
+                <v-list
+                  density="compact"
+                  style="max-height: 250px; overflow-y: auto"
+                >
+                  <v-list-item
+                    v-for="fn in filteredFunctions"
+                    :key="fn"
+                    class="cursor-pointer"
+                    @click="insertFunction(fn)"
+                  >
                     <v-list-item-title>
                       <v-chip size="small" color="secondary" variant="tonal">
                         f(x){{ fn }}
@@ -96,34 +149,45 @@
             </v-card>
           </v-menu>
         </div>
-
       </div>
     </div>
 
     <!-- Character Count and Error Messages -->
-    <div class="d-flex justify-space-between align-start mt-1">
+    <div
+      v-if="!hideDetails"
+      class="d-flex justify-space-between align-start mt-1"
+    >
       <div>
         <!-- Error Messages -->
-        <div v-if="errorMessages?.length && !hideDetails" class="text-error text-caption ml-3">
+        <div v-if="errorMessages?.length" class="text-error text-caption ml-3">
           {{ Array.isArray(errorMessages) ? errorMessages[0] : errorMessages }}
         </div>
 
         <!-- Hint -->
-        <div v-if="hint && !errorMessages?.length && !hideDetails" class="text-caption ml-3">
+        <div v-if="hint && !errorMessages?.length" class="text-caption ml-3">
           {{ hint }}
         </div>
       </div>
 
       <!-- Character Counter -->
-      <div v-if="showCharacterCount" class="text-caption mr-3" :class="{
-        'text-error': isOverLimit,
-        'text-disabled': !isOverLimit && characterCount > 0,
-        'text-grey': characterCount === 0,
-      }">
+      <div
+        v-if="showCharacterCount"
+        class="text-caption mr-3"
+        :class="{
+          'text-error': isOverLimit,
+          'text-disabled': !isOverLimit && characterCount > 0,
+          'text-grey': characterCount === 0,
+        }"
+      >
         {{ characterCount }} / {{ effectiveMaxLength }} characters
         <v-tooltip v-if="effectiveMaxLength" location="top">
           <template #activator="{ props }">
-            <v-icon v-bind="props" size="x-small" class="ml-1" :color="isOverLimit ? 'error' : 'grey'">
+            <v-icon
+              v-bind="props"
+              size="x-small"
+              class="ml-1"
+              :color="isOverLimit ? 'error' : 'grey'"
+            >
               $information
             </v-icon>
           </template>
@@ -152,19 +216,32 @@ const props = withDefaults(
     disabled?: boolean;
     hideDetails?: boolean;
     maxLength?: number;
+    /**
+     * Mirrors Vuetify's density scale so this field can sit flush next to
+     * v-select / v-text-field / v-btn siblings in the same flex row and
+     * actually match their height instead of always rendering at 56px.
+     */
+    density?: "default" | "comfortable" | "compact";
+    /**
+     * "outlined" (default) keeps the bordered box. "plain" strips the
+     * border/background for inline contexts like row & section titles.
+     */
+    variant?: "outlined" | "plain";
     fieldType?:
-    | "header"
-    | "body"
-    | "footer"
-    | "button"
-    | "title"
-    | "url"
-    | "description";
+      | "header"
+      | "body"
+      | "footer"
+      | "button"
+      | "title"
+      | "url"
+      | "description";
   }>(),
   {
     disabled: false,
     hideDetails: false,
     maxLength: 255,
+    density: "default",
+    variant: "outlined",
     fieldType: "body",
   },
 );
@@ -201,14 +278,18 @@ const filteredVariables = computed(() => {
   if (!props.availableVariables) return [];
   const query = variableSearch.value.toLowerCase().trim();
   if (!query) return props.availableVariables;
-  return props.availableVariables.filter((v) => v.toLowerCase().includes(query));
+  return props.availableVariables.filter((v) =>
+    v.toLowerCase().includes(query),
+  );
 });
 
 const filteredFunctions = computed(() => {
   if (!props.availableFunctions) return [];
   const query = functionSearch.value.toLowerCase().trim();
   if (!query) return props.availableFunctions;
-  return props.availableFunctions.filter((f) => f.toLowerCase().includes(query));
+  return props.availableFunctions.filter((f) =>
+    f.toLowerCase().includes(query),
+  );
 });
 
 const effectiveMaxLength = computed(() => {
@@ -216,8 +297,12 @@ const effectiveMaxLength = computed(() => {
   return FIELD_LIMITS[props.fieldType] || 255;
 });
 
-const isOverLimit = computed(() => characterCount.value > effectiveMaxLength.value);
-const showCharacterCount = computed(() => !props.hideDetails && effectiveMaxLength.value > 0);
+const isOverLimit = computed(
+  () => characterCount.value > effectiveMaxLength.value,
+);
+const showCharacterCount = computed(
+  () => !props.hideDetails && effectiveMaxLength.value > 0,
+);
 
 // ── hasDocumentContent ─────────────────────────────────────────────────────
 // Recognises variable nodes, function nodes, and non-empty text so the
@@ -382,7 +467,8 @@ function parseValue(value: string | null | undefined): any {
     if (!line.length) return { type: "paragraph", content: [] };
 
     // Match $varName OR f(x) funcName
-    const tokenRe = /\$([a-zA-Z_][a-zA-Z0-9_]*)|f\(x\)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+    const tokenRe =
+      /\$([a-zA-Z_][a-zA-Z0-9_]*)|f\(x\)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
     const matches = Array.from(line.matchAll(tokenRe));
 
     if (!matches.length) {
@@ -448,8 +534,14 @@ onMounted(() => {
 
       hasContent.value = hasDocumentContent(ed);
     },
-    onFocus: () => { isFocused.value = true; emit("focus"); },
-    onBlur: () => { isFocused.value = false; emit("blur"); },
+    onFocus: () => {
+      isFocused.value = true;
+      emit("focus");
+    },
+    onBlur: () => {
+      isFocused.value = false;
+      emit("blur");
+    },
     editorProps: {
       attributes: { class: "prose prose-sm max-w-none focus:outline-none" },
     },
@@ -463,7 +555,10 @@ onMounted(() => {
 });
 
 // ── Watchers ───────────────────────────────────────────────────────────────
-watch(() => props.disabled, (d) => editor.value?.setEditable(!d));
+watch(
+  () => props.disabled,
+  (d) => editor.value?.setEditable(!d),
+);
 
 watch(
   () => props.modelValue,
@@ -487,14 +582,22 @@ const focusEditor = () => {
 
 const insertVariable = (variable: string) => {
   if (isOverLimit.value) return;
-  editor.value?.chain().focus().insertContent({ type: "variable", attrs: { name: variable } }).run();
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({ type: "variable", attrs: { name: variable } })
+    .run();
   variableMenu.value = false;
   variableSearch.value = "";
 };
 
 const insertFunction = (fn: string) => {
   if (isOverLimit.value) return;
-  editor.value?.chain().focus().insertContent({ type: "function", attrs: { name: fn } }).run();
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({ type: "function", attrs: { name: fn } })
+    .run();
   functionMenu.value = false;
   functionSearch.value = "";
 };
@@ -512,8 +615,11 @@ const insertFunction = (fn: string) => {
   /* right padding reserves space for both picker buttons */
   padding-left: 12px;
   padding-right: 72px;
-  min-height: max(var(--v-input-control-height, 56px),
-      1.5rem + var(--v-field-input-padding-top) + var(--v-field-input-padding-bottom));
+  min-height: max(
+    var(--v-input-control-height, 56px),
+    1.5rem + var(--v-field-input-padding-top) +
+      var(--v-field-input-padding-bottom)
+  );
   transition: border-color 0.2s ease;
   cursor: text;
 }
@@ -530,6 +636,65 @@ const insertFunction = (fn: string) => {
   opacity: 0.6;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* ── Density variants ──────────────────────────────────────────────────────
+   Matches Vuetify's own density scale (default 56 / comfortable 48 /
+   compact 40) so a RichTextField sitting next to a v-select or v-btn with
+   the same density prop lines up without manual margin offsets. */
+.field-container--density-comfortable {
+  min-height: 48px;
+}
+
+.field-container--density-comfortable .field-content {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.field-container--density-compact {
+  min-height: 40px;
+}
+
+.field-container--density-compact .field-content {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.field-container--density-compact .field-label {
+  font-size: 13px;
+}
+
+.field-container--density-compact .field-label-floating {
+  font-size: 10px;
+}
+
+.field-container--density-compact .pickers-row {
+  right: 4px;
+  bottom: 2px;
+}
+
+.field-container--density-compact :deep(.variable-badge),
+.field-container--density-compact :deep(.function-badge) {
+  padding: 1px 6px;
+  font-size: 0.85em;
+}
+
+/* ── Variant: plain ───────────────────────────────────────────────────────
+   Frameless look for inline contexts (row / section title fields) that
+   shouldn't look like a full form control. */
+.field-container--variant-plain {
+  border-color: transparent;
+  background: transparent;
+  padding-right: 12px;
+}
+
+.field-container--variant-plain.is-focused {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgb(var(--v-theme-surface));
+}
+
+.field-container--variant-plain.has-error {
+  border-color: rgb(var(--v-theme-error));
 }
 
 /* Floating label — identical to original */

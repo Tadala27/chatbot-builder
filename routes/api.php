@@ -7,7 +7,9 @@ use App\Http\Controllers\Api\Admin\PlatformAnalyticsController;
 use App\Http\Controllers\Api\Admin\PlatformSettingsController;
 use App\Http\Controllers\Api\Admin\SystemLogController;
 use App\Http\Controllers\Api\Admin\TenantController;
+use App\Http\Controllers\Api\ConnectorController;
 use App\Http\Controllers\Api\WebhookController;
+use App\Http\Middleware\ConnectorAuthenticate;
 use Illuminate\Support\Facades\Route;
 
 // =============================================================================
@@ -25,11 +27,17 @@ Route::prefix('webhooks')->group(function () {
     Route::post('/whatsapp', [WebhookController::class, 'handleWhatsApp']);
 });
 
+Route::middleware([ConnectorAuthenticate::class])
+    ->prefix('connector')
+    ->group(function () {
+        Route::post('messages', [ConnectorController::class, 'send']);
+        Route::get('media/{media_id}', [ConnectorController::class, 'streamMedia']);
+    });
 // =============================================================================
 // PROTECTED — Central admin users only
 // =============================================================================
 
-Route::middleware(['auth:system'])->group(function () {
+Route::middleware(['auth.system'])->group(function () {
     // ── Auth / Session ────────────────────────────────────────────────────────
     Route::prefix('auth')->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
@@ -42,10 +50,10 @@ Route::middleware(['auth:system'])->group(function () {
     // ── Tenant Management ─────────────────────────────────────────────────────
     Route::prefix('admin/tenants')->group(function () {
         Route::get('/', [TenantController::class, 'index'])
-            ->middleware('permission:view tenants');
+            ->middleware('permission:view tenants,system');
 
         Route::post('/', [TenantController::class, 'store'])
-            ->middleware('permission:create tenants');
+            ->middleware('permission:edit tenants');
 
         Route::get('statistics', [TenantController::class, 'statistics'])
             ->middleware('permission:view tenants');
@@ -67,6 +75,16 @@ Route::middleware(['auth:system'])->group(function () {
 
         Route::post('{tenant}/impersonate', [TenantController::class, 'impersonate'])
             ->middleware('permission:impersonate tenant');
+
+        // ── New: provisioning + user management ─────────────────────────────
+        Route::post('{tenant}/provision', [TenantController::class, 'provision'])
+            ->middleware('permission:edit tenants');
+
+        Route::get('{tenant}/roles', [TenantController::class, 'roles'])
+            ->middleware('permission:view tenants');
+
+        Route::post('{tenant}/users', [TenantController::class, 'createUser'])
+            ->middleware('permission:edit tenants');
     });
 
     // ── Platform Settings ─────────────────────────────────────────────────────

@@ -42,6 +42,15 @@ class ChatbotFlowExecutor
     private const META_INVALID_ATTEMPTS = 'invalid_attempts';
     private const META_PENDING_CONFIG = 'pending_config_dialog';
 
+    /**
+     * Set when a message-kind dialog that has a user_input condition action
+     * has been sent. The next inbound message will be evaluated against the
+     * condition instead of treated as invalid input.
+     *
+     * Value: the Dialog::id (DB primary key) of the waiting dialog.
+     */
+    private const META_PENDING_USER_INPUT = 'pending_user_input_dialog_id';
+
     private const MODE_CONFIG = 'config';
     private const MODE_FLOW = 'flow';
 
@@ -89,6 +98,7 @@ class ChatbotFlowExecutor
 
                 return;
             }
+
             // ── Sticker / reaction — neither mode can process these ───────────
             if (in_array($message->message_type, ['sticker', 'reaction'], true)) {
                 $variables = $this->state->getVariables($conversation);
@@ -116,9 +126,6 @@ class ChatbotFlowExecutor
             }
 
             // ── Config-mode interactive reply intercept ───────────────────────
-            // Always check this FIRST — even in flow mode, a pending config
-            // dialog (e.g. invalid-input buttons shown over a flow dialog)
-            // must be resolved before routing to the flow.
             if ($message->message_type === 'interactive') {
                 $selectionId = $message->content['response']['id'] ?? null;
                 if ($selectionId) {
@@ -160,37 +167,23 @@ class ChatbotFlowExecutor
     // CONFIG MODE
     // =========================================================================
 
-    /**
-     * Process a message while in config mode.
-     * The bot is showing standalone BotDialogs. The user can only interact
-     * via buttons — free text is invalid here and gets the invalid_input dialog.
-     */
     private function processConfigMessage(Conversation $conversation, Message $message, $bot): void
     {
-        // First ever message → send greeting
         if (!($conversation->metadata[self::META_GREETING_SENT] ?? false)) {
             $this->sendGreeting($conversation);
 
             return;
         }
 
-        // In config mode, we're always waiting on a tap from a BotDialog.
-        // Free text means the user sent something unexpected.
         if ($message->message_type !== 'interactive') {
             $this->handleConfigInvalidInput($conversation, null);
 
             return;
         }
 
-        // A tap arrived but no pending config dialog was found above —
-        // that means the selection ID doesn't match any known button.
         $this->handleConfigInvalidInput($conversation, null);
     }
 
-    /**
-     * Send the greeting BotDialog (first ever message from this contact).
-     * Falls through to main_menu if no greeting is configured.
-     */
     private function sendGreeting(Conversation $conversation): void
     {
         $this->mergeMetadata($conversation, [self::META_GREETING_SENT => true]);
@@ -203,14 +196,9 @@ class ChatbotFlowExecutor
             return;
         }
 
-        // No greeting — go straight to main menu
         $this->goToMainMenu($conversation);
     }
 
-    /**
-     * Send the main_menu BotDialog and switch to config mode.
-     * Falls through to flow entry point if no main_menu is configured.
-     */
     private function goToMainMenu(Conversation $conversation): void
     {
         $this->setMode($conversation, self::MODE_CONFIG);
@@ -224,13 +212,9 @@ class ChatbotFlowExecutor
             return;
         }
 
-        // No main menu — go straight to the flow entry point
         $this->startFlow($conversation);
     }
 
-    /**
-     * Handle invalid input while in config mode.
-     */
     private function handleConfigInvalidInput(Conversation $conversation, ?string $anchorFlowDialogId): void
     {
         $config = $conversation->bot?->configuration;
@@ -246,7 +230,6 @@ class ChatbotFlowExecutor
         if ($attempts >= $max) {
             $this->mergeMetadata($conversation, [self::META_INVALID_ATTEMPTS => 0]);
             $dialog = BotDialog::forBot($conversation->bot_id, BotDialog::PURPOSE_INVALID_INPUT);
-            // Fall back to main_menu when max attempts hit and no dialog is set
             if (!$dialog) {
                 $this->goToMainMenu($conversation);
 
@@ -273,9 +256,6 @@ class ChatbotFlowExecutor
     // FLOW MODE
     // =========================================================================
 
-    /**
-     * Process a message while in flow mode.
-     */
     private function processFlowMessage(Conversation $conversation, Message $message, BotVersion $version): void
     {
         $ownerDialog = null;
@@ -315,17 +295,10 @@ class ChatbotFlowExecutor
         if ($currentDialog) {
             $this->handleFlowDialogResponse($currentDialog, $message, $version, $conversation);
         } else {
-            // No current dialog — start from the entry point
             $this->startFlow($conversation);
         }
     }
 
-    /**
-     * Execute a system action triggered from within the flow graph.
-     * go_home and start_flow exit back to config mode.
-     * go_back stays within the flow.
-     * talk_to_agent triggers handover.
-     */
     private function executeFlowSystemAction(
         string $kind,
         Conversation $conversation,
@@ -334,12 +307,10 @@ class ChatbotFlowExecutor
     ): void {
         switch ($kind) {
             case 'go_home':
-                // Exit flow → config mode → main menu
                 $this->goToMainMenu($conversation);
                 break;
 
             case 'start_flow':
-                // Restart flow from entry point
                 $this->clearFlowState($conversation);
                 $this->startFlow($conversation);
                 break;
@@ -354,7 +325,6 @@ class ChatbotFlowExecutor
                         return;
                     }
                 }
-                // Nothing to go back to — treat as go_home
                 $this->goToMainMenu($conversation);
                 break;
 
@@ -364,9 +334,6 @@ class ChatbotFlowExecutor
         }
     }
 
-    /**
-     * Enter flow mode and execute from the entry-point dialog.
-     */
     private function startFlow(Conversation $conversation): void
     {
         $version = $conversation->botVersion;
@@ -399,13 +366,6 @@ class ChatbotFlowExecutor
     // CONFIG DIALOG MANAGEMENT
     // =========================================================================
 
-    /**
-     * Send a BotDialog and register it as pending if interactive.
-     *
-     * @param string|null $anchorFlowDialogId The flow Dialog::id the user was on
-     *                                        when this config dialog was triggered.
-     *                                        Used to resume the flow after the reply.
-     */
     private function sendConfigDialog(
         Conversation $conversation,
         BotDialog $dialog,
@@ -418,9 +378,6 @@ class ChatbotFlowExecutor
         }
     }
 
-    /**
-     * Store which config dialog's buttons we're waiting on.
-     */
     private function registerPendingConfigDialog(
         Conversation $conversation,
         BotDialog $dialog,
@@ -448,10 +405,6 @@ class ChatbotFlowExecutor
         ]);
     }
 
-    /**
-     * Check if the incoming selection ID matches a pending config dialog.
-     * Returns ['kind' => string, 'anchor_flow_dialog' => ?string] or null.
-     */
     private function resolvePendingConfigDialog(Conversation $conversation, string $selectionId): ?array
     {
         $pending = $conversation->metadata[self::META_PENDING_CONFIG] ?? null;
@@ -464,7 +417,6 @@ class ChatbotFlowExecutor
             return null;
         }
 
-        // Clear immediately so a double-tap doesn't fire twice
         $meta = $conversation->metadata ?? [];
         unset($meta[self::META_PENDING_CONFIG]);
         $conversation->update(['metadata' => $meta]);
@@ -476,9 +428,6 @@ class ChatbotFlowExecutor
         ];
     }
 
-    /**
-     * A button on a config-level dialog was tapped. Route to the right action.
-     */
     private function handleConfigDialogReply(
         array $resolved,
         Conversation $conversation,
@@ -500,8 +449,6 @@ class ChatbotFlowExecutor
                 break;
 
             case 'go_back':
-                // If we were in the flow, return to the anchor dialog.
-                // If we were in config mode, go back to main menu.
                 if ($anchorFlowDialog && $version) {
                     $dialog = $version->dialogs()->find((string) $anchorFlowDialog);
                     if ($dialog) {
@@ -606,10 +553,30 @@ class ChatbotFlowExecutor
         BotVersion $version,
         Conversation $conversation
     ): void {
+        // Clear the pending user_input flag — the user's reply has now arrived
+        if ($conversation->metadata[self::META_PENDING_USER_INPUT] ?? null) {
+            $meta = $conversation->metadata ?? [];
+            unset($meta[self::META_PENDING_USER_INPUT]);
+            $conversation->update(['metadata' => $meta]);
+            $conversation->refresh();
+
+            Log::info('[Flow] Resuming from pending user_input condition', [
+                'conversation_id' => $conversation->id,
+                'dialog_id' => $dialog->id,
+            ]);
+        }
+
+        // Extract the current message text and inject it as a reserved variable
+        // so condition evaluators can read exactly what the user sent on THIS
+        // turn — not whatever the DB query for "last inbound" returns.
+        $currentInputText = $this->extractInputText($message);
+        if ($currentInputText !== '') {
+            $this->state->setVariable($conversation, '__current_user_input', $currentInputText);
+        }
+
         $actionsAlreadyRan = $this->processUserInput($dialog, $message, $conversation);
 
-        // If a handoff action fired, conversation is now handed_off.
-        // Send the handover BotDialog and stop — don't treat this as invalid input.
+        // If a handoff action fired, stop — don't treat as invalid input
         if ($conversation->fresh()->isHandedOff()) {
             $this->triggerHandover($conversation);
 
@@ -634,12 +601,6 @@ class ChatbotFlowExecutor
         $this->handleFlowInvalidInput($conversation, $dialog);
     }
 
-    /**
-     * Invalid input while in flow mode.
-     * Sends the flow_invalid_input BotDialog (or falls back to the
-     * plain invalid_input one), anchored to the current flow dialog
-     * so the reply sends the user back to it.
-     */
     private function handleFlowInvalidInput(Conversation $conversation, Dialog $currentDialog): void
     {
         $config = $conversation->bot?->configuration;
@@ -648,7 +609,6 @@ class ChatbotFlowExecutor
 
         if ($attempts >= $max) {
             $this->mergeMetadata($conversation, [self::META_INVALID_ATTEMPTS => 0]);
-            // Max hit — exit to main menu
             $this->goToMainMenu($conversation);
 
             return;
@@ -656,19 +616,15 @@ class ChatbotFlowExecutor
 
         $this->mergeMetadata($conversation, [self::META_INVALID_ATTEMPTS => $attempts]);
 
-        // Try flow_invalid_input first, then fall back to invalid_input
         $dialog = BotDialog::forBot($conversation->bot_id, BotDialog::PURPOSE_FLOW_INVALID_INPUT)
             ?? BotDialog::forBot($conversation->bot_id, BotDialog::PURPOSE_INVALID_INPUT);
 
         if ($dialog) {
-            // Anchor to current flow dialog so go_back brings them back here
             $this->sendConfigDialog($conversation, $dialog, $currentDialog->id);
 
             return;
         }
 
-        // No invalid input dialog at all — silently stay on the current dialog
-        // (the user will just need to tap a valid button)
         Log::debug('[Flow] No flow_invalid_input or invalid_input BotDialog configured', [
             'conversation_id' => $conversation->id,
         ]);
@@ -684,7 +640,6 @@ class ChatbotFlowExecutor
 
         $nextDialogId = $this->navigator->runActionChain($conversation, $dialog, $dialogActions, $variables);
 
-        // Handoff action may have fired during the action chain
         if ($conversation->fresh()->isHandedOff()) {
             $this->triggerHandover($conversation);
 
@@ -722,7 +677,6 @@ class ChatbotFlowExecutor
             return ['success' => false, 'error' => 'Version mismatch'];
         }
 
-        // Track which flow dialog the user is on — needed to resume after interrupts
         $this->mergeMetadata($conversation, [self::META_FLOW_DIALOG => $dialog->id]);
 
         $variables = $this->state->getVariables($conversation);
@@ -733,10 +687,26 @@ class ChatbotFlowExecutor
             $this->logAnalytics($conversation, $dialog, 'dialog_entered');
 
             if ($dialog->kind === 'message') {
-                $hasVariableAction = collect($this->getDialogActions($dialog))
+                $dialogActions = $this->getDialogActions($dialog);
+                $hasVariableAction = collect($dialogActions)
                     ->contains(fn ($a) => ($a['kind'] ?? $a['action_type'] ?? null) === 'variable');
-                if ($hasVariableAction) {
+                $hasUserInputCond = $this->hasUserInputConditionAction($dialogActions);
+
+                // Either kind of "wait for user" pauses the flow here
+                if ($hasVariableAction || $hasUserInputCond) {
                     $result['stop'] = true;
+                }
+
+                // When a user_input condition is pending, store the dialog ID so
+                // the next inbound message routes back here for evaluation.
+                if ($hasUserInputCond) {
+                    $this->mergeMetadata($conversation, [
+                        self::META_PENDING_USER_INPUT => $dialog->id,
+                    ]);
+                    Log::info('[Flow] Paused — waiting for user reply to evaluate condition', [
+                        'conversation_id' => $conversation->id,
+                        'dialog_id' => $dialog->id,
+                    ]);
                 }
             }
 
@@ -744,7 +714,6 @@ class ChatbotFlowExecutor
                 $conversation->update(['status' => 'completed', 'ended_at' => now()]);
                 $this->logAnalytics($conversation, $dialog, 'dialog_completed');
                 $this->logAnalytics($conversation, $dialog, 'conversation_completed');
-                // End of flow → return to config mode (main menu or greeting on next message)
                 $this->setMode($conversation, self::MODE_CONFIG);
             }
         }
@@ -753,7 +722,7 @@ class ChatbotFlowExecutor
     }
 
     // =========================================================================
-    // PRIVATE — Input processing (shared with flow mode)
+    // PRIVATE — Input processing
     // =========================================================================
 
     private function processUserInput(Dialog $dialog, Message $message, Conversation $conversation): bool
@@ -761,10 +730,14 @@ class ChatbotFlowExecutor
         $config = $dialog->config ?? [];
         $kind = $dialog->kind;
 
+        // Normalise the user's reply to a plain string regardless of message type
         $inputValue = match ($message->message_type) {
-            'text' => $message->content['text'] ?? '',
+            'text' => trim($message->content['text'] ?? ''),
             'interactive' => $message->content['response']['title']
                           ?? $message->content['response']['id']
+                          ?? '',
+            'button' => $message->content['button']['text']
+                          ?? $message->content['text']
                           ?? '',
             default => '',
         };
@@ -775,6 +748,7 @@ class ChatbotFlowExecutor
             default => null,
         };
 
+        // ── Store input / reply variables ─────────────────────────────────────
         $inputVar = $config['inputVariable'] ?? $dialog->input_variable ?? null;
         if ($inputVar && $inputValue !== '') {
             $this->state->setVariable($conversation, $inputVar, $inputValue);
@@ -797,11 +771,14 @@ class ChatbotFlowExecutor
         }
 
         $dialogActions = $this->getDialogActions($dialog);
+
         $hasVariableAction = collect($dialogActions)
             ->contains(fn ($a) => ($a['kind'] ?? $a['action_type'] ?? null) === 'variable');
-        $isTextReply = $message->message_type === 'text';
 
-        if ($isTextReply && ($inputVar || $hasVariableAction) && !in_array($kind, ['buttons', 'list', 'nav_buttons'], true)) {
+        $isTextLike = in_array($message->message_type, ['text', 'button'], true);
+
+        // ── Case: dialog has a variable action — run it now with the input ────
+        if ($isTextLike && ($inputVar || $hasVariableAction) && !in_array($kind, ['buttons', 'list', 'nav_buttons'], true)) {
             $variables = $this->state->getVariables($conversation);
             $actionsWithInput = array_map(function ($action) use ($inputValue) {
                 if (($action['kind'] ?? $action['action_type'] ?? null) === 'variable') {
@@ -821,7 +798,40 @@ class ChatbotFlowExecutor
             return true;
         }
 
+        // ── Case: dialog has a user_input condition — already in the action chain
+        // The flow paused after sending this dialog (META_PENDING_USER_INPUT was set).
+        // Now the user has replied. We return false here so handleFlowDialogResponse
+        // proceeds to call resolveFromMessage → runActionChain → executeCondition,
+        // which calls getLastUserInput() and evaluates against what the user typed.
+        // Nothing extra is needed — just don't short-circuit.
+
         $this->logAnalytics($conversation, $dialog, 'dialog_completed');
+
+        return false;
+    }
+
+    /**
+     * Returns true when any action in the chain is a condition whose branches
+     * contain at least one condition of type 'user_input'.
+     *
+     * Used to decide whether the flow should pause after sending a dialog and
+     * wait for the user's reply before evaluating the condition.
+     */
+    private function hasUserInputConditionAction(array $actions): bool
+    {
+        foreach ($actions as $action) {
+            if (($action['kind'] ?? $action['action_type'] ?? null) !== 'condition') {
+                continue;
+            }
+
+            foreach ($action['branches'] ?? [] as $branch) {
+                foreach ($branch['conditions'] ?? [] as $condition) {
+                    if (($condition['type'] ?? $condition['condition_type'] ?? null) === 'user_input') {
+                        return true;
+                    }
+                }
+            }
+        }
 
         return false;
     }
@@ -897,7 +907,11 @@ class ChatbotFlowExecutor
     {
         $this->state->clearHistory($conversation);
         $meta = $conversation->metadata ?? [];
-        unset($meta[self::META_FLOW_DIALOG], $meta[self::META_PENDING_CONFIG]);
+        unset(
+            $meta[self::META_FLOW_DIALOG],
+            $meta[self::META_PENDING_CONFIG],
+            $meta[self::META_PENDING_USER_INPUT]
+        );
         $conversation->update(['metadata' => $meta]);
         $conversation->refresh();
     }
@@ -906,6 +920,33 @@ class ChatbotFlowExecutor
     {
         $conversation->update(['metadata' => array_merge($conversation->metadata ?? [], $values)]);
         $conversation->refresh();
+    }
+
+    /**
+     * Extract the plain text value from any inbound message type.
+     * Used to inject __current_user_input into variables before condition
+     * evaluation, so user_input conditions always read the message that
+     * triggered this job — not whatever DB query returns as "latest inbound".
+     */
+    private function extractInputText(Message $message): string
+    {
+        $content = $message->content;
+        if (!is_array($content)) {
+            $content = json_decode((string) $content, true) ?? [];
+        }
+
+        return match ($message->message_type) {
+            'text' => trim($content['text'] ?? ''),
+            'interactive' => $content['response']['title']
+                          ?? $content['response']['id']
+                          ?? $content['button_reply']['title']
+                          ?? $content['list_reply']['title']
+                          ?? '',
+            'button' => $content['button']['text']
+                          ?? $content['text']
+                          ?? '',
+            default => '',
+        };
     }
 
     private function matchesKeyword(string $text, array $keywords): bool

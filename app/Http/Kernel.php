@@ -85,6 +85,9 @@ class Kernel extends HttpKernel
         'check.user.type' => Middleware\CheckUserType::class,
         'auth.system' => Middleware\AuthenticateSystemGuard::class,
         'auth.tenant' => Middleware\AuthenticateTenantGuard::class,
+        'connector.auth' => Middleware\ConnectorAuthenticate::class,
+        'system.guard' => Middleware\SetSystemGuardForPermissions::class,
+        'tenant.guard' => Middleware\SetTenantGuardForPermission::class,
     ];
 
     // ── Middleware priority ───────────────────────────────────────────────────

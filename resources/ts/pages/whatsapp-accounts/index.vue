@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import axios from "axios";
 import Swal from "sweetalert2";
+import ConnectAccountDialog from "./connect.vue";
 
 interface WhatsappAccount {
-  id: number;
+  id: string;
   phone_number: string;
   display_phone_number: string | null;
   verified_name: string | null;
   quality_rating: "GREEN" | "YELLOW" | "RED" | "UNKNOWN";
   whatsapp_business_manager_messaging_limit: string | null;
   onboarding_status: "pending_registration" | "pending_payment" | "active";
-  mode: "managed_bot" | "connector" | null;
+  mode: "managed_bot" | "connector" | "undefined" | null;
   webhook_url: string | null;
   is_active: boolean;
   last_synced_at: string | null;
@@ -32,145 +33,45 @@ const router = useRouter();
 
 const accounts = ref<WhatsappAccount[]>([]);
 const isLoading = ref(true);
-const signupStep = ref<"idle" | "signing_up" | "choosing_mode">("idle");
-const pendingAccount = ref<WhatsappAccount | null>(null);
-const selectedMode = ref<"managed_bot" | "connector" | null>(null);
-const webhookUrl = ref("");
-const revealedKey = ref<string | null>(null);
-
-// Tracks whether the FB JS SDK has finished loading + FB.init() has run.
-// The Connect button is disabled until this is true so we never trigger a
-// login attempt before window.FB actually exists.
+const dialogOpen = ref(false);
 const sdkReady = ref(false);
+const connectDialog = ref<InstanceType<typeof ConnectAccountDialog> | null>(
+  null,
+);
+const setupAccount = ref<{ id: string; phone: string } | null>(null);
 
-const qualityLabel: Record<string, string> = {
-  GREEN: "Good",
-  YELLOW: "Fair",
-  RED: "At risk",
-  UNKNOWN: "Unrated",
-};
-
-const qualityColor: Record<string, string> = {
-  GREEN: "#3ecf8e",
-  YELLOW: "#f5b942",
-  RED: "#f56565",
-  UNKNOWN: "#8a93a6",
-};
-
-const fetchAccounts = async () => {
-  isLoading.value = true;
-  try {
-    const { data } = await axios.get("/tenant/whatsapp-accounts");
-    accounts.value = data.data ?? data;
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-// ── Grouping — this is what replaces the horizontal kanban columns with
-// vertically-stacked sections. Each account lands in exactly one group. ──
-
-type GroupKey = "registering" | "payment" | "active" | "inactive";
-
-const groupOf = (account: WhatsappAccount): GroupKey => {
-  if (!account.is_active) return "inactive";
-  if (account.onboarding_status === "pending_registration")
-    return "registering";
-  if (account.onboarding_status === "pending_payment") return "payment";
-  return "active";
-};
-
-const sections: {
-  key: GroupKey;
-  title: string;
-  hint: string;
-  icon: string;
-  accent: string;
-  bg: string;
-}[] = [
-  {
-    key: "registering",
-    title: "Registering",
-    hint: "Meta is finishing verification",
-    icon: "$progressClock",
-    accent: "#8a7bf0",
-    bg: "rgba(138, 123, 240, 0.08)",
-  },
-  {
-    key: "payment",
-    title: "Payment needed",
-    hint: "Add billing to unlock sending",
-    icon: "$creditCardOutline",
-    accent: "#f5b942",
-    bg: "rgba(245, 185, 66, 0.08)",
-  },
-  {
-    key: "active",
-    title: "Active",
-    hint: "Sending and receiving normally",
-    icon: "$checkCircle",
-    accent: "#3ecf8e",
-    bg: "rgba(62, 207, 142, 0.08)",
-  },
-  {
-    key: "inactive",
-    title: "Disconnected",
-    hint: "Not currently in use",
-    icon: "$linkOff",
-    accent: "#8a93a6",
-    bg: "rgba(138, 147, 166, 0.08)",
-  },
-];
-
-const grouped = computed(() => {
-  const map: Record<GroupKey, WhatsappAccount[]> = {
-    registering: [],
-    payment: [],
-    active: [],
-    inactive: [],
-  };
-  for (const account of accounts.value) {
-    map[groupOf(account)].push(account);
-  }
-  return map;
+const snackbar = ref({
+  show: false,
+  text: "",
+  color: "success" as "success" | "error",
 });
 
-// ── Embedded Signup ──────────────────────────────────────────────────────
+function showSnackbar(text: string, color: "success" | "error" = "success") {
+  snackbar.value = { show: true, text, color };
+}
 
-let sessionPayload: {
-  waba_id?: string;
-  phone_number_id?: string;
-  business_id?: string;
-} = {};
+function notifyError(e: any, fallback: string) {
+  showSnackbar(e.response?.data?.message ?? fallback, "error");
+}
 
 let sdkLoadPromise: Promise<void> | null = null;
 
-// Kicks off loading + initializing the FB JS SDK. This is called once on
-// mount (not on click) so that by the time the user actually presses
-// "Connect Account", window.FB is already available and FB.login() can be
-// invoked synchronously inside the click handler. If FB.login() is called
-// after an `await` (e.g. awaiting the script load), browsers can lose track
-// of the "this came from a real user click" context and silently block the
-// popup — no error, it just does nothing. Preloading avoids that entirely.
-const loadSdk = () => {
+function loadSdk(): Promise<void> {
   if (sdkLoadPromise) return sdkLoadPromise;
-
   sdkLoadPromise = new Promise<void>((resolve, reject) => {
     if (!APP_ID || !CONFIG_ID) {
       reject(
         new Error(
-          "Missing VITE_META_APP_ID or VITE_META_ES_CONFIG_ID — check your .env and restart the dev server.",
+          "Missing VITE_META_APP_ID or VITE_META_ES_CONFIG_ID — check your .env.",
         ),
       );
       return;
     }
-
     if (window.FB) {
       sdkReady.value = true;
       resolve();
       return;
     }
-
     window.fbAsyncInit = () => {
       window.FB.init({
         appId: APP_ID,
@@ -181,7 +82,6 @@ const loadSdk = () => {
       sdkReady.value = true;
       resolve();
     };
-
     const script = document.createElement("script");
     script.src = "https://connect.facebook.net/en_US/sdk.js";
     script.async = true;
@@ -190,228 +90,200 @@ const loadSdk = () => {
       reject(new Error("Failed to load the Facebook JS SDK."));
     document.body.appendChild(script);
   });
-
   return sdkLoadPromise;
-};
+}
 
-const registerMessageListener = () => {
+function registerMessageListener(): void {
   window.addEventListener("message", (event) => {
     if (!event.origin.endsWith("facebook.com")) return;
     try {
       const data = JSON.parse(event.data);
       if (data.type === "WA_EMBEDDED_SIGNUP" && data.event === "FINISH") {
-        sessionPayload = {
+        connectDialog.value?.registerSessionPayload({
           waba_id: data.data.waba_id,
           phone_number_id: data.data.phone_number_id,
           business_id: data.data.business_id,
-        };
+        });
       }
     } catch {
-      /* not a signup message event — ignore */
+      /* not a signup event */
     }
   });
-};
+}
 
-// Handles the FB.login response. Kept separate from the callback passed to
-// FB.login because that callback must be a plain (non-async) function — the
-// FB SDK does a runtime check on the callback and rejects async functions
-// with "Expression is of type asyncfunction, not function". This function
-// does all the actual (async) work; launchSignup below just wraps it in a
-// plain synchronous function before handing it to FB.login.
-const handleSignupResponse = async (response: any) => {
-  if (!response.authResponse?.code) {
-    signupStep.value = "idle";
-    return;
-  }
-
-  if (!sessionPayload.waba_id || !sessionPayload.phone_number_id) {
-    signupStep.value = "idle";
-    Swal.fire({
-      title: "Couldn't complete signup",
-      text: "We didn't receive your WhatsApp account details. Please try again.",
-      icon: "error",
-    });
-    return;
-  }
-
+async function fetchAccounts(): Promise<void> {
+  isLoading.value = true;
   try {
-    const { data } = await axios.post(
-      "/tenant/whatsapp-accounts/embedded-signup/callback",
-      {
-        code: response.authResponse.code,
-        ...sessionPayload,
-      },
-    );
-    pendingAccount.value = data.account;
-    signupStep.value = "choosing_mode";
-  } catch (e: any) {
-    signupStep.value = "idle";
-    Swal.fire({
-      title: "Signup failed",
-      text: e.response?.data?.message ?? "Something went wrong.",
-      icon: "error",
-    });
+    const { data } = await axios.get("/tenant/whatsapp-accounts");
+    accounts.value = data.data ?? data;
+  } finally {
+    isLoading.value = false;
   }
-};
+}
 
-// IMPORTANT: this is intentionally NOT async, and must not await anything
-// before calling window.FB.login(). It has to run synchronously inside the
-// click event so the browser still recognizes it as a direct response to
-// user input and lets the popup open.
-const launchSignup = () => {
-  if (!sdkReady.value || !window.FB) {
-    Swal.fire({
-      title: "Still loading",
-      text: "The Facebook SDK hasn't finished loading yet. Please try again in a moment.",
-      icon: "info",
-    });
-    // Kick off (or retry) loading in the background for next time.
-    loadSdk().catch((e: Error) => {
-      Swal.fire({
-        title: "Couldn't load Facebook SDK",
-        text: e.message,
-        icon: "error",
-      });
-    });
+type GroupKey = "active" | "registering" | "payment" | "inactive";
+
+function groupOf(account: WhatsappAccount): GroupKey {
+  if (!account.is_active) return "inactive";
+  if (account.onboarding_status === "pending_registration")
+    return "registering";
+  if (account.onboarding_status === "pending_payment") return "payment";
+  return "active";
+}
+
+const sections: {
+  key: GroupKey;
+  title: string;
+  hint: string;
+  color: string;
+  icon: string;
+}[] = [
+  {
+    key: "active",
+    title: "Active",
+    hint: "Sending and receiving normally",
+    color: "success",
+    icon: "$checkCircle",
+  },
+  {
+    key: "registering",
+    title: "Registering",
+    hint: "Meta is finishing verification",
+    color: "secondary",
+    icon: "$progressClock",
+  },
+  {
+    key: "payment",
+    title: "Payment needed",
+    hint: "Add billing to unlock sending",
+    color: "warning",
+    icon: "$creditCardOutline",
+  },
+  {
+    key: "inactive",
+    title: "Disconnected",
+    hint: "Not currently in use",
+    color: "error",
+    icon: "$linkOff",
+  },
+];
+
+const grouped = computed(() => {
+  const map: Record<GroupKey, WhatsappAccount[]> = {
+    active: [],
+    registering: [],
+    payment: [],
+    inactive: [],
+  };
+  for (const account of accounts.value) map[groupOf(account)].push(account);
+  return map;
+});
+
+const visibleSections = computed(() =>
+  sections.filter((s) => grouped.value[s.key].length > 0),
+);
+
+function openAccount(account: WhatsappAccount): void {
+  if (account.mode === "undefined") {
+    // Account exists but mode was never chosen — complete setup inline
+    setupAccount.value = {
+      id: account.id,
+      phone: account.display_phone_number ?? account.phone_number,
+    };
+    dialogOpen.value = true;
     return;
   }
 
-  signupStep.value = "signing_up";
+  router.push(`/whatsapp-account/${account.id}/detail`);
+}
 
-  window.FB.login(
-    // Plain, non-async function. It fires off handleSignupResponse but does
-    // not await it and is not itself declared async — see comment above.
-    (response: any) => {
-      handleSignupResponse(response);
-    },
-    {
-      config_id: CONFIG_ID,
-      response_type: "code",
-      override_default_response_type: true,
-      extras: { setup: {} },
-    },
-  );
-};
-
-const confirmMode = async () => {
-  if (!selectedMode.value || !pendingAccount.value) return;
-  if (selectedMode.value === "connector" && !webhookUrl.value) {
-    Swal.fire({ title: "Webhook URL required", icon: "warning" });
-    return;
-  }
-
-  try {
-    const { data } = await axios.post(
-      `/tenant/whatsapp-accounts/${pendingAccount.value.id}/choose-mode`,
-      { mode: selectedMode.value, webhook_url: webhookUrl.value || undefined },
-    );
-
-    revealedKey.value = data.connector_api_key ?? null;
-    signupStep.value = "idle";
-    pendingAccount.value = null;
-    selectedMode.value = null;
-    webhookUrl.value = "";
-    fetchAccounts();
-
-    if (revealedKey.value) {
-      Swal.fire({
-        title: "Connector API key (shown once)",
-        html: `<code style="word-break:break-all">${revealedKey.value}</code><p class="mt-3 text-caption">Save this now — it won't be shown again.</p>`,
-        icon: "success",
-      });
-    }
-  } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to set mode.",
-      icon: "error",
-    });
-  }
-};
-
-// ── Standard account actions (used from the card's quick-action menu) ────
-
-const openAccount = (account: WhatsappAccount) => {
-  router.push({ name: "whatsapp-account-detail", params: { id: account.id } });
-};
-
-const syncAccount = async (account: WhatsappAccount) => {
+async function syncAccount(account: WhatsappAccount): Promise<void> {
   try {
     await axios.post(`/tenant/whatsapp-accounts/${account.id}/sync`);
-    fetchAccounts();
+    await fetchAccounts();
+    showSnackbar("Account synced.");
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to sync account.",
-      icon: "error",
-    });
+    notifyError(e, "Sync failed.");
   }
-};
+}
 
-const reconnectAccount = async (account: WhatsappAccount) => {
+async function reconnectAccount(account: WhatsappAccount): Promise<void> {
   try {
     await axios.post(`/tenant/whatsapp-accounts/${account.id}/reconnect`);
-    fetchAccounts();
+    await fetchAccounts();
+    showSnackbar("Account reconnected.");
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to reconnect.",
-      icon: "error",
-    });
+    notifyError(e, "Reconnect failed.");
   }
-};
+}
 
-const disconnectAccount = async (account: WhatsappAccount) => {
+async function disconnectAccount(account: WhatsappAccount): Promise<void> {
   const { isConfirmed } = await Swal.fire({
-    title: "Disconnect Account",
-    text: `Disconnect ${account.display_phone_number ?? account.phone_number}? Bots using it will stop working. This does not remove the number from Meta.`,
+    title: "Disconnect this number?",
+    text: `${account.display_phone_number ?? account.phone_number} will stop working for all bots. This does not remove it from Meta.`,
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#ef4444",
+    confirmButtonText: "Disconnect",
   });
   if (!isConfirmed) return;
   try {
     await axios.post(`/tenant/whatsapp-accounts/${account.id}/disconnect`);
-    fetchAccounts();
+    await fetchAccounts();
+    showSnackbar("Account disconnected.");
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to disconnect.",
-      icon: "error",
-    });
+    notifyError(e, "Disconnect failed.");
   }
+}
+
+const qualityChipColor: Record<string, string> = {
+  GREEN: "success",
+  YELLOW: "warning",
+  RED: "error",
+  UNKNOWN: "default",
+};
+const qualityLabel: Record<string, string> = {
+  GREEN: "Good quality",
+  YELLOW: "Fair quality",
+  RED: "At risk",
+  UNKNOWN: "Unrated",
+};
+const modeLabel: Record<string, string> = {
+  managed_bot: "Managed bot",
+  connector: "Connector",
 };
 
-const formatDate = (d: string | null) =>
-  d
-    ? new Date(d).toLocaleString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "Never";
+function limitLabel(limit: string | null): string {
+  if (!limit) return "—";
+  return limit.replace("TIER_", "").replace(/_/g, " ") + " / day";
+}
 
-const limitLabel = (limit: string | null) =>
-  limit ? limit.replace("TIER_", "").replace("_", " ") : "—";
+function formatDate(d: string | null): string {
+  if (!d) return "Never synced";
+  return new Date(d).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+watch(dialogOpen, (open) => {
+  if (!open) setupAccount.value = null;
+});
 
 onMounted(() => {
   registerMessageListener();
   fetchAccounts();
-  // Warm up the FB SDK immediately so it's ready before the user clicks
-  // "Connect Account". Errors here are surfaced only when the user actually
-  // tries to connect (see launchSignup), so a slow/failed load on mount
-  // doesn't throw an unsolicited error dialog at page load.
   loadSdk().catch(() => {
-    /* surfaced to the user on click instead */
+    /* surfaced on click */
   });
 });
 </script>
 
 <template>
-  <div class="wa-page">
-    <!-- ── Inline header — replaces <PageHeader> ─────────────────────────── -->
-    <div class="wa-page-header">
+  <div>
+    <div class="d-flex align-start justify-space-between gap-4 mb-6 flex-wrap">
       <div>
         <h1 class="text-h5 font-weight-bold mb-1">WhatsApp Accounts</h1>
         <p class="text-body-2 text-medium-emphasis mb-0">
@@ -422,366 +294,325 @@ onMounted(() => {
         color="primary"
         variant="flat"
         prepend-icon="$plus"
-        :loading="signupStep === 'signing_up'"
-        @click="launchSignup"
+        @click="dialogOpen = true"
       >
         Connect Account
       </VBtn>
     </div>
 
-    <div v-if="isLoading" class="d-flex justify-center py-12">
-      <VProgressCircular indeterminate color="primary" size="48" />
+    <div v-if="isLoading" class="d-flex justify-center py-16">
+      <VProgressCircular indeterminate color="primary" size="40" />
     </div>
 
     <template v-else>
+      <!-- Empty state -->
       <VCard
         v-if="!accounts.length"
         variant="flat"
         border
-        rounded="lg"
-        class="text-center py-12"
+        rounded="xl"
+        class="text-center pa-12"
       >
-        <VAvatar size="64" color="primary" variant="tonal" class="mx-auto mb-4">
-          <VIcon size="32" icon="$whatsapp" />
+        <VAvatar size="56" color="success" variant="tonal" class="mx-auto mb-4">
+          <VIcon size="28" color="success">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a8 8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"
+                fill="currentColor"
+              />
+              <path
+                d="M12 2C6.477 2 2 6.477 2 12c0 1.89.522 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+          </VIcon>
         </VAvatar>
-        <h3 class="text-h6 mb-1">No WhatsApp accounts connected</h3>
-        <p class="text-body-2 text-medium-emphasis mb-4">
-          Connect a number to start building bots.
+        <h3 class="text-h6 font-weight-bold mb-2">No numbers connected yet</h3>
+        <p
+          class="text-body-2 text-medium-emphasis mb-6"
+          style="max-width: 340px; margin-inline: auto"
+        >
+          Connect a WhatsApp Business number to start building bots and handling
+          conversations.
         </p>
-        <VBtn color="primary" variant="flat" @click="launchSignup">
-          Connect your first account
+        <VBtn color="primary" variant="flat" @click="dialogOpen = true">
+          Connect your first number
         </VBtn>
       </VCard>
 
-      <!-- ── Vertically-stacked status sections (replaces side-by-side kanban columns) ── -->
-      <div v-else class="wa-sections">
-        <section
-          v-for="section in sections"
-          :key="section.key"
-          class="wa-section"
-          :style="{
-            '--wa-accent': section.accent,
-            '--wa-accent-bg': section.bg,
-          }"
-        >
-          <div class="wa-section-header">
-            <div class="d-flex align-center gap-3">
-              <div class="wa-section-icon">
-                <VIcon :icon="section.icon" size="18" :color="section.accent" />
-              </div>
-              <div>
-                <div class="d-flex align-center gap-2">
-                  <span class="text-subtitle-1 font-weight-bold">{{
-                    section.title
-                  }}</span>
-                  <VChip size="x-small" variant="flat" class="wa-count-chip">
-                    {{ grouped[section.key].length }}
-                  </VChip>
-                </div>
-                <span class="text-caption text-medium-emphasis">{{
-                  section.hint
-                }}</span>
-              </div>
-            </div>
-            <VBtn
-              v-if="section.key === 'registering'"
-              icon
-              size="small"
-              variant="text"
-              :loading="signupStep === 'signing_up'"
-              @click="launchSignup"
+      <!-- Sections -->
+      <div v-else class="d-flex flex-column gap-8">
+        <div v-for="section in visibleSections" :key="section.key">
+          <!-- Section label -->
+          <div class="d-flex align-center gap-2 mb-3">
+            <VIcon :icon="section.icon" :color="section.color" size="16" />
+            <span
+              class="text-caption font-weight-bold text-uppercase"
+              style="letter-spacing: 0.06em"
             >
-              <VIcon icon="$plus" size="20" />
-            </VBtn>
+              {{ section.title }}
+            </span>
+            <VChip
+              size="x-small"
+              variant="tonal"
+              :color="section.color"
+              class="ml-1"
+            >
+              {{ grouped[section.key].length }}
+            </VChip>
+            <span class="text-caption text-medium-emphasis ml-1"
+              >— {{ section.hint }}</span
+            >
           </div>
 
-          <p
-            v-if="!grouped[section.key].length"
-            class="text-body-2 text-medium-emphasis wa-empty"
-          >
-            Nothing here right now.
-          </p>
-
-          <div v-else class="wa-card-row">
-            <div
+          <!-- Cards grid -->
+          <div class="account-grid">
+            <VCard
               v-for="account in grouped[section.key]"
               :key="account.id"
-              class="wa-account-card"
+              variant="outlined"
+              rounded="lg"
+              class="account-card"
               @click="openAccount(account)"
             >
-              <div class="wa-card-deco" />
-
-              <div class="d-flex align-center justify-space-between mb-4">
-                <div class="d-flex align-center gap-2">
-                  <VIcon icon="$whatsapp" size="20" color="#27a7df" />
-                  <span class="text-caption font-weight-medium wa-label">
-                    {{
-                      account.mode === "connector"
-                        ? "Connector"
-                        : account.mode === "managed_bot"
-                          ? "Managed Bot"
-                          : "Not configured"
-                    }}
-                  </span>
-                </div>
-                <VMenu>
-                  <template #activator="{ props }">
-                    <VBtn
-                      icon
-                      size="x-small"
-                      variant="text"
-                      class="wa-kebab"
-                      v-bind="props"
-                      @click.stop
+              <VCardText class="pa-4">
+                <!-- Top row: avatar + number + menu -->
+                <div class="d-flex align-start justify-space-between mb-3">
+                  <div class="d-flex align-center gap-3">
+                    <VAvatar
+                      size="40"
+                      color="success"
+                      variant="tonal"
+                      rounded="lg"
                     >
-                      <VIcon icon="$dotsVertical" size="18" />
-                    </VBtn>
-                  </template>
-                  <VList density="compact">
-                    <VListItem
-                      prepend-icon="$reload"
-                      title="Sync"
-                      @click="syncAccount(account)"
-                    />
-                    <VListItem
-                      v-if="!account.is_active"
-                      prepend-icon="$linkVariant"
-                      title="Reconnect"
-                      @click="reconnectAccount(account)"
-                    />
-                    <VListItem
-                      v-else
-                      prepend-icon="$linkOff"
-                      title="Disconnect"
-                      base-color="error"
-                      @click="disconnectAccount(account)"
-                    />
-                  </VList>
-                </VMenu>
-              </div>
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <path
+                          d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a8 8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"
+                          fill="#1fc06b"
+                        />
+                        <path
+                          d="M12 2C6.477 2 2 6.477 2 12c0 1.89.522 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"
+                          stroke="#1fc06b"
+                          stroke-width="1.5"
+                          fill="none"
+                        />
+                      </svg>
+                    </VAvatar>
+                    <div>
+                      <p
+                        class="text-body-1 font-weight-semibold mb-0"
+                        style="line-height: 1.3"
+                      >
+                        {{
+                          account.display_phone_number ?? account.phone_number
+                        }}
+                      </p>
+                      <p class="text-caption text-medium-emphasis mb-0">
+                        {{ account.verified_name ?? "Unverified name" }}
+                      </p>
+                    </div>
+                  </div>
 
-              <p class="text-h6 font-weight-bold text-white mb-1 wa-number">
-                {{ account.display_phone_number ?? account.phone_number }}
-              </p>
-              <p class="text-caption wa-name mb-4">
-                {{ account.verified_name ?? "Unverified" }}
-              </p>
+                  <VMenu location="bottom end">
+                    <template #activator="{ props }">
+                      <VBtn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        v-bind="props"
+                        @click.stop
+                      >
+                        <VIcon icon="$dotsVertical" size="16" />
+                      </VBtn>
+                    </template>
+                    <VList density="compact" min-width="160">
+                      <VListItem
+                        prepend-icon="$reload"
+                        title="Sync"
+                        @click.stop="syncAccount(account)"
+                      />
+                      <VListItem
+                        v-if="!account.is_active"
+                        prepend-icon="$linkVariant"
+                        title="Reconnect"
+                        @click.stop="reconnectAccount(account)"
+                      />
+                      <VListItem
+                        v-else
+                        prepend-icon="$linkOff"
+                        title="Disconnect"
+                        base-color="error"
+                        @click.stop="disconnectAccount(account)"
+                      />
+                    </VList>
+                  </VMenu>
+                </div>
 
-              <div class="wa-progress-track mb-4">
+                <VDivider class="mb-3" />
+
+                <!-- Chips row -->
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <VChip
+                    v-if="account.mode"
+                    size="small"
+                    variant="tonal"
+                    color="primary"
+                    prepend-icon="$robot"
+                  >
+                    {{ modeLabel[account.mode] ?? account.mode }}
+                  </VChip>
+                  <VChip
+                    v-else
+                    size="small"
+                    variant="tonal"
+                    prepend-icon="$alertCircleOutline"
+                  >
+                    Not configured
+                  </VChip>
+                  <VChip
+                    size="small"
+                    variant="tonal"
+                    :color="qualityChipColor[account.quality_rating]"
+                  >
+                    {{ qualityLabel[account.quality_rating] }}
+                  </VChip>
+                </div>
+
+                <!-- Stats row -->
+                <div class="d-flex align-center justify-space-between">
+                  <div>
+                    <p class="text-caption text-medium-emphasis mb-0">
+                      Daily limit
+                    </p>
+                    <p class="text-body-2 font-weight-medium mb-0">
+                      {{
+                        limitLabel(
+                          account.whatsapp_business_manager_messaging_limit,
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <VDivider vertical class="mx-3" style="height: 28px" />
+                  <div class="text-right">
+                    <p class="text-caption text-medium-emphasis mb-0">
+                      Last synced
+                    </p>
+                    <p class="text-body-2 font-weight-medium mb-0">
+                      {{ formatDate(account.last_synced_at) }}
+                    </p>
+                  </div>
+                </div>
+              </VCardText>
+
+              <!-- Status footer -->
+              <VCardActions class="pa-0">
                 <div
-                  class="wa-progress-fill"
-                  :style="{
-                    width:
-                      account.quality_rating === 'GREEN'
-                        ? '100%'
-                        : account.quality_rating === 'YELLOW'
-                          ? '60%'
-                          : account.quality_rating === 'RED'
-                            ? '25%'
-                            : '10%',
-                    background: qualityColor[account.quality_rating],
-                  }"
-                />
-              </div>
-
-              <div
-                class="d-flex align-center justify-space-between wa-footer mb-4"
-              >
-                <div>
-                  <p class="text-caption wa-footer-label mb-0">Quality</p>
-                  <p class="text-body-2 font-weight-medium text-white mb-0">
-                    {{
-                      qualityLabel[account.quality_rating] ??
-                      account.quality_rating
-                    }}
-                  </p>
-                </div>
-                <div class="text-right">
-                  <p class="text-caption wa-footer-label mb-0">Limit</p>
-                  <p class="text-body-2 font-weight-medium text-white mb-0">
-                    {{
-                      limitLabel(
-                        account.whatsapp_business_manager_messaging_limit,
-                      )
-                    }}
-                  </p>
-                </div>
-              </div>
-
-              <VDivider class="wa-divider mb-3" />
-
-              <div class="d-flex align-center justify-space-between">
-                <span class="text-caption wa-footer-label">
-                  Synced {{ formatDate(account.last_synced_at) }}
-                </span>
-                <VChip
-                  size="small"
-                  variant="flat"
-                  :color="account.is_active ? 'success' : 'error'"
-                  class="wa-status-chip"
+                  class="account-card__footer"
+                  :class="`account-card__footer--${section.color}`"
                 >
-                  {{ account.is_active ? "Active" : "Inactive" }}
-                  <VIcon icon="$chevronRight" size="14" class="ml-1" />
-                </VChip>
-              </div>
-            </div>
+                  <VIcon :icon="section.icon" size="13" />
+                  <span>{{ section.title }}</span>
+                </div>
+              </VCardActions>
+            </VCard>
           </div>
-        </section>
+        </div>
       </div>
     </template>
 
-    <!-- ── Mode selection dialog — shown right after signup completes ────── -->
-    <VDialog
-      :model-value="signupStep === 'choosing_mode'"
-      max-width="480"
-      persistent
+    <ConnectAccountDialog
+      ref="connectDialog"
+      v-model="dialogOpen"
+      :sdk-ready="sdkReady"
+      :setup-account="setupAccount"
+      @connected="fetchAccounts"
+    />
+
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      timeout="4000"
+      location="top right"
+      closable
     >
-      <VCard v-if="pendingAccount">
-        <VCardTitle>How will you use this number?</VCardTitle>
-        <VCardText>
-          <VAlert type="success" variant="tonal" density="compact" class="mb-4">
-            {{ pendingAccount.display_phone_number }} registered successfully.
-          </VAlert>
-          <VRadioGroup v-model="selectedMode">
-            <VRadio label="Build a bot in this dashboard" value="managed_bot" />
-            <VRadio
-              label="Relay to my own chatbot via webhook"
-              value="connector"
-            />
-          </VRadioGroup>
-          <VTextField
-            v-if="selectedMode === 'connector'"
-            v-model="webhookUrl"
-            label="Your Webhook URL"
-            placeholder="https://your-system.com/webhooks/whatsapp"
-            variant="outlined"
-            density="comfortable"
-          />
-        </VCardText>
-        <VCardActions>
-          <VSpacer />
-          <VBtn color="primary" :disabled="!selectedMode" @click="confirmMode"
-            >Continue</VBtn
-          >
-        </VCardActions>
-      </VCard>
-    </VDialog>
+      {{ snackbar.text }}
+      <template #actions>
+        <VBtn
+          variant="text"
+          size="small"
+          icon="$close"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>
 
 <style scoped>
-.wa-page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 28px;
-  gap: 16px;
-  flex-wrap: wrap;
+.gap-8 {
+  gap: 32px;
 }
 
-/* ── Sections stack top-to-bottom instead of columns sitting side-by-side ── */
-.wa-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-.wa-section {
-  border-radius: 18px;
-  padding: 20px 22px 22px;
-  background: var(--wa-accent-bg, rgba(0, 0, 0, 0.02));
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.wa-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.wa-section-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.wa-count-chip {
-  background: rgba(0, 0, 0, 0.06) !important;
-  font-weight: 600;
-}
-
-.wa-empty {
-  padding: 8px 2px 4px;
-}
-
-/* Cards within a section wrap horizontally; sections themselves are vertical */
-.wa-card-row {
+.account-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
 }
 
-.wa-account-card {
-  position: relative;
-  border-radius: 16px;
-  padding: 20px 22px;
+.account-card {
   cursor: pointer;
-  background: linear-gradient(145deg, #131c33 0%, #1c2a5c 55%, #273775 100%);
-  overflow: hidden;
   transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
-.wa-account-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 24px rgba(19, 28, 51, 0.25);
+
+.account-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08) !important;
+  transform: translateY(-1px);
 }
-.wa-card-deco {
-  position: absolute;
-  width: 200px;
-  height: 200px;
-  border-radius: 50%;
-  background: rgba(39, 167, 223, 0.18);
-  top: -110px;
-  right: -50px;
-  filter: blur(8px);
-}
-.wa-label {
-  color: rgba(255, 255, 255, 0.7);
-}
-.wa-kebab {
-  color: rgba(255, 255, 255, 0.8) !important;
-}
-.wa-number {
-  letter-spacing: 0.3px;
-}
-.wa-name {
-  color: rgba(255, 255, 255, 0.65);
-}
-.wa-progress-track {
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-}
-.wa-progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.3s ease;
-}
-.wa-footer-label {
-  color: rgba(255, 255, 255, 0.5);
-}
-.wa-divider {
-  border-color: rgba(255, 255, 255, 0.12) !important;
-}
-.wa-status-chip {
+
+.account-card__footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 16px;
+  font-size: 12px;
   font-weight: 600;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.account-card__footer--success {
+  color: rgb(var(--v-theme-success));
+  background: rgba(var(--v-theme-success), 0.05);
+}
+.account-card__footer--warning {
+  color: rgb(var(--v-theme-warning));
+  background: rgba(var(--v-theme-warning), 0.05);
+}
+.account-card__footer--error {
+  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-error), 0.05);
+}
+.account-card__footer--secondary {
+  color: rgb(var(--v-theme-secondary));
+  background: rgba(var(--v-theme-secondary), 0.05);
+}
+
+@media (max-width: 600px) {
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

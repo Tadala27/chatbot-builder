@@ -31,7 +31,6 @@ class ProcessWhatsAppWebhookPayload implements ShouldQueue
 
     public function handle(WhatsAppWebhookService $managedBotService): void
     {
-        Log::debug('Here we are proccessing the message');
         $phoneNumberId = $this->extractPhoneNumberId($this->payload);
 
         if (!$phoneNumberId) {

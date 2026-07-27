@@ -23,6 +23,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
             'deployment_mode',
             'slug',
             'is_active',
+            'provisioned_at',
             'subscription_tier',
             'subscription_expires_at',
             'max_bots',
@@ -37,6 +38,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         'deployment_mode',                         // data bag
         'slug',
         'is_active',
+        'provisioned_at',
         'subscription_tier',
         'subscription_expires_at',
         'max_bots',
@@ -46,6 +48,7 @@ class Tenant extends BaseTenant implements TenantWithDatabase
 
     protected $casts = [
         'is_active' => 'boolean',
+        'provisioned_at' => 'datetime',
         'subscription_expires_at' => 'datetime',
         'settings' => 'array',
         'max_bots' => 'integer',

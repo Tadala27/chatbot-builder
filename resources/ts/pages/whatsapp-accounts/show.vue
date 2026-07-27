@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import axios from "axios";
 import Swal from "sweetalert2";
 
 interface WhatsappAccount {
-  id: number;
+  id: string;
   phone_number: string;
   display_phone_number: string | null;
   verified_name: string | null;
@@ -16,9 +16,6 @@ interface WhatsappAccount {
   webhook_url: string | null;
   is_active: boolean;
   last_synced_at: string | null;
-  currency: string | null;
-  timezone_id: string | null;
-  account_review_status: string | null;
   bots?: any[];
 }
 
@@ -33,6 +30,11 @@ interface AccountStats {
   onboarding_status: string;
   is_healthy: boolean;
   mode: string | null;
+  currency: string | null;
+  timezone_id: string | null;
+  phone_status: string | null;
+  name_status: string | null;
+  throughput_level: string | null;
 }
 
 interface HealthIssue {
@@ -49,9 +51,24 @@ const stats = ref<AccountStats | null>(null);
 const issues = ref<HealthIssue[]>([]);
 const isLoading = ref(true);
 const isSyncing = ref(false);
-
-const connectorInfo = ref<{ endpoint_url: string } | null>(null);
 const isRotating = ref(false);
+const connectorEndpoint = ref<string | null>(null);
+const changeModeDialog = ref(false);
+const newMode = ref<"managed_bot" | "connector" | null>(null);
+const newWebhookUrl = ref("");
+const isChangingMode = ref(false);
+
+const snackbar = ref({
+  show: false,
+  text: "",
+  color: "success" as "success" | "error",
+});
+
+function showSnackbar(text: string, color: "success" | "error" = "success") {
+  snackbar.value = { show: true, text, color };
+}
+
+// ── Labels & colors ───────────────────────────────────────────────────────────
 
 const qualityLabel: Record<string, string> = {
   GREEN: "Good",
@@ -59,15 +76,28 @@ const qualityLabel: Record<string, string> = {
   RED: "At risk",
   UNKNOWN: "Unrated",
 };
-
 const qualityColor: Record<string, string> = {
   GREEN: "success",
   YELLOW: "warning",
   RED: "error",
-  UNKNOWN: "grey",
+  UNKNOWN: "default",
 };
 
-const onboardingLabel: Record<string, { text: string; color: string }> = {
+const limitLabels: Record<string, string> = {
+  TIER_NOT_STARTED: "Not started",
+  TIER_50: "50 / day",
+  TIER_250: "250 / day",
+  TIER_1K: "1K / day",
+  TIER_10K: "10K / day",
+  TIER_100K: "100K / day",
+  TIER_UNLIMITED: "Unlimited",
+};
+
+function limitLabel(limit: string | null): string {
+  return limit ? (limitLabels[limit] ?? limit) : "—";
+}
+
+const onboardingMeta: Record<string, { text: string; color: string }> = {
   pending_registration: { text: "Registering", color: "warning" },
   pending_payment: { text: "Payment needed", color: "warning" },
   active: { text: "Active", color: "success" },
@@ -78,14 +108,13 @@ const severityColor: Record<string, string> = {
   warning: "warning",
   info: "info",
 };
-
 const severityIcon: Record<string, string> = {
   critical: "$alertCircle",
   warning: "$alert",
-  info: "$alert",
+  info: "$informationOutline",
 };
 
-const worstSeverity = computed(() => {
+const worstSeverity = computed<string | null>(() => {
   if (issues.value.some((i) => i.severity === "critical")) return "critical";
   if (issues.value.some((i) => i.severity === "warning")) return "warning";
   if (issues.value.length) return "info";
@@ -93,28 +122,30 @@ const worstSeverity = computed(() => {
 });
 
 const curlCommand = computed(() =>
-  connectorInfo.value
-    ? `curl -X POST "${connectorInfo.value.endpoint_url}" \\\n  -H "X-Connector-Key: <your key>" \\\n  -H "Content-Type: application/json" \\\n  -d '{ "to": "265997123456", "type": "text", "text": "Hello!" }'`
+  connectorEndpoint.value
+    ? `curl -X POST "${connectorEndpoint.value}" \\\n  -H "X-Connector-Key: <your-key>" \\\n  -H "Content-Type: application/json" \\\n  -d '{ "to": "265997123456", "type": "text", "text": "Hello!" }'`
     : "",
 );
 
-const fetchAll = async () => {
+// ── Data fetching ─────────────────────────────────────────────────────────────
+
+async function fetchAll(): Promise<void> {
   isLoading.value = true;
   try {
-    const [{ data: showData }, { data: healthData }] = await Promise.all([
+    const [showRes, healthRes] = await Promise.all([
       axios.get(`/tenant/whatsapp-accounts/${accountId.value}`),
-      axios.get(`/tenant/whatsapp-accounts/${accountId.value}/health`),
+      axios.get(`/tenant/whatsapp/accounts/${accountId.value}/health`),
     ]);
 
-    account.value = showData.account;
-    stats.value = showData.stats;
-    issues.value = healthData.issues ?? [];
+    account.value = showRes.data.account;
+    stats.value = showRes.data.stats;
+    issues.value = healthRes.data.issues ?? [];
 
     if (account.value?.mode === "connector") {
       const { data } = await axios.get(
         `/tenant/whatsapp-accounts/${accountId.value}/connector-info`,
       );
-      connectorInfo.value = { endpoint_url: data.endpoint_url };
+      connectorEndpoint.value = data.endpoint_url ?? null;
     }
   } catch (e: any) {
     Swal.fire({
@@ -125,683 +156,643 @@ const fetchAll = async () => {
   } finally {
     isLoading.value = false;
   }
-};
+}
 
-const syncAccount = async () => {
-  if (!account.value) return;
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+async function syncAccount(): Promise<void> {
   isSyncing.value = true;
   try {
-    await axios.post(`/tenant/whatsapp-accounts/${account.value.id}/sync`);
+    await axios.post(`/tenant/whatsapp/accounts/${accountId.value}/sync`);
     await fetchAll();
+    showSnackbar("Account synced.");
   } catch (e: any) {
-    Swal.fire({
-      title: "Sync failed",
-      text: e.response?.data?.message ?? "Something went wrong.",
-      icon: "error",
-    });
+    showSnackbar(e.response?.data?.message ?? "Sync failed.", "error");
   } finally {
     isSyncing.value = false;
   }
-};
+}
 
-const reconnectAccount = async () => {
-  if (!account.value) return;
+async function confirmModeChange(): Promise<void> {
+  if (!newMode.value) return;
+  if (newMode.value === "connector" && !newWebhookUrl.value.trim()) {
+    showSnackbar("A webhook URL is required for connector mode.", "error");
+    return;
+  }
+  isChangingMode.value = true;
   try {
-    await axios.post(`/tenant/whatsapp-accounts/${account.value.id}/reconnect`);
+    const { data } = await axios.post(
+      `/tenant/whatsapp-accounts/${accountId.value}/choose-mode`,
+      { mode: newMode.value, webhook_url: newWebhookUrl.value || undefined },
+    );
+    changeModeDialog.value = false;
+    newMode.value = null;
+    newWebhookUrl.value = "";
+
+    if (data.connector_api_key) {
+      Swal.fire({
+        title: "New connector API key — save this now",
+        html: `<code style="word-break:break-all;font-size:13px">${data.connector_api_key}</code><p class="mt-3" style="font-size:13px;opacity:.6">It won't be shown again.</p>`,
+        icon: "success",
+      });
+    } else {
+      showSnackbar("Mode updated successfully.");
+    }
     await fetchAll();
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to reconnect.",
-      icon: "error",
-    });
+    showSnackbar(
+      e.response?.data?.message ?? "Failed to change mode.",
+      "error",
+    );
+  } finally {
+    isChangingMode.value = false;
   }
-};
+}
 
-const disconnectAccount = async () => {
-  if (!account.value) return;
+async function reconnectAccount(): Promise<void> {
+  try {
+    await axios.post(`/tenant/whatsapp-accounts/${accountId.value}/reconnect`);
+    await fetchAll();
+    showSnackbar("Account reconnected.");
+  } catch (e: any) {
+    showSnackbar(e.response?.data?.message ?? "Reconnect failed.", "error");
+  }
+}
+
+async function disconnectAccount(): Promise<void> {
   const { isConfirmed } = await Swal.fire({
-    title: "Disconnect Account",
-    text: `Disconnect ${account.value.display_phone_number ?? account.value.phone_number}? Bots using it will stop working. This does not remove the number from Meta.`,
+    title: "Disconnect this number?",
+    text: `${account.value?.display_phone_number ?? account.value?.phone_number} will stop working for all bots. This does not remove it from Meta.`,
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#ef4444",
+    confirmButtonText: "Disconnect",
   });
   if (!isConfirmed) return;
   try {
-    await axios.post(
-      `/tenant/whatsapp-accounts/${account.value.id}/disconnect`,
-    );
+    await axios.post(`/tenant/whatsapp-accounts/${accountId.value}/disconnect`);
     await fetchAll();
+    showSnackbar("Account disconnected.");
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to disconnect.",
-      icon: "error",
-    });
+    showSnackbar(e.response?.data?.message ?? "Disconnect failed.", "error");
   }
-};
+}
 
-const rotateKey = async () => {
-  if (!account.value) return;
+async function rotateKey(): Promise<void> {
   const { isConfirmed } = await Swal.fire({
-    title: "Rotate API Key",
-    text: "The current key stops working immediately.",
+    title: "Rotate API key?",
+    text: "The current key stops working immediately. Update your integration before rotating.",
     icon: "warning",
     showCancelButton: true,
+    confirmButtonText: "Rotate",
   });
   if (!isConfirmed) return;
-
   isRotating.value = true;
   try {
     const { data } = await axios.post(
-      `/tenant/whatsapp-accounts/${account.value.id}/rotate-connector-key`,
+      `/tenant/whatsapp-accounts/${accountId.value}/rotate-connector-key`,
     );
     Swal.fire({
-      title: "New API key (shown once)",
-      html: `<code style="word-break:break-all">${data.connector_api_key}</code><p class="mt-3 text-caption">Save this now — it won't be shown again.</p>`,
+      title: "New API key — save this now",
+      html: `<code style="word-break:break-all;font-size:13px">${data.connector_api_key}</code><p class="mt-3" style="font-size:13px;opacity:.6">It won't be shown again.</p>`,
       icon: "success",
     });
   } catch (e: any) {
-    Swal.fire({
-      title: "Error",
-      text: e.response?.data?.message ?? "Failed to rotate key.",
-      icon: "error",
-    });
+    showSnackbar(e.response?.data?.message ?? "Key rotation failed.", "error");
   } finally {
     isRotating.value = false;
   }
-};
+}
 
-const copy = (text: string | null) => {
+async function copyToClipboard(text: string | null): Promise<void> {
   if (!text) return;
-  navigator.clipboard.writeText(text);
-  Swal.fire({
-    title: "Copied",
-    icon: "success",
-    timer: 1000,
-    showConfirmButton: false,
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    // Fallback for HTTP / non-secure contexts
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+
+  showSnackbar("Copied to clipboard.");
+}
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+
+function formatDate(d: string | null): string {
+  if (!d) return "Never";
+  return new Date(d).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
-};
-
-const formatDate = (d: string | null) =>
-  d
-    ? new Date(d).toLocaleString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "Never";
-
-const limitLabel = (limit: string | null) =>
-  limit ? limit.replace("TIER_", "").replace("_", " ") : "—";
+}
 
 onMounted(fetchAll);
 </script>
 
 <template>
-  <div class="wa-detail-page">
+  <div class="detail-page">
     <VBtn
       variant="text"
       prepend-icon="$arrowLeft"
-      class="mb-4 wa-back-btn"
+      class="mb-5"
       @click="router.push({ name: 'whatsapp-accounts' })"
     >
       Back to accounts
     </VBtn>
 
-    <div v-if="isLoading" class="d-flex justify-center py-12">
-      <VProgressCircular indeterminate color="primary" size="48" />
+    <div v-if="isLoading" class="d-flex justify-center py-16">
+      <VProgressCircular indeterminate color="primary" size="40" />
     </div>
 
     <template v-else-if="account && stats">
-      <!-- ── Hero ─────────────────────────────────────────────────────────── -->
-      <div class="wa-hero mb-6 wa-fade-in">
-        <div class="wa-hero-deco" />
-        <div class="wa-hero-deco wa-hero-deco--soft" />
-        <div class="d-flex flex-wrap align-center justify-space-between gap-4">
-          <div>
-            <div class="d-flex align-center flex-wrap gap-2 mb-3">
-              <span class="wa-mode-badge">
-                <VIcon icon="$whatsapp" size="16" color="#27a7df" />
-                {{
-                  account.mode === "connector"
-                    ? "Connector"
-                    : account.mode === "managed_bot"
-                      ? "Managed Bot"
-                      : "Not configured"
-                }}
-              </span>
-              <VChip
-                :color="onboardingLabel[account.onboarding_status].color"
-                size="x-small"
-                variant="flat"
-              >
-                {{ onboardingLabel[account.onboarding_status].text }}
-              </VChip>
-              <VChip
-                :color="account.is_active ? 'success' : 'error'"
-                size="x-small"
-                variant="flat"
-              >
-                {{ account.is_active ? "Active" : "Inactive" }}
-              </VChip>
-            </div>
-
-            <div class="d-flex align-center gap-2 mb-1">
-              <h1 class="text-h4 font-weight-bold text-white wa-number mb-0">
-                {{ account.display_phone_number ?? account.phone_number }}
-              </h1>
-              <VBtn
-                icon
-                variant="text"
-                size="small"
-                class="wa-copy-btn"
-                @click="
-                  copy(account.display_phone_number ?? account.phone_number)
-                "
-              >
-                <VIcon size="16">$contentCopy</VIcon>
-              </VBtn>
-            </div>
-            <p class="text-body-2 wa-name mb-0">
-              {{ account.verified_name ?? "Unverified" }}
-            </p>
+      <!-- ── Page header ──────────────────────────────────────────────────── -->
+      <div
+        class="d-flex align-start justify-space-between gap-4 flex-wrap mb-6"
+      >
+        <div>
+          <div class="d-flex align-center gap-2 mb-2 flex-wrap">
+            <VChip
+              size="small"
+              variant="tonal"
+              :color="account.is_active ? 'success' : 'error'"
+            >
+              {{ account.is_active ? "Active" : "Inactive" }}
+            </VChip>
+            <VChip
+              size="small"
+              variant="tonal"
+              :color="onboardingMeta[account.onboarding_status]?.color"
+            >
+              {{ onboardingMeta[account.onboarding_status]?.text }}
+            </VChip>
+            <VChip
+              v-if="account.mode"
+              size="small"
+              variant="tonal"
+              color="primary"
+            >
+              {{ account.mode === "managed_bot" ? "Managed bot" : "Connector" }}
+            </VChip>
           </div>
 
-          <div class="d-flex flex-wrap gap-2">
+          <div class="d-flex align-center gap-2">
+            <h1 class="text-h5 font-weight-bold mb-0">
+              {{ account.display_phone_number ?? account.phone_number }}
+            </h1>
             <VBtn
-              variant="flat"
-              color="white"
-              class="wa-hero-btn"
-              prepend-icon="$reload"
-              :loading="isSyncing"
-              @click="syncAccount"
+              icon
+              size="x-small"
+              variant="text"
+              @click="
+                copyToClipboard(
+                  account.display_phone_number ?? account.phone_number,
+                )
+              "
             >
-              Sync now
-            </VBtn>
-            <VBtn
-              v-if="!account.is_active"
-              variant="tonal"
-              color="white"
-              class="wa-hero-btn-ghost"
-              prepend-icon="$linkVariant"
-              @click="reconnectAccount"
-            >
-              Reconnect
-            </VBtn>
-            <VBtn
-              v-else
-              variant="tonal"
-              color="error"
-              prepend-icon="$linkOff"
-              @click="disconnectAccount"
-            >
-              Disconnect
+              <VIcon icon="$contentCopy" size="15" />
             </VBtn>
           </div>
+          <p class="text-body-2 text-medium-emphasis mb-0 mt-1">
+            {{ account.verified_name ?? "Unverified name" }}
+          </p>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap">
+          <VBtn
+            variant="tonal"
+            prepend-icon="$reload"
+            :loading="isSyncing"
+            @click="syncAccount"
+          >
+            Sync now
+          </VBtn>
+          <VBtn
+            variant="tonal"
+            prepend-icon="$swap"
+            @click="changeModeDialog = true"
+          >
+            Change mode
+          </VBtn>
+          <VBtn
+            v-if="!account.is_active"
+            variant="tonal"
+            color="primary"
+            prepend-icon="$linkVariant"
+            @click="reconnectAccount"
+          >
+            Reconnect
+          </VBtn>
+          <VBtn
+            v-else
+            variant="tonal"
+            color="error"
+            prepend-icon="$linkOff"
+            @click="disconnectAccount"
+          >
+            Disconnect
+          </VBtn>
         </div>
       </div>
 
+      <!-- Payment warning -->
       <VAlert
         v-if="account.onboarding_status === 'pending_payment'"
         type="warning"
         variant="tonal"
         rounded="lg"
-        class="mb-6 wa-fade-in wa-fade-in--1"
-      >
-        Add a payment method in WhatsApp Manager to activate sending on this
-        number.
-      </VAlert>
+        class="mb-6"
+        title="Payment required"
+        text="Add a payment method in WhatsApp Manager to activate sending on this number."
+      />
 
       <!-- ── Health ───────────────────────────────────────────────────────── -->
-      <div
-        class="wa-health-card mb-6 wa-fade-in wa-fade-in--1"
-        :class="
-          worstSeverity
-            ? `wa-health-card--${worstSeverity}`
-            : 'wa-health-card--ok'
-        "
+      <VCard
+        variant="outlined"
+        rounded="lg"
+        class="mb-6"
+        :color="worstSeverity ? severityColor[worstSeverity] : undefined"
       >
-        <div class="d-flex align-center gap-2 mb-1">
-          <VIcon
-            :icon="worstSeverity ? severityIcon[worstSeverity] : '$whatsapp'"
-            :color="worstSeverity ? severityColor[worstSeverity] : 'success'"
-            size="20"
-          />
-          <span class="text-subtitle-1 font-weight-medium">
-            {{ worstSeverity ? "Needs attention" : "Healthy" }}
-          </span>
-        </div>
-
-        <template v-if="issues.length">
-          <div v-for="(issue, i) in issues" :key="i" class="wa-health-row">
-            <span
-              class="wa-health-dot"
-              :style="{
-                background: `rgb(var(--v-theme-${severityColor[issue.severity]}))`,
-              }"
+        <VCardText>
+          <div class="d-flex align-center gap-2 mb-3">
+            <VIcon
+              :icon="
+                worstSeverity ? severityIcon[worstSeverity] : '$checkCircle'
+              "
+              :color="worstSeverity ? severityColor[worstSeverity] : 'success'"
+              size="20"
             />
-            <span class="text-body-2">{{ issue.message }}</span>
+            <span class="text-subtitle-2 font-weight-bold">
+              {{ worstSeverity ? "Needs attention" : "All systems healthy" }}
+            </span>
           </div>
-        </template>
-        <p v-else class="text-body-2 text-medium-emphasis mb-0 mt-1">
-          No issues found. Quality, delivery, and connection are all in good
-          shape.
-        </p>
-      </div>
+
+          <div v-if="issues.length" class="d-flex flex-column gap-2">
+            <div
+              v-for="(issue, i) in issues"
+              :key="i"
+              class="d-flex align-start gap-3"
+            >
+              <VChip
+                :color="severityColor[issue.severity]"
+                size="x-small"
+                variant="tonal"
+                class="mt-0-5 flex-shrink-0"
+              >
+                {{ issue.severity }}
+              </VChip>
+              <span class="text-body-2">{{ issue.message }}</span>
+            </div>
+          </div>
+          <p v-else class="text-body-2 text-medium-emphasis mb-0">
+            Quality, delivery, and connection are all in good shape.
+          </p>
+        </VCardText>
+      </VCard>
 
       <!-- ── Stats grid ───────────────────────────────────────────────────── -->
-      <VRow class="mb-6 wa-fade-in wa-fade-in--2">
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon
-              icon="mdi-shield-check-outline"
-              size="18"
-              class="wa-stat-icon"
-            />
+      <VRow class="mb-6">
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">Quality</p>
             <VChip
               size="small"
               :color="qualityColor[account.quality_rating]"
-              variant="flat"
+              variant="tonal"
             >
               {{
                 qualityLabel[account.quality_rating] ?? account.quality_rating
               }}
             </VChip>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon icon="mdi-speedometer" size="18" class="wa-stat-icon" />
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">
               Messaging limit
             </p>
             <p class="text-h6 font-weight-bold mb-0">
               {{ limitLabel(stats.messaging_limit) }}
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon icon="mdi-robot-outline" size="18" class="wa-stat-icon" />
-            <p class="text-caption text-medium-emphasis mb-1">Bots</p>
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
+            <p class="text-caption text-medium-emphasis mb-1">Active bots</p>
             <p class="text-h6 font-weight-bold mb-0">
-              {{ stats.active_bots }} / {{ stats.total_bots }}
+              {{ stats.active_bots }}
+              <span
+                class="text-body-2 text-medium-emphasis font-weight-regular"
+              >
+                / {{ stats.total_bots }} total
+              </span>
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon icon="mdi-chat-outline" size="18" class="wa-stat-icon" />
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">
               Conversations today
             </p>
             <p class="text-h6 font-weight-bold mb-0">
               {{ stats.conversations_today }}
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon
-              icon="mdi-calendar-month-outline"
-              size="18"
-              class="wa-stat-icon"
-            />
-            <p class="text-caption text-medium-emphasis mb-1">
-              Conversations this month
-            </p>
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
+            <p class="text-caption text-medium-emphasis mb-1">This month</p>
             <p class="text-h6 font-weight-bold mb-0">
               {{ stats.conversations_this_month }}
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon
-              icon="mdi-chat-processing-outline"
-              size="18"
-              class="wa-stat-icon"
-            />
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">
               Total conversations
             </p>
             <p class="text-h6 font-weight-bold mb-0">
               {{ stats.total_conversations }}
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon icon="mdi-cash-multiple" size="18" class="wa-stat-icon" />
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">Currency</p>
             <p class="text-h6 font-weight-bold mb-0">
-              {{ account.currency ?? "—" }}
+              {{ stats.currency ?? "—" }}
             </p>
-          </div>
+          </VCard>
         </VCol>
-        <VCol cols="6" sm="3">
-          <div class="wa-stat-card">
-            <VIcon icon="mdi-clock-outline" size="18" class="wa-stat-icon" />
+        <VCol cols="6" sm="4" md="3">
+          <VCard variant="outlined" rounded="lg" class="pa-4 stat-card">
             <p class="text-caption text-medium-emphasis mb-1">Last synced</p>
             <p class="text-body-2 font-weight-medium mb-0">
               {{ formatDate(account.last_synced_at) }}
             </p>
-          </div>
+          </VCard>
         </VCol>
       </VRow>
 
       <!-- ── Connector setup ──────────────────────────────────────────────── -->
-      <div
-        v-if="account.mode === 'connector' && connectorInfo"
-        class="wa-connector-card mb-6 wa-fade-in wa-fade-in--3"
+      <VCard
+        v-if="account.mode === 'connector' && connectorEndpoint"
+        variant="outlined"
+        rounded="lg"
+        class="mb-6"
       >
-        <p class="text-subtitle-1 font-weight-medium text-white mb-1">
+        <VCardTitle class="text-subtitle-1 font-weight-bold pt-4 px-4 pb-0">
           Connector setup
-        </p>
-        <p class="text-body-2 wa-connector-sub mb-4">
-          Send a <code>POST</code> request to this URL, with your API key in the
+        </VCardTitle>
+        <VCardSubtitle class="px-4 pb-3">
+          POST to this endpoint with your API key in the
           <code>X-Connector-Key</code> header.
-        </p>
-
-        <div class="d-flex align-center gap-2 mb-4">
-          <VTextField
-            :model-value="connectorInfo.endpoint_url"
-            readonly
-            variant="outlined"
-            density="compact"
-            hide-details
-            class="wa-connector-field"
-          />
-          <VBtn
-            icon
-            variant="tonal"
-            color="white"
-            @click="copy(connectorInfo.endpoint_url)"
+        </VCardSubtitle>
+        <VDivider />
+        <VCardText>
+          <p
+            class="text-caption text-medium-emphasis text-uppercase mb-2"
+            style="letter-spacing: 0.05em"
           >
-            <VIcon size="18">$contentCopy</VIcon>
-          </VBtn>
-        </div>
-
-        <div class="wa-code-block mb-2">
-          <div class="d-flex justify-space-between align-center mb-2">
-            <span class="text-caption wa-code-label">cURL example</span>
+            Endpoint URL
+          </p>
+          <div class="d-flex align-center gap-2 mb-4">
+            <VTextField
+              :model-value="connectorEndpoint"
+              readonly
+              variant="outlined"
+              density="compact"
+              hide-details
+              class="flex-grow-1"
+            />
             <VBtn
+              icon
+              variant="tonal"
               size="small"
-              variant="text"
-              class="wa-copy-code-btn"
-              prepend-icon="$contentCopy"
-              @click="copy(curlCommand)"
+              @click="copyToClipboard(connectorEndpoint)"
             >
-              Copy
+              <VIcon icon="$contentCopy" size="16" />
             </VBtn>
           </div>
-          <pre class="wa-code-text">{{ curlCommand }}</pre>
-        </div>
 
-        <p class="text-caption wa-connector-sub mb-4">
-          Incoming messages on this number are forwarded to
-          <code>{{ account.webhook_url }}</code> as Meta's raw JSON payload.
-        </p>
+          <p
+            class="text-caption text-medium-emphasis text-uppercase mb-2"
+            style="letter-spacing: 0.05em"
+          >
+            cURL example
+          </p>
+          <div class="code-block mb-4">
+            <div class="d-flex align-center justify-space-between mb-2">
+              <VBtn
+                size="x-small"
+                variant="text"
+                prepend-icon="$contentCopy"
+                @click="copyToClipboard(curlCommand)"
+              >
+                Copy
+              </VBtn>
+            </div>
+            <pre class="code-text">{{ curlCommand }}</pre>
+          </div>
 
-        <VBtn
-          variant="tonal"
-          color="warning"
-          size="small"
-          prepend-icon="$reload"
-          :loading="isRotating"
-          @click="rotateKey"
-        >
-          Rotate API key
-        </VBtn>
-      </div>
+          <p class="text-body-2 text-medium-emphasis mb-4">
+            Incoming messages are forwarded to
+            <code class="text-body-2">{{ account.webhook_url }}</code
+            >.
+          </p>
+
+          <VBtn
+            variant="tonal"
+            color="warning"
+            size="small"
+            prepend-icon="$reload"
+            :loading="isRotating"
+            @click="rotateKey"
+          >
+            Rotate API key
+          </VBtn>
+        </VCardText>
+      </VCard>
 
       <!-- ── Bots on this number ──────────────────────────────────────────── -->
       <VCard
         v-if="account.mode === 'managed_bot'"
-        variant="flat"
-        border
+        variant="outlined"
         rounded="lg"
-        class="wa-fade-in wa-fade-in--3"
       >
-        <VCardTitle class="text-subtitle-1">Bots on this number</VCardTitle>
+        <VCardTitle class="text-subtitle-1 font-weight-bold">
+          Bots on this number
+        </VCardTitle>
         <VDivider />
         <VList v-if="account.bots?.length" density="comfortable">
           <VListItem
             v-for="bot in account.bots"
             :key="bot.id"
             :title="bot.name"
+            :subtitle="bot.description ?? undefined"
           >
             <template #prepend>
-              <VAvatar size="32" color="primary" variant="tonal">
-                <VIcon icon="mdi-robot-outline" size="18" />
+              <VAvatar size="34" color="primary" variant="tonal" rounded="lg">
+                <VIcon icon="$robot" size="18" />
               </VAvatar>
             </template>
             <template #append>
               <VChip
                 size="x-small"
-                :color="bot.is_active ? 'success' : 'grey'"
-                variant="flat"
+                :color="bot.is_active ? 'success' : 'default'"
+                variant="tonal"
               >
                 {{ bot.is_active ? "Active" : "Inactive" }}
               </VChip>
             </template>
           </VListItem>
         </VList>
-        <div v-else class="wa-empty-state">
-          <VIcon icon="mdi-robot-confused-outline" size="32" color="grey" />
-          <p class="text-body-2 text-medium-emphasis mt-2 mb-0">
-            No bots built here yet. Start one to put this number to work.
+        <div
+          v-else
+          class="d-flex flex-column align-center text-center pa-10 gap-3"
+        >
+          <VIcon icon="$robot" size="36" color="medium-emphasis" />
+          <p class="text-body-2 text-medium-emphasis mb-0">
+            No bots on this number yet.
           </p>
         </div>
       </VCard>
     </template>
+
+    <VDialog v-model="changeModeDialog" max-width="440" persistent>
+      <VCard rounded="lg" class="pa-6">
+        <h3 class="text-h6 font-weight-bold mb-1">Change account mode</h3>
+        <p class="text-body-2 text-medium-emphasis mb-4">
+          Switching from connector to managed bot (or back) will affect active
+          integrations.
+        </p>
+
+        <div class="d-flex flex-column gap-3 mb-4">
+          <VCard
+            variant="outlined"
+            :color="newMode === 'managed_bot' ? 'primary' : undefined"
+            class="pa-3 cursor-pointer"
+            @click="
+              newMode = 'managed_bot';
+              newWebhookUrl = '';
+            "
+          >
+            <p class="text-body-2 font-weight-semibold mb-0">
+              Build a bot here
+            </p>
+            <p class="text-caption text-medium-emphasis mb-0">
+              Use the bot builder in this dashboard.
+            </p>
+          </VCard>
+          <VCard
+            variant="outlined"
+            :color="newMode === 'connector' ? 'primary' : undefined"
+            class="pa-3 cursor-pointer"
+            @click="newMode = 'connector'"
+          >
+            <p class="text-body-2 font-weight-semibold mb-0">
+              Connect my own system
+            </p>
+            <p class="text-caption text-medium-emphasis mb-0">
+              Forward messages via webhook.
+            </p>
+          </VCard>
+        </div>
+
+        <VTextField
+          v-if="newMode === 'connector'"
+          v-model="newWebhookUrl"
+          label="Webhook URL"
+          variant="outlined"
+          density="comfortable"
+          class="mb-4"
+        />
+
+        <div class="d-flex justify-end gap-2">
+          <VBtn
+            variant="text"
+            @click="
+              changeModeDialog = false;
+              newMode = null;
+            "
+            >Cancel</VBtn
+          >
+          <VBtn
+            color="primary"
+            variant="flat"
+            :disabled="!newMode"
+            :loading="isChangingMode"
+            @click="confirmModeChange"
+          >
+            Confirm
+          </VBtn>
+        </div>
+      </VCard>
+    </VDialog>
+    <VSnackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      timeout="4000"
+      location="top right"
+      closable
+    >
+      {{ snackbar.text }}
+      <template #actions>
+        <VBtn
+          size="small"
+          variant="text"
+          icon="$close"
+          @click="snackbar.show = false"
+        />
+      </template>
+    </VSnackbar>
   </div>
 </template>
 
 <style scoped>
-.wa-detail-page {
-  max-width: 1100px;
-  margin: 0 auto;
-}
-
-.wa-back-btn {
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-/* ── Hero ──────────────────────────────────────────────────────────────── */
-.wa-hero {
-  position: relative;
-  border-radius: 20px;
-  padding: 32px 32px 30px;
-  background: linear-gradient(145deg, #131c33 0%, #1c2a5c 55%, #273775 100%);
-  overflow: hidden;
-}
-.wa-hero-deco {
-  position: absolute;
-  width: 280px;
-  height: 280px;
-  border-radius: 50%;
-  background: rgba(39, 167, 223, 0.18);
-  top: -140px;
-  right: -60px;
-  filter: blur(10px);
-  pointer-events: none;
-}
-.wa-hero-deco--soft {
-  width: 180px;
-  height: 180px;
-  top: auto;
-  bottom: -100px;
-  left: -60px;
-  right: auto;
-  background: rgba(39, 167, 223, 0.1);
-}
-.wa-mode-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
-  border-radius: 999px;
-  background: rgba(39, 167, 223, 0.14);
-  border: 1px solid rgba(39, 167, 223, 0.3);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
-  font-weight: 500;
-}
-.wa-hero-btn {
-  color: #131c33 !important;
-  font-weight: 600;
-}
-.wa-hero-btn-ghost {
-  border: 1px solid rgba(255, 255, 255, 0.25);
-}
-.wa-number {
-  letter-spacing: 0.3px;
-}
-.wa-name {
-  color: rgba(255, 255, 255, 0.65);
-}
-.wa-copy-btn {
-  color: rgba(255, 255, 255, 0.55) !important;
-  transition: color 0.15s ease;
-}
-.wa-copy-btn:hover {
-  color: #27a7df !important;
-}
-
-/* ── Health ────────────────────────────────────────────────────────────── */
-.wa-health-card {
-  border-radius: 14px;
-  padding: 18px 20px;
-  border: 1px solid rgba(var(--v-border-color), 0.14);
-  border-left: 3px solid transparent;
-}
-.wa-health-card--ok {
-  border-left-color: rgb(var(--v-theme-success));
-  background: rgba(var(--v-theme-success), 0.06);
-}
-.wa-health-card--info {
-  border-left-color: rgb(var(--v-theme-info));
-}
-.wa-health-card--warning {
-  border-left-color: rgb(var(--v-theme-warning));
-  background: rgba(var(--v-theme-warning), 0.05);
-}
-.wa-health-card--critical {
-  border-left-color: rgb(var(--v-theme-error));
-  background: rgba(var(--v-theme-error), 0.05);
-}
-.wa-health-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 0 6px 28px;
-}
-.wa-health-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* ── Stat cards ────────────────────────────────────────────────────────── */
-.wa-stat-card {
-  border-radius: 14px;
-  padding: 16px;
+.stat-card {
   height: 100%;
-  border: 1px solid rgba(var(--v-border-color), 0.14);
-  transition:
-    border-color 0.15s ease,
-    transform 0.15s ease;
-}
-.wa-stat-card:hover {
-  border-color: rgba(39, 167, 223, 0.35);
-  transform: translateY(-1px);
-}
-.wa-stat-icon {
-  color: rgba(39, 167, 223, 0.8);
-  margin-bottom: 8px;
+  transition: box-shadow 0.15s ease;
 }
 
-/* ── Connector card ────────────────────────────────────────────────────── */
-.wa-connector-card {
-  border-radius: 16px;
-  padding: 24px 26px;
-  background: linear-gradient(145deg, #131c33 0%, #1c2a5c 55%, #273775 100%);
+.stat-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07) !important;
 }
-.wa-connector-sub {
-  color: rgba(255, 255, 255, 0.6);
+
+.mt-0-5 {
+  margin-top: 2px;
 }
-.wa-connector-field :deep(input) {
-  color: #fff;
-}
-.wa-code-block {
+
+.code-block {
   border-radius: 10px;
   padding: 14px 16px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
-.wa-code-label {
-  color: rgba(255, 255, 255, 0.45);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.wa-code-text {
+
+.code-text {
   white-space: pre-wrap;
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
     monospace;
   font-size: 12.5px;
   line-height: 1.6;
-  color: #7fd4f5;
-}
-.wa-copy-code-btn {
-  color: rgba(255, 255, 255, 0.6) !important;
+  color: rgb(var(--v-theme-on-surface));
 }
 
-/* ── Empty state ───────────────────────────────────────────────────────── */
-.wa-empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 40px 24px;
-}
-
-/* ── Motion ────────────────────────────────────────────────────────────── */
-.wa-fade-in {
-  animation: wa-fade-in-up 0.35s ease both;
-}
-.wa-fade-in--1 {
-  animation-delay: 0.05s;
-}
-.wa-fade-in--2 {
-  animation-delay: 0.1s;
-}
-.wa-fade-in--3 {
-  animation-delay: 0.15s;
-}
-@keyframes wa-fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .wa-fade-in,
-  .wa-fade-in--1,
-  .wa-fade-in--2,
-  .wa-fade-in--3 {
-    animation: none;
-  }
+.gap-2 {
+  gap: 8px;
 }
 </style>

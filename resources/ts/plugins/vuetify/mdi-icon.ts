@@ -333,6 +333,10 @@ import {
   mdiArrowBottomLeft,
   mdiBullhornOutline,
   mdiPaperclip,
+  mdiChatProcessingOutline,
+  mdiSticker,
+  mdiStickerOutline,
+  mdiDatabaseCogOutline,
 } from "@mdi/js";
 
 export const icons = {
@@ -670,4 +674,8 @@ export const icons = {
   arrowBottomLeft: mdiArrowBottomLeft,
   bullhornOutline: mdiBullhornOutline,
   paperclip: mdiPaperclip,
+  chatProcessingOutline: mdiChatProcessingOutline,
+  sticker: mdiSticker,
+  stickerOutline: mdiStickerOutline,
+  databaseCogOutline: mdiDatabaseCogOutline,
 };

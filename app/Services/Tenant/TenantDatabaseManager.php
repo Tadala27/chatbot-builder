@@ -780,4 +780,58 @@ class TenantDatabaseManager
 
         return $driver;
     }
+
+    // Add these public methods to TenantDatabaseManager
+
+    /**
+     * Fetch all tenant-guard roles from the tenant's own database, with
+     * their permissions, for use in an admin-side "create user" form.
+     */
+    public function getRolesForTenant(Tenant $tenant): \Illuminate\Support\Collection
+    {
+        $this->resolver->resolve($tenant);
+
+        try {
+            return Role::on(DB::getDefaultConnection())
+                ->where('guard_name', 'tenant')
+                ->with('permissions:id,name')
+                ->get(['id', 'name']);
+        } finally {
+            $this->resetToLandlord();
+        }
+    }
+
+    /**
+     * Create a user directly inside the tenant's database and assign a role.
+     * $data expects: name, email, password, role (role name as seeded by seedDefaultData()).
+     */
+    public function createUserForTenant(Tenant $tenant, array $data): User
+    {
+        $connection = $this->resolver->resolve($tenant);
+
+        try {
+            $roleExists = Role::on($connection)
+                ->where('guard_name', 'tenant')
+                ->where('name', $data['role'])
+                ->exists();
+
+            if (!$roleExists) {
+                throw new \RuntimeException("Role [{$data['role']}] does not exist for tenant [{$tenant->slug}]. Has this tenant been provisioned?");
+            }
+
+            $user = User::on($connection)->create([
+                'id' => (string) Str::uuid(),
+                'name' => $data['name'],
+                'email' => $data['email'],
+                'password' => Hash::make($data['password']),
+            ]);
+
+            $user->assignRole($data['role']);
+
+            return $user;
+        } finally {
+            $this->resetToLandlord();
+            app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        }
+    }
 }

@@ -7,18 +7,19 @@ use App\Models\BotMediaFile;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\WhatsappAccount;
+use App\Services\Tenant\TenantStorageManager;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class WhatsAppMessageService
 {
     private Client $client;
 
-    /** Meta media_ids expire after ~7 days. Cache for 6 h to avoid re-uploads. */
     private const MEDIA_CACHE_TTL = 6 * 3600;
 
     public function __construct()
@@ -38,7 +39,8 @@ class WhatsAppMessageService
         string $to,
         string $text,
         array $variables = [],
-        ?string $replyToWamid = null
+        ?string $replyToWamid = null,
+        array $metadata = []
     ): Message {
         $body = $this->resolveText($text, $variables, $to, $account);
 
@@ -56,7 +58,7 @@ class WhatsAppMessageService
 
         $response = $this->send($account, $payload);
 
-        return $this->record($account, $to, 'text', ['text' => $body], $response, $replyToWamid);
+        return $this->record($account, $to, 'text', ['text' => $body], $response, $replyToWamid, $metadata);
     }
 
     public function sendReplyText(
@@ -64,13 +66,14 @@ class WhatsAppMessageService
         string $to,
         string $text,
         string $replyToWamid,
-        array $variables = []
+        array $variables = [],
+        array $metadata = []
     ): Message {
-        return $this->sendTextMessage($account, $to, $text, $variables, $replyToWamid);
+        return $this->sendTextMessage($account, $to, $text, $variables, $replyToWamid, $metadata);
     }
 
     // =========================================================================
-    // INTERACTIVE — BUTTONS (Supports both Reply and URL buttons)
+    // INTERACTIVE — BUTTONS
     // =========================================================================
 
     public function sendButtonMessage(
@@ -83,11 +86,7 @@ class WhatsAppMessageService
         array $variables = []
     ): Message {
         $resolver = app(VariableResolver::class);
-
-        // Use resolveWithContext for all text fields
         $bodyText = $resolver->resolveWithContext($bodyText, $account, $to, $variables);
-
-        // Separate reply buttons from URL buttons
         $replyButtons = [];
         $urlButtons = [];
 
@@ -103,20 +102,15 @@ class WhatsAppMessageService
             }
         }
 
-        // If there are URL buttons, send as CTA URL message
         if (!empty($urlButtons)) {
             return $this->sendCtaUrlMessage(
-                $account,
-                $to,
-                $bodyText,
-                $urlButtons[0],
+                $account, $to, $bodyText, $urlButtons[0],
                 $headerText ? $resolver->resolveWithContext($headerText, $account, $to, $variables) : null,
                 $footerText ? $resolver->resolveWithContext($footerText, $account, $to, $variables) : null,
                 $variables
             );
         }
 
-        // Otherwise send as reply buttons (max 3)
         $formatted = array_map(function ($btn, $idx) {
             return [
                 'type' => 'reply',
@@ -136,19 +130,13 @@ class WhatsAppMessageService
         if ($headerText) {
             $interactive['header'] = [
                 'type' => 'text',
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($headerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($headerText, $account, $to, $variables), 60),
             ];
         }
 
         if ($footerText) {
             $interactive['footer'] = [
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($footerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($footerText, $account, $to, $variables), 60),
             ];
         }
 
@@ -158,9 +146,6 @@ class WhatsAppMessageService
         return $this->record($account, $to, 'interactive', $interactive, $response);
     }
 
-    /**
-     * Send a CTA URL interactive message (for URL buttons).
-     */
     private function sendCtaUrlMessage(
         WhatsappAccount $account,
         string $to,
@@ -171,44 +156,28 @@ class WhatsAppMessageService
         array $variables = []
     ): Message {
         $resolver = app(VariableResolver::class);
-
-        // Resolve the URL with variables using resolveWithContext
         $url = $resolver->resolveWithContext($button['url'] ?? '#', $account, $to, $variables);
-        $displayText = $this->truncate(
-            $button['title'] ?? 'Learn More',
-            20
-        );
+        $displayText = $this->truncate($button['title'] ?? 'Learn More', 20);
 
         $interactive = [
             'type' => 'cta_url',
             'body' => ['text' => $bodyText],
             'action' => [
                 'name' => 'cta_url',
-                'parameters' => [
-                    'display_text' => $displayText,
-                    'url' => $url,
-                ],
+                'parameters' => ['display_text' => $displayText, 'url' => $url],
             ],
         ];
 
-        // Add header if provided
         if ($headerText) {
             $interactive['header'] = [
                 'type' => 'text',
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($headerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($headerText, $account, $to, $variables), 60),
             ];
         }
 
-        // Add footer if provided
         if ($footerText) {
             $interactive['footer'] = [
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($footerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($footerText, $account, $to, $variables), 60),
             ];
         }
 
@@ -233,14 +202,8 @@ class WhatsAppMessageService
         array $variables = []
     ): Message {
         $resolver = app(VariableResolver::class);
-
-        // Resolve all text fields with context
         $bodyText = $resolver->resolveWithContext($bodyText, $account, $to, $variables);
-        $buttonText = $this->truncate(
-            $resolver->resolveWithContext($buttonText, $account, $to, $variables),
-            20
-        );
-
+        $buttonText = $this->truncate($resolver->resolveWithContext($buttonText, $account, $to, $variables), 20);
         $formattedSections = [];
 
         foreach ($sections as $section) {
@@ -249,23 +212,14 @@ class WhatsAppMessageService
             foreach (array_slice($section['rows'] ?? [], 0, 10) as $row) {
                 $rows[] = [
                     'id' => substr($row['id'] ?? substr(md5($row['title'] ?? ''), 0, 20), 0, 200),
-                    'title' => $this->truncate(
-                        $resolver->resolveWithContext($row['title'] ?? '', $account, $to, $variables),
-                        24
-                    ),
-                    'description' => $this->truncate(
-                        $resolver->resolveWithContext($row['description'] ?? '', $account, $to, $variables),
-                        72
-                    ),
+                    'title' => $this->truncate($resolver->resolveWithContext($row['title'] ?? '', $account, $to, $variables), 24),
+                    'description' => $this->truncate($resolver->resolveWithContext($row['description'] ?? '', $account, $to, $variables), 72),
                 ];
             }
 
             if ($rows) {
                 $formattedSections[] = [
-                    'title' => $this->truncate(
-                        $resolver->resolveWithContext($section['title'] ?? 'Options', $account, $to, $variables),
-                        24
-                    ),
+                    'title' => $this->truncate($resolver->resolveWithContext($section['title'] ?? 'Options', $account, $to, $variables), 24),
                     'rows' => $rows,
                 ];
             }
@@ -280,19 +234,13 @@ class WhatsAppMessageService
         if ($headerText) {
             $interactive['header'] = [
                 'type' => 'text',
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($headerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($headerText, $account, $to, $variables), 60),
             ];
         }
 
         if ($footerText) {
             $interactive['footer'] = [
-                'text' => $this->truncate(
-                    $resolver->resolveWithContext($footerText, $account, $to, $variables),
-                    60
-                ),
+                'text' => $this->truncate($resolver->resolveWithContext($footerText, $account, $to, $variables), 60),
             ];
         }
 
@@ -318,25 +266,19 @@ class WhatsAppMessageService
     ): Message {
         $resolver = app(VariableResolver::class);
 
-        // Resolve caption with context
         if ($caption) {
             $caption = $resolver->resolveWithContext($caption, $account, $to, $variables);
         }
-
-        // Resolve filename with context
         if ($filename) {
             $filename = $resolver->resolveWithContext($filename, $account, $to, $variables);
         }
 
-        // Resolve media URL with context
         $mediaUrl = $resolver->resolveWithContext($mediaUrl, $account, $to, $variables);
-
         $media = ['link' => $mediaUrl];
 
         if ($caption && $mediaType !== 'audio') {
             $media['caption'] = $caption;
         }
-
         if ($filename && $mediaType === 'document') {
             $media['filename'] = $filename;
         }
@@ -361,10 +303,7 @@ class WhatsAppMessageService
         ?string $caption = null,
         ?string $filename = null
     ): Message {
-        return $this->sendMediaMessage(
-            $account, $to, $mediaType, $mediaUrl,
-            $caption, $filename, [], $replyToWamid
-        );
+        return $this->sendMediaMessage($account, $to, $mediaType, $mediaUrl, $caption, $filename, [], $replyToWamid);
     }
 
     // =========================================================================
@@ -380,20 +319,17 @@ class WhatsAppMessageService
     ): Message {
         $resolver = app(VariableResolver::class);
 
-        // Resolve caption with context
         if ($caption) {
             $caption = $resolver->resolveWithContext($caption, $account, $to, []);
         }
 
         $mediaId = $this->resolveMetaMediaId($account, $mediaFile);
         $mediaType = $mediaFile->media_type;
-
         $media = ['id' => $mediaId];
 
         if ($caption && $mediaType !== 'audio') {
             $media['caption'] = $caption;
         }
-
         if ($mediaType === 'document') {
             $media['filename'] = $mediaFile->original_filename;
         }
@@ -415,7 +351,7 @@ class WhatsAppMessageService
     }
 
     // =========================================================================
-    // MEDIA — agent inbox upload (transient UploadedFile)
+    // MEDIA — agent inbox upload (transient UploadedFile) → stored on S3
     // =========================================================================
 
     public function sendMediaFile(
@@ -423,23 +359,26 @@ class WhatsAppMessageService
         string $to,
         UploadedFile $file,
         ?string $caption = null,
-        ?string $replyToWamid = null
+        ?string $replyToWamid = null,
+        array $metadata = []
     ): Message {
         $resolver = app(VariableResolver::class);
+        $mediaType = $this->detectMediaType($file);
+        $mimeType = $file->getMimeType() ?? 'application/octet-stream';
 
-        // Resolve caption with context
+        // Remap browser-recorded audio/webm → audio/ogg (same OPUS codec, Meta prefers ogg)
+        $uploadMime = $mimeType;
+        $uploadName = $file->getClientOriginalName();
+        if ($mimeType === 'audio/webm' || str_starts_with($mimeType, 'audio/webm;')) {
+            $uploadMime = 'audio/ogg';
+            $uploadName = preg_replace('/\.webm$/', '.ogg', $uploadName) ?? $uploadName;
+        }
+
         if ($caption) {
             $caption = $resolver->resolveWithContext($caption, $account, $to, []);
         }
 
-        $mediaType = $this->detectMediaType($file);
-        $mimeType = $file->getMimeType() ?? 'application/octet-stream';
-        $mediaId = $this->uploadFile(
-            $account,
-            $file->getRealPath(),
-            $mimeType,
-            $file->getClientOriginalName()
-        );
+        $mediaId = $this->uploadFile($account, $file->getRealPath(), $uploadMime, $uploadName);
 
         if (!$mediaId) {
             throw new \RuntimeException('Failed to upload media to WhatsApp — no media_id returned.');
@@ -450,7 +389,6 @@ class WhatsAppMessageService
         if ($caption && $mediaType !== 'audio') {
             $media['caption'] = $caption;
         }
-
         if ($mediaType === 'document') {
             $media['filename'] = $file->getClientOriginalName();
         }
@@ -463,32 +401,30 @@ class WhatsAppMessageService
 
         $response = $this->send($account, $payload);
 
-        // Store a copy locally for inbox display
-        $tenantId = tenant()->id ?? 'unknown';
-        $storedFilename = \Illuminate\Support\Str::uuid()->toString().'.'.$file->getClientOriginalExtension();
-        $storagePath = "inbox-media/{$tenantId}/{$account->id}/{$storedFilename}";
-        $disk = 'public';
+        // ── Store on S3 via TenantStorageManager ──────────────────────────
+        $storedFilename = Str::uuid()->toString().'.'.$file->getClientOriginalExtension();
+        $storagePath = "inbox-media/{$account->id}/{$storedFilename}";
 
-        $stored = Storage::disk($disk)->putFileAs(
-            "inbox-media/{$tenantId}/{$account->id}",
-            $file,
-            $storedFilename
-        );
+        try {
+            TenantStorageManager::store($file, "inbox-media/{$account->id}", $storedFilename);
+            $signedUrl = TenantStorageManager::temporaryUrl($storagePath, minutes: 60 * 24 * 7);
+        } catch (\Exception $e) {
+            Log::warning('[WhatsApp] S3 store failed for outbound media — message still sent', [
+                'error' => $e->getMessage(),
+            ]);
+            $signedUrl = null;
+        }
 
         $content = array_merge($media, [
-            'link' => $stored ? Storage::disk($disk)->url($storagePath) : null,
+            'url' => $signedUrl,
             'filename' => $file->getClientOriginalName(),
             'mime_type' => $mimeType,
             'stored_filename' => $storedFilename,
             'storage_path' => $storagePath,
-            'disk' => $disk,
+            'storage_driver' => 'tenant',
         ]);
 
-        if ($replyToWamid) {
-            $content['context'] = ['message_id' => $replyToWamid];
-        }
-
-        return $this->record($account, $to, $mediaType, $content, $response, $replyToWamid);
+        return $this->record($account, $to, $mediaType, $content, $response, $replyToWamid, $metadata);
     }
 
     // =========================================================================
@@ -504,18 +440,10 @@ class WhatsAppMessageService
         ?string $address = null
     ): Message {
         $resolver = app(VariableResolver::class);
-
-        // Resolve name and address with context
         $name = $name ? $resolver->resolveWithContext($name, $account, $to, []) : null;
         $address = $address ? $resolver->resolveWithContext($address, $account, $to, []) : null;
 
-        $location = array_filter([
-            'latitude' => $latitude,
-            'longitude' => $longitude,
-            'name' => $name,
-            'address' => $address,
-        ]);
-
+        $location = array_filter(['latitude' => $latitude, 'longitude' => $longitude, 'name' => $name, 'address' => $address]);
         $payload = $this->basePayload($to, 'location', ['location' => $location]);
         $response = $this->send($account, $payload);
 
@@ -529,10 +457,7 @@ class WhatsAppMessageService
     public function sendContactMessage(WhatsappAccount $account, string $to, array $contactData): Message
     {
         $resolver = app(VariableResolver::class);
-
-        // Resolve contact data with context
         $contactData = $this->resolveContactDataWithContext($contactData, $account, $to, $resolver);
-
         $contact = [];
 
         if (!empty($contactData['name'])) {
@@ -558,9 +483,6 @@ class WhatsAppMessageService
         return $this->record($account, $to, 'contacts', ['contacts' => [$contact]], $response);
     }
 
-    /**
-     * Recursively resolve contact data with context.
-     */
     private function resolveContactDataWithContext(array $data, WhatsappAccount $account, string $to, VariableResolver $resolver): array
     {
         $resolved = [];
@@ -628,7 +550,7 @@ class WhatsAppMessageService
     }
 
     // =========================================================================
-    // META MEDIA UPLOAD
+    // META MEDIA UPLOAD — BotMediaFile (reads from S3 or public disk)
     // =========================================================================
 
     public function resolveMetaMediaId(WhatsappAccount $account, BotMediaFile $mediaFile): string
@@ -637,22 +559,26 @@ class WhatsAppMessageService
         $cached = Cache::get($key);
 
         if ($cached) {
-            Log::info('[WhatsApp] Cached Meta media_id', [
-                'media_file_id' => $mediaFile->id,
-                'meta_media_id' => $cached,
-            ]);
+            Log::info('[WhatsApp] Cached Meta media_id', ['media_file_id' => $mediaFile->id, 'meta_media_id' => $cached]);
 
             return $cached;
         }
 
+        // Support both legacy public disk and new tenant S3 disk
         $disk = $mediaFile->disk ?? 'public';
         $path = $mediaFile->path;
 
-        if (!Storage::disk($disk)->exists($path)) {
-            throw new \RuntimeException("BotMediaFile [{$mediaFile->id}] not found at [{$path}] on disk [{$disk}].");
+        if ($disk === 'tenant') {
+            if (!TenantStorageManager::exists($path)) {
+                throw new \RuntimeException("BotMediaFile [{$mediaFile->id}] not found on tenant S3 at [{$path}].");
+            }
+            $stream = TenantStorageManager::disk()->readStream($path);
+        } else {
+            if (!Storage::disk($disk)->exists($path)) {
+                throw new \RuntimeException("BotMediaFile [{$mediaFile->id}] not found at [{$path}] on disk [{$disk}].");
+            }
+            $stream = Storage::disk($disk)->readStream($path);
         }
-
-        $stream = Storage::disk($disk)->readStream($path);
 
         try {
             $response = $this->client->post("{$account->phone_number_id}/media", [
@@ -678,10 +604,7 @@ class WhatsAppMessageService
 
             Cache::put($key, $mediaId, self::MEDIA_CACHE_TTL);
 
-            Log::info('[WhatsApp] BotMediaFile uploaded to Meta', [
-                'media_file_id' => $mediaFile->id,
-                'meta_media_id' => $mediaId,
-            ]);
+            Log::info('[WhatsApp] BotMediaFile uploaded to Meta', ['media_file_id' => $mediaFile->id, 'meta_media_id' => $mediaId]);
 
             return $mediaId;
         } finally {
@@ -708,9 +631,7 @@ class WhatsAppMessageService
     public function getMediaUrl(WhatsappAccount $account, string $mediaId): ?string
     {
         try {
-            $response = $this->client->get($mediaId, [
-                'headers' => ['Authorization' => 'Bearer '.$this->token($account)],
-            ]);
+            $response = $this->client->get($mediaId, ['headers' => ['Authorization' => 'Bearer '.$this->token($account)]]);
 
             return json_decode($response->getBody()->getContents(), true)['url'] ?? null;
         } catch (\Exception $e) {
@@ -773,21 +694,14 @@ class WhatsAppMessageService
 
             return true;
         } catch (\Exception $e) {
-            Log::warning('[WhatsApp] Status request failed (non-fatal)', [
-                'account_id' => $account->id,
-                'error' => $e->getMessage(),
-            ]);
+            Log::warning('[WhatsApp] Status request failed (non-fatal)', ['account_id' => $account->id, 'error' => $e->getMessage()]);
 
             return false;
         }
     }
 
-    private function uploadFile(
-        WhatsappAccount $account,
-        string $filePath,
-        string $mimeType,
-        string $filename
-    ): ?string {
+    private function uploadFile(WhatsappAccount $account, string $filePath, string $mimeType, string $filename): ?string
+    {
         try {
             $response = $this->client->post("{$account->phone_number_id}/media", [
                 'headers' => ['Authorization' => 'Bearer '.$this->token($account)],
@@ -799,7 +713,6 @@ class WhatsAppMessageService
             ]);
 
             $data = json_decode($response->getBody()->getContents(), true);
-
             Log::info('[WhatsApp] File uploaded', ['media_id' => $data['id'] ?? null]);
 
             return $data['id'] ?? null;
@@ -818,9 +731,8 @@ class WhatsAppMessageService
     {
         if ($account->onboarding_method === 'registered_number') {
             $token = config('services.meta.system_user_token');
-
             if (empty($token)) {
-                throw new \RuntimeException('WHATSAPP_SYSTEM_USER_TOKEN is not configured. Add it to your .env.');
+                throw new \RuntimeException('WHATSAPP_SYSTEM_USER_TOKEN is not configured.');
             }
 
             return $token;
@@ -843,7 +755,8 @@ class WhatsAppMessageService
         string $type,
         array $content,
         array $response,
-        ?string $replyToWamid = null
+        ?string $replyToWamid = null,
+        array $metadata = []
     ): Message {
         $conversation = Conversation::where('whatsapp_account_id', $account->id)
             ->where('whatsapp_user_phone', $to)
@@ -866,6 +779,10 @@ class WhatsAppMessageService
             ]);
         }
 
+        if (empty($metadata)) {
+            $metadata = ['sender_type' => 'bot', 'sender_name' => null];
+        }
+
         $message = Message::create([
             'conversation_id' => $conversation->id,
             'whatsapp_message_id' => $response['messages'][0]['id'] ?? null,
@@ -875,6 +792,7 @@ class WhatsAppMessageService
             'content' => $content,
             'status' => 'sent',
             'sent_at' => now(),
+            'metadata' => $metadata,
         ]);
 
         $conversation->increment('message_count');
@@ -883,10 +801,7 @@ class WhatsAppMessageService
         try {
             broadcast(new MessageSent($message, $conversation->fresh()));
         } catch (\Exception $e) {
-            Log::warning('[WhatsApp] MessageSent broadcast failed', [
-                'message_id' => $message->id,
-                'error' => $e->getMessage(),
-            ]);
+            Log::warning('[WhatsApp] MessageSent broadcast failed', ['message_id' => $message->id, 'error' => $e->getMessage()]);
         }
 
         return $message;
@@ -924,7 +839,6 @@ class WhatsAppMessageService
     private function detectMediaType(UploadedFile $file): string
     {
         $mime = $file->getMimeType() ?? '';
-
         if (str_starts_with($mime, 'image/')) {
             return 'image';
         }

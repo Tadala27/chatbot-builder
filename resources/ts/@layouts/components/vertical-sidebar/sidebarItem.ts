@@ -151,16 +151,6 @@ const rawSidebarItems: MenuItem[] = [
   },
 ];
 
-// ============================================================================
-// PERMISSION & ROLE CHECKING
-// ============================================================================
-//
-// Delegates entirely to the user store's own normalised helpers
-// (hasRole / hasAnyRole / hasPermission / isSuperAdmin) rather than
-// re-extracting role/permission names here. The store already knows how to
-// handle both string[] and {name}[] shapes from different backends — see
-// stores/user.ts's toRoleNames/toPermNames.
-
 function hasRequiredPermissions(item: MenuItem): boolean {
   if (!item.permissions?.length) return true;
 
@@ -186,15 +176,6 @@ function hasRequiredRoles(item: MenuItem): boolean {
     : item.roles.every((r) => userStore.hasRole(r));
 }
 
-/**
- * Main access check — combines roles AND permissions.
- *
- * - No requirements at all → visible to everyone.
- * - Only roles specified    → must satisfy the role check.
- * - Only permissions        → must satisfy the permission check.
- * - Both specified          → either check passing is enough (matches the
- *   route guard's own OR-between-role-and-permission-blocks behaviour).
- */
 function hasAccess(item: MenuItem): boolean {
   const userStore = useUserStore();
 
@@ -212,10 +193,6 @@ function hasAccess(item: MenuItem): boolean {
   return hasRequiredRoles(item) || hasRequiredPermissions(item);
 }
 
-// ============================================================================
-// MENU FILTERING
-// ============================================================================
-
 function filterMenuItems(items: MenuItem[]): MenuItem[] {
   return items
     .filter((item) => item.divider || hasAccess(item))
@@ -223,9 +200,6 @@ function filterMenuItems(items: MenuItem[]): MenuItem[] {
       if (!item.children?.length) return item;
 
       const filteredChildren = filterMenuItems(item.children);
-
-      // Hide a parent that has children defined but none are visible —
-      // a parent with NO children defined (most items above) is unaffected.
       if (filteredChildren.length === 0) return null;
 
       return { ...item, children: filteredChildren };
@@ -240,9 +214,6 @@ function filterMenuItems(items: MenuItem[]): MenuItem[] {
 export const sidebarItems = computed(() => {
   const userStore = useUserStore();
 
-  // Not logged in yet, or session still rehydrating — render nothing rather
-  // than flash an unfiltered menu. The route guard (router.ts) is what
-  // actually triggers fetchMe(); this computed just waits for that to land.
   if (!userStore.isLoggedIn) {
     return [];
   }

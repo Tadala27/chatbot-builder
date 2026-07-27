@@ -1,7 +1,7 @@
 /**
  * resources/ts/chat/useChat.ts
  */
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import axios from "axios";
 import type { Channel } from "laravel-echo";
 import {
@@ -20,7 +20,6 @@ import {
 export interface TypingState {
   isTyping: boolean;
   label: string | null;
-  /** Who is typing — drives which side of the thread the typing bubble appears on. */
   who: "agent" | "contact" | null;
 }
 
@@ -36,9 +35,36 @@ export interface InteractiveDialogState {
 const TYPING_TIMEOUT_MS = 8000;
 const TYPING_DEBOUNCE_MS = 3000;
 
+function buildPreviewFromMessage(message: ChatMessage): {
+  text: string;
+  type: string;
+} {
+  const text = previewText(message.content, message.message_type);
+  const type =
+    message.message_type === "interactive"
+      ? (() => {
+          const c = message.content as { type?: string; response?: unknown };
+          if (c.response) return "reply";
+          if (c.type === "button") return "buttons";
+          return "list";
+        })()
+      : message.message_type === "button"
+        ? "reply"
+        : message.message_type;
+
+  return { text: text, type: type };
+}
+
+function compareChronological(a: ChatMessage, b: ChatMessage): number {
+  const aTime = new Date(a.sent_at ?? a.created_at).getTime();
+  const bTime = new Date(b.sent_at ?? b.created_at).getTime();
+  if (aTime !== bTime) return aTime - bTime;
+  return String(a.id).localeCompare(String(b.id));
+}
+
 export function useChat() {
   /* ---------------------------------------------------------------- */
-  /* Conversation list (sidebar)                                      */
+  /* Conversation list (sidebar)                                       */
   /* ---------------------------------------------------------------- */
 
   const conversations = ref<ConversationSummary[]>([]);
@@ -63,20 +89,25 @@ export function useChat() {
     if (target) target.unread_count = 0;
   }
 
-  function applyInboxActivity(summary: ConversationSummary): void {
+  function applyInboxActivity(payload: MessageReceivedPayload): void {
+    const { message, conversation: summary } = payload;
+    const preview = buildPreviewFromMessage(message);
+    const isActive = summary.id === activeId.value;
     const idx = conversations.value.findIndex((c) => c.id === summary.id);
-    if (idx === -1) {
-      conversations.value.unshift(summary);
-      return;
-    }
-    const isActiveThread = summary.id === activeId.value;
-    const merged: ConversationSummary = {
-      ...conversations.value[idx],
+
+    const updated: ConversationSummary = {
+      ...(idx !== -1 ? conversations.value[idx] : {}),
       ...summary,
-      unread_count: isActiveThread ? 0 : summary.unread_count,
+      last_message_preview: preview.text,
+      last_message_preview_type: preview.type,
+      last_message_at: message.created_at,
+      unread_count: isActive
+        ? 0
+        : ((idx !== -1 ? conversations.value[idx].unread_count : 0) ?? 0) + 1,
     };
-    conversations.value.splice(idx, 1);
-    conversations.value.unshift(merged);
+
+    if (idx !== -1) conversations.value.splice(idx, 1);
+    conversations.value.unshift(updated);
   }
 
   /* ---------------------------------------------------------------- */
@@ -85,14 +116,15 @@ export function useChat() {
 
   const messages = ref<ChatMessage[]>([]);
   const isLoadingMessages = ref(false);
+  const isLoadingOlder = ref(false);
+  const hasMoreMessages = ref(false);
+  const oldestMessageId = ref<string | null>(null);
   const replyTarget = ref<ChatMessage | null>(null);
+  const chatBodyRef = ref<HTMLElement | null>(null);
+  const highlightedMessageId = ref<string | null>(null);
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const sortedMessages = computed(() =>
-    [...messages.value].sort(
-      (a, b) =>
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-    ),
-  );
+  const sortedMessages = computed(() => messages.value);
 
   const replyPreview = computed(() =>
     replyTarget.value
@@ -105,21 +137,73 @@ export function useChat() {
     return messages.value.find((m) => m.whatsapp_message_id === wamid);
   }
 
+  function scrollToBottom(smooth = false): void {
+    nextTick(() => {
+      if (!chatBodyRef.value) return;
+      chatBodyRef.value.scrollTo({
+        top: chatBodyRef.value.scrollHeight,
+        behavior: smooth ? "smooth" : "instant",
+      });
+    });
+  }
+
   async function loadMessages(id: string): Promise<void> {
     isLoadingMessages.value = true;
+    hasMoreMessages.value = false;
+    oldestMessageId.value = null;
     try {
-      const { data } = await axios.get(`/tenant/conversations/${id}/messages`);
-      messages.value = data.data ?? data;
+      const { data } = await axios.get(`/tenant/conversations/${id}/messages`, {
+        params: { per_page: 100 },
+      });
+      const page: ChatMessage[] = data.data ?? data;
+      messages.value = [...page].sort(compareChronological);
+      hasMoreMessages.value = (data.last_page ?? 1) > 1 || page.length === 100;
+      oldestMessageId.value = messages.value[0]?.id ?? null;
+      scrollToBottom();
     } finally {
       isLoadingMessages.value = false;
+    }
+  }
+
+  async function loadOlderMessages(): Promise<void> {
+    if (
+      !activeId.value ||
+      isLoadingOlder.value ||
+      !hasMoreMessages.value ||
+      !oldestMessageId.value
+    )
+      return;
+    isLoadingOlder.value = true;
+    try {
+      const { data } = await axios.get(
+        `/tenant/conversations/${activeId.value}/messages`,
+        { params: { per_page: 100, before: oldestMessageId.value } },
+      );
+      const page: ChatMessage[] = data.data ?? data;
+      if (!page.length) {
+        hasMoreMessages.value = false;
+        return;
+      }
+      const older = [...page].sort(compareChronological);
+      const body = chatBodyRef.value;
+      const prevHeight = body?.scrollHeight ?? 0;
+      const prevTop = body?.scrollTop ?? 0;
+
+      messages.value = [...older, ...messages.value];
+      oldestMessageId.value = messages.value[0]?.id ?? null;
+      hasMoreMessages.value = page.length === 30;
+
+      nextTick(() => {
+        if (body) body.scrollTop = prevTop + (body.scrollHeight - prevHeight);
+      });
+    } finally {
+      isLoadingOlder.value = false;
     }
   }
 
   function appendIncoming(message: ChatMessage): void {
     if (message.conversation_id !== activeId.value) return;
 
-    // Clear the relevant typing indicator the instant the real message lands,
-    // rather than waiting on the 8s timeout.
     if (message.direction === "inbound" && contactTyping) {
       contactTyping = { ...contactTyping, is_typing: false };
       refreshTypingState();
@@ -129,14 +213,68 @@ export function useChat() {
       refreshTypingState();
     }
 
-    const existing = messages.value.findIndex((m) => m.id === message.id);
-    if (existing !== -1) {
-      messages.value[existing] = message;
+    // 1. Exact ID match — update in place (duplicate broadcast / status resend)
+    const exactIdx = messages.value.findIndex((m) => m.id === message.id);
+    if (exactIdx !== -1) {
+      messages.value[exactIdx] = message;
       return;
     }
-    messages.value.push(message);
+    if (message.direction === "outbound" && message.whatsapp_message_id) {
+      const optimisticIdx = messages.value.findIndex(
+        (m) => Number(m.id) < 0 && m.direction === "outbound",
+      );
+      if (optimisticIdx !== -1) {
+        messages.value[optimisticIdx] = message;
+        scrollToBottom(true);
+        return;
+      }
+    }
+
+    // 3. Genuinely new message — insert in chronological order
+    const insertAt = messages.value.findIndex(
+      (m) => compareChronological(m, message) > 0,
+    );
+    if (insertAt === -1) {
+      messages.value.push(message);
+    } else {
+      messages.value.splice(insertAt, 0, message);
+    }
+    scrollToBottom(true);
+
+    const conv = conversations.value.find((c) => c.id === activeId.value);
+    if (conv) conv.unread_count = 0;
   }
 
+  async function scrollToMessage(id: string, attempt = 0): Promise<void> {
+    await nextTick();
+
+    const el = chatBodyRef.value?.querySelector<HTMLElement>(
+      `[data-message-id="${CSS.escape(String(id))}"]`,
+    );
+
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      highlightedMessageId.value = id;
+      if (highlightTimer) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        if (highlightedMessageId.value === id)
+          highlightedMessageId.value = null;
+      }, 1600);
+      return;
+    }
+
+    const MAX_ATTEMPTS = 5;
+    if (
+      attempt < MAX_ATTEMPTS &&
+      hasMoreMessages.value &&
+      !isLoadingOlder.value
+    ) {
+      await loadOlderMessages();
+      return scrollToMessage(id, attempt + 1);
+    }
+    // Target message isn't reachable (deleted, different conversation, or
+    // history exhausted) — silently give up rather than jarring the user.
+  }
   function applyStatus(payload: MessageStatusPayload): void {
     const target =
       messages.value.find((m) => m.id === payload.message_id) ??
@@ -184,18 +322,29 @@ export function useChat() {
     };
 
     messages.value.push(optimistic);
+
+    const sidebarEntry = conversations.value.find(
+      (c) => c.id === conversationId,
+    );
+    if (sidebarEntry) {
+      const preview = buildPreviewFromMessage(optimistic);
+      sidebarEntry.last_message_preview = preview.text;
+      sidebarEntry.last_message_preview_type = preview.type;
+      sidebarEntry.last_message_at = optimistic.created_at;
+    }
+
     setReplyTarget(null);
 
     try {
       const { data } = await axios.post(
         `/tenant/conversations/${conversationId}/messages`,
-        {
-          text: body,
-          reply_to_wamid: replyToWamid,
-        },
+        { text: body, reply_to_wamid: replyToWamid },
       );
       const real: ChatMessage | undefined = data.data ?? data;
       if (real) {
+        // Replace the optimistic row with the API-confirmed message.
+        // If appendIncoming already swapped it via the broadcast, the
+        // negative id won't be found and this is a safe no-op.
         const idx = messages.value.findIndex((m) => m.id === optimistic.id);
         if (idx !== -1) messages.value[idx] = real;
       }
@@ -207,7 +356,7 @@ export function useChat() {
   }
 
   /* ---------------------------------------------------------------- */
-  /* Agent typing → contact (debounced, auto-stops)                    */
+  /* Agent typing → contact (debounced, auto-stops)                   */
   /* ---------------------------------------------------------------- */
 
   let typingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -218,7 +367,7 @@ export function useChat() {
     if (!agentIsTypingSent) {
       agentIsTypingSent = true;
       axios
-        .post(`/tenant/inbox/conversations/${activeId.value}/typing`, {
+        .post(`/tenant/inbox/${activeId.value}/typing`, {
           typing: true,
         })
         .catch(() => {
@@ -236,13 +385,13 @@ export function useChat() {
       const id = activeId.value;
       agentIsTypingSent = false;
       axios
-        .post(`/tenant/inbox/conversations/${id}/typing`, { typing: false })
+        .post(`/tenant/inbox/${id}/typing`, { typing: false })
         .catch(() => {});
     }
   }
 
   /* ---------------------------------------------------------------- */
-  /* Echo: conversation.{id} + tenant.inbox                            */
+  /* Echo: conversation.{id} + tenant.inbox                           */
   /* ---------------------------------------------------------------- */
 
   const typing = ref<TypingState>({ isTyping: false, label: null, who: null });
@@ -288,9 +437,10 @@ export function useChat() {
   function joinConversationChannel(id: string): void {
     if (!window.Echo) return;
     conversationChannel = window.Echo.private(`conversation.${id}`)
-      .listen(".message.received", (payload: MessageReceivedPayload) =>
-        appendIncoming(payload.message),
-      )
+      .listen(".message.received", (payload: MessageReceivedPayload) => {
+        appendIncoming(payload.message);
+        applyInboxActivity(payload);
+      })
       .listen(".message.status", (payload: MessageStatusPayload) =>
         applyStatus(payload),
       )
@@ -310,8 +460,7 @@ export function useChat() {
     if (!window.Echo || inboxChannel) return;
     inboxChannel = window.Echo.private("tenant.inbox").listen(
       ".message.received",
-      (payload: MessageReceivedPayload) =>
-        applyInboxActivity(payload.conversation),
+      (payload: MessageReceivedPayload) => applyInboxActivity(payload),
     );
   }
 
@@ -378,7 +527,58 @@ export function useChat() {
     if (activeId.value) leaveConversationChannel(activeId.value);
     leaveInboxChannel();
     if (typingResetTimer) clearTimeout(typingResetTimer);
+    if (highlightTimer) clearTimeout(highlightTimer); // ← add this line
   });
+
+  async function sendMessage(payload: {
+    text: string;
+    attachments: Array<{
+      file: File;
+      kind: string;
+      caption: string;
+      previewUrl: string | null;
+    }>;
+  }): Promise<void> {
+    if (!activeId.value) return;
+
+    const { text, attachments } = payload;
+    const conversationId = activeId.value;
+
+    if (attachments.length > 0) {
+      let firstAttachment = true;
+
+      for (const attachment of attachments) {
+        const formData = new FormData();
+        formData.append("file", attachment.file);
+
+        if (attachment.caption.trim()) {
+          formData.append("caption", attachment.caption.trim());
+        }
+
+        // Apply replyTarget only to the first item
+        if (firstAttachment) {
+          const wamid = replyTarget.value?.whatsapp_message_id ?? null;
+          if (wamid) formData.append("reply_to_wamid", wamid);
+          setReplyTarget(null);
+          firstAttachment = false;
+        }
+
+        await axios.post(`/tenant/inbox/${conversationId}/send`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+
+      if (text.trim()) {
+        const formData = new FormData();
+        formData.append("text", text.trim());
+        await axios.post(`/tenant/inbox/${conversationId}/send`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+    } else {
+      await sendText(text);
+    }
+  }
 
   return {
     conversations,
@@ -386,11 +586,16 @@ export function useChat() {
     activeConversation,
     selectConversation,
     messages: sortedMessages,
+    isLoadingOlder,
+    hasMoreMessages,
+    chatBodyRef,
+    loadOlderMessages,
     isLoadingMessages,
     replyTarget,
     replyPreview,
     setReplyTarget,
     sendText,
+    sendMessage,
     typing,
     notifyTyping,
     stopTyping,
@@ -398,5 +603,7 @@ export function useChat() {
     openInteractive,
     closeInteractive,
     start,
+    highlightedMessageId, // ← add
+    scrollToMessage, // ← add
   };
 }

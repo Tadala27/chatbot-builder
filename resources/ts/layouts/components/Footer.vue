@@ -13,9 +13,8 @@ import Logo from '@images/logos/NICO-Tech.png'
       </VCol>
       <VCol cols="8" class="d-flex justify-end align-end">
         <p class="text-secondary text-h6 mb-0">
-          Copyright © {{ new Date().getFullYear() }}. <a href="https://timangemodernconcepts.com"
-            class="text-secondary text-decoration-underline ms-1" target="_blank" rel="noopener noreferrer">Timange
-            Modern Concepts</a>. All Rights Reserved.
+          Copyright © {{ new Date().getFullYear() }}. <a href="https://nicotechnologies.com"
+            class="text-secondary text-decoration-underline ms-1" target="_blank" rel="noopener noreferrer">NICO Technologies Ltd</a>. All Rights Reserved.
         </p>
       </VCol>
     </VRow>

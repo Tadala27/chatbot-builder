@@ -12,10 +12,12 @@ class WhatsappPhoneIndex extends Model
 {
     use HasUuids;
 
+    protected $connection = 'landlord';
     protected $table = 'whatsapp_phone_index';
 
     protected $fillable = [
         'phone_number_id',
+        'phone_number',
         'tenant_id',
         'verify_token',
         'is_active',

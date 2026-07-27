@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class DashboardController extends Controller
 {
@@ -18,6 +20,13 @@ class DashboardController extends Controller
      */
     public function index(): JsonResponse
     {
+        $user = Auth::guard('system')->user();
+
+        Log::debug([
+            'user' => $user->toArray(),
+            'permissions' => $user->getAllPermissions()->pluck('name')->toArray(),
+            'roles' => $user->getRoleNames()->toArray(),
+        ]);
         $now = now();
         $start = $now->copy()->startOfMonth();
         $prev = $now->copy()->subMonth()->startOfMonth();

@@ -118,10 +118,10 @@ class MetaPhoneNumberLookupService
 
     private function techProviderToken(): string
     {
-        $token = config('services.meta.tech_provider_token');
+        $token = config('services.whatsapp.system_user_token');
 
         if (empty($token)) {
-            throw new \RuntimeException('services.meta.tech_provider_token is not configured. This must be your own permanent System User access token from Meta Business Manager — see .env: META_TECH_PROVIDER_TOKEN.');
+            throw new \RuntimeException('services.whatsapp.system_user_token is not configured. This must be your own permanent System User access token from Meta Business Manager — see .env: META_TECH_PROVIDER_TOKEN.');
         }
 
         return $token;

@@ -7,8 +7,7 @@ use App\Models\Tenant;
 use App\Services\Tenant\TenantDatabaseManager;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-// use Illuminate\Support\Facades\Auth;
-// use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class TenantController extends Controller
@@ -19,14 +18,6 @@ class TenantController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        // $user = Auth::guard('system')->user();
-
-        // Log::debug('Here is the user role and permissions',
-        //     [
-        //         'role' => $user->getRoleNames()->first(),
-        //         'permissions' => $user->getPermissionsViaRoles()->pluck('name')->toArray(),
-        //     ]);
-
         $tenants = Tenant::query()
             ->when($request->search, fn ($q) => $q->where('slug', 'like', "%{$request->search}%")
                   ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) LIKE ?", ["%{$request->search}%"])
@@ -54,12 +45,10 @@ class TenantController extends Controller
             'max_conversations_per_month' => ['sometimes', 'integer', 'min:100'],
             'is_active' => ['sometimes', 'boolean'],
             'settings' => ['sometimes', 'array'],
-            // Primary domain
             'domain' => ['required', 'string', 'unique:domains,domain'],
-            'domain_type' => ['sometimes', Rule::in(['custom', 'subdomain'])],
+            'domain_url' => ['required', 'url', 'max:255'],
         ]);
 
-        // Observer is enabled — it will call provision() automatically
         $tenant = Tenant::create([
             'slug' => $validated['slug'],
             'name' => $validated['name'],
@@ -75,13 +64,104 @@ class TenantController extends Controller
 
         $tenant->domains()->create([
             'domain' => $validated['domain'],
+            'url' => $validated['domain_url'],
             'is_primary' => true,
         ]);
 
+        $provisioned = true;
+        $provisionError = null;
+
+        try {
+            $this->manager->provision($tenant);
+            $tenant->update(['provisioned_at' => now()]);
+        } catch (\Throwable $e) {
+            $provisioned = false;
+            $provisionError = $e->getMessage();
+            Log::error("Tenant [{$tenant->slug}] created but provisioning failed: {$e->getMessage()}");
+        }
+
         return response()->json([
-            'message' => 'Tenant created and provisioned successfully.',
-            'tenant' => $tenant->load('domains'),
+            'message' => $provisioned
+                ? 'Tenant created and provisioned successfully.'
+                : 'Tenant created, but provisioning failed. Run provisioning manually.',
+            'provisioned' => $provisioned,
+            'provision_error' => $provisionError,
+            'tenant' => $tenant->fresh('domains'),
         ], 201);
+    }
+
+    /**
+     * Manually run provisioning for a tenant that failed or was created
+     * without auto-provisioning (e.g. imported, or retried after failure).
+     */
+    public function provision(Tenant $tenant): JsonResponse
+    {
+        try {
+            $this->manager->provision($tenant);
+            $tenant->update(['provisioned_at' => now()]);
+
+            return response()->json([
+                'message' => "Tenant [{$tenant->slug}] provisioned successfully.",
+                'tenant' => $tenant->fresh(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("Manual provisioning failed for tenant [{$tenant->slug}]: {$e->getMessage()}");
+
+            return response()->json([
+                'message' => 'Provisioning failed.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * List available tenant-guard roles for the "create user" form.
+     */
+    public function roles(Tenant $tenant): JsonResponse
+    {
+        if (!$tenant->provisioned_at) {
+            return response()->json([
+                'message' => 'Tenant has not been provisioned yet.',
+            ], 422);
+        }
+
+        return response()->json([
+            'roles' => $this->manager->getRolesForTenant($tenant),
+        ]);
+    }
+
+    /**
+     * Create a user directly in this tenant's database.
+     */
+    public function createUser(Request $request, Tenant $tenant): JsonResponse
+    {
+        if (!$tenant->provisioned_at) {
+            return response()->json([
+                'message' => 'Tenant has not been provisioned yet. Provision it first.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255'],
+            'password' => ['required', 'string', 'min:8'],
+            'role' => ['required', 'string'],
+        ]);
+
+        try {
+            $user = $this->manager->createUserForTenant($tenant, $validated);
+
+            return response()->json([
+                'message' => "User created in tenant [{$tenant->slug}].",
+                'user' => $user->only(['id', 'name', 'email']),
+            ], 201);
+        } catch (\Throwable $e) {
+            Log::error("User creation failed for tenant [{$tenant->slug}]: {$e->getMessage()}");
+
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     public function show(Tenant $tenant): JsonResponse
@@ -103,9 +183,28 @@ class TenantController extends Controller
             'max_conversations_per_month' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
             'settings' => ['sometimes', 'array'],
+            'domain' => ['sometimes', 'string'],
+            'domain_url' => ['sometimes', 'url', 'max:255'],
         ]);
 
         $tenant->update($validated);
+
+        if ($request->filled('domain') || $request->filled('domain_url')) {
+            $primary = $tenant->domains()->where('is_primary', true)->first();
+
+            if ($primary) {
+                $primary->update(array_filter([
+                    'domain' => $request->input('domain'),
+                    'url' => $request->input('domain_url'),
+                ], fn ($v) => $v !== null));
+            } elseif ($request->filled('domain')) {
+                $tenant->domains()->create([
+                    'domain' => $request->input('domain'),
+                    'url' => $request->input('domain_url'),
+                    'is_primary' => true,
+                ]);
+            }
+        }
 
         return response()->json([
             'message' => 'Tenant updated successfully.',
@@ -115,7 +214,6 @@ class TenantController extends Controller
 
     public function destroy(Tenant $tenant): JsonResponse
     {
-        // Soft delete — forceDelete triggers the observer to drop the DB
         $tenant->delete();
 
         return response()->json(['message' => 'Tenant deleted successfully.']);
@@ -137,8 +235,6 @@ class TenantController extends Controller
 
     public function impersonate(Tenant $tenant): JsonResponse
     {
-        // Generate a short-lived token scoped to this tenant for the admin
-        // to enter the tenant's workspace without needing credentials
         $token = \Illuminate\Support\Str::random(64);
 
         cache()->put(

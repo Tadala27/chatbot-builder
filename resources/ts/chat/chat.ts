@@ -134,6 +134,7 @@ export interface QuotedMessage {
   direction: MessageDirection;
   message_type: MessageType;
   content: MessageContent;
+  sender_name?: string | null; // ← add this
 }
 
 export interface ChatMessage {
@@ -152,19 +153,20 @@ export interface ChatMessage {
   read_at: string | null;
   created_at: string;
   quoted_message?: QuotedMessage | null;
-  media_url? : string | null;
+  media_url?: string | null;
 }
 
 export interface ConversationSummary {
   id: string;
   whatsapp_user_phone: string;
   whatsapp_user_name: string | null;
-  status: "active" | "completed" | "abandoned" | "handed_off";
+  status: string;
   last_message_at: string | null;
-  last_message_preview?: string | null;
+  last_message_preview: string | null;
+  last_message_preview_type: string | null; // ← add this
   unread_count: number;
-  avatar?: string | null;
-  pinned?: boolean;
+  assigned_agent_id: string | null;
+  assigned_agent_name: string | null;
 }
 
 /** Payload of `message.received` (App\Events\MessageSent). */
@@ -205,7 +207,8 @@ const MEDIA_TYPES = ["image", "video", "audio", "document", "sticker"] as const;
 function isInteractiveOutbound(
   c: InteractiveContent,
 ): c is InteractiveOutboundContent {
-  return (c as InteractiveOutboundContent).type !== undefined;
+  const t = (c as InteractiveOutboundContent).type;
+  return t === "list" || t === "button";
 }
 
 function isInteractiveInbound(

@@ -105,10 +105,10 @@ class ConversationVariable extends Model
     }
 
     public static function setForConversation(
-        int $conversationId,
+        string $conversationId,
         string $key,
-        mixed $value,
-        ?int $customVariableId = null
+        string $value,
+        ?string $customVariableId = null
     ): self {
         [$stringValue, $type] = self::detectTypeAndEncode($value);
 

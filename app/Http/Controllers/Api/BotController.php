@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Auth;
 
 class BotController extends Controller
 {
+    private const MAX_ACTIVE_BOTS = 2;
+
     public function index(Request $request): JsonResponse
     {
         $query = Bot::with(['whatsappAccount', 'user']);
@@ -38,16 +40,13 @@ class BotController extends Controller
 
         $bots = $query->paginate($request->get('per_page', 20));
 
-        // Add stats to each bot
         $bots->getCollection()->transform(function ($bot) {
             $bot->stats = [
                 'total_versions' => $bot->versions()->count(),
                 'published_version' => $bot->versions()->where('status', 'published')->value('version_number'),
                 'draft_versions' => $bot->versions()->where('status', 'draft')->count(),
                 'total_conversations' => Conversation::where('bot_id', $bot->id)->count(),
-                'active_conversations' => Conversation::where('bot_id', $bot->id)
-                    ->where('status', 'active')
-                    ->count(),
+                'active_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'active')->count(),
             ];
 
             return $bot;
@@ -58,14 +57,7 @@ class BotController extends Controller
 
     public function show(Bot $bot): JsonResponse
     {
-        $bot->load([
-            'whatsappAccount',
-            'user',
-            'currentPublishedVersion',
-            'customVariables',
-            'customFunctions',
-            'apis',
-        ]);
+        $bot->load(['whatsappAccount', 'user', 'currentPublishedVersion', 'customVariables', 'customFunctions', 'apis']);
 
         return response()->json([
             'bot' => $bot,
@@ -74,9 +66,7 @@ class BotController extends Controller
                 'published_version' => $bot->versions()->where('status', 'published')->value('version_number'),
                 'draft_versions' => $bot->versions()->where('status', 'draft')->count(),
                 'total_conversations' => Conversation::where('bot_id', $bot->id)->count(),
-                'active_conversations' => Conversation::where('bot_id', $bot->id)
-                    ->where('status', 'active')
-                    ->count(),
+                'active_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'active')->count(),
                 'media_files' => $bot->mediaFiles()->count(),
                 'dialogs' => $bot->dialogs()->count(),
             ],
@@ -95,30 +85,31 @@ class BotController extends Controller
             'is_active' => 'nullable|boolean',
         ]);
 
-        // Prepare the data with all fillable fields
-        $botData = [
+        $wantsActive = $validated['is_active'] ?? false;
+
+        if ($wantsActive && Bot::where('is_active', true)->count() >= self::MAX_ACTIVE_BOTS) {
+            return response()->json([
+                'message' => 'You can have at most '.self::MAX_ACTIVE_BOTS.' active bots. Deactivate one before creating an active bot.',
+            ], 422);
+        }
+
+        $bot = Bot::create([
             'user_id' => Auth::guard('tenant')->id(),
             'whatsapp_account_id' => $validated['whatsapp_account_id'],
             'name' => $validated['name'],
             'description' => $validated['description'] ?? null,
-            'is_active' => $validated['is_active'] ?? true,
+            'is_active' => $wantsActive,
             'default_language' => $validated['default_language'] ?? 'en',
             'supported_languages' => $validated['supported_languages'] ?? null,
             'settings' => $validated['settings'] ?? null,
-            // current_published_version_id and published_at will be null initially
-        ];
+        ]);
 
-        $bot = Bot::create($botData);
-
-        // Create default configuration for the bot
         $bot->getConfigOrCreate();
 
-        activity()->causedBy(Auth::guard('tenant')->user())
-            ->performedOn($bot)
-            ->log('Bot created');
+        activity()->causedBy(Auth::guard('tenant')->user())->performedOn($bot)->log('Bot created');
 
         return response()->json([
-            'message' => 'Bot created successfully.',
+            'message' => 'Bot created.',
             'bot' => $bot->load(['whatsappAccount', 'user']),
         ], 201);
     }
@@ -137,84 +128,44 @@ class BotController extends Controller
             'published_at' => 'nullable|date',
         ]);
 
-        // Only update fields that are present in the request
-        $updateData = [];
-
-        if (isset($validated['whatsapp_account_id'])) {
-            $updateData['whatsapp_account_id'] = $validated['whatsapp_account_id'];
+        if (
+            isset($validated['is_active'])
+            && $validated['is_active'] === true
+            && !$bot->is_active
+            && Bot::where('is_active', true)->count() >= self::MAX_ACTIVE_BOTS
+        ) {
+            return response()->json([
+                'message' => 'You can have at most '.self::MAX_ACTIVE_BOTS.' active bots. Deactivate one first.',
+            ], 422);
         }
 
-        if (isset($validated['name'])) {
-            $updateData['name'] = $validated['name'];
-        }
+        $bot->update(array_filter($validated, fn ($v) => $v !== null || array_key_exists('description', $validated)));
 
-        if (array_key_exists('description', $validated)) {
-            $updateData['description'] = $validated['description'];
-        }
-
-        if (isset($validated['default_language'])) {
-            $updateData['default_language'] = $validated['default_language'];
-        }
-
-        if (array_key_exists('supported_languages', $validated)) {
-            $updateData['supported_languages'] = $validated['supported_languages'];
-        }
-
-        if (array_key_exists('settings', $validated)) {
-            $updateData['settings'] = $validated['settings'];
-        }
-
-        if (isset($validated['is_active'])) {
-            $updateData['is_active'] = $validated['is_active'];
-        }
-
-        if (isset($validated['current_published_version_id'])) {
-            $updateData['current_published_version_id'] = $validated['current_published_version_id'];
-        }
-
-        if (isset($validated['published_at'])) {
-            $updateData['published_at'] = $validated['published_at'];
-        }
-
-        $bot->update($updateData);
-
-        activity()->causedBy(Auth::guard('tenant')->user())
-            ->performedOn($bot)
-            ->log('Bot updated');
+        activity()->causedBy(Auth::guard('tenant')->user())->performedOn($bot)->log('Bot updated');
 
         return response()->json([
-            'message' => 'Bot updated successfully.',
+            'message' => 'Bot updated.',
             'bot' => $bot->load(['whatsappAccount', 'user']),
         ]);
     }
 
     public function destroy(Bot $bot): JsonResponse
     {
-        // Check if bot has active conversations
         if (Conversation::where('bot_id', $bot->id)->where('status', 'active')->exists()) {
             return response()->json([
                 'message' => 'Cannot delete bot with active conversations.',
-                'active_conversations' => Conversation::where('bot_id', $bot->id)
-                    ->where('status', 'active')
-                    ->count(),
+                'active_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'active')->count(),
             ], 422);
         }
 
         $name = $bot->name;
         $bot->delete();
 
-        activity()->causedBy(Auth::guard('tenant')->user())
-            ->log("Bot deleted: {$name}");
+        activity()->causedBy(Auth::guard('tenant')->user())->log("Bot deleted: {$name}");
 
-        return response()->json([
-            'message' => 'Bot deleted successfully.',
-            'deleted_bot' => $name,
-        ]);
+        return response()->json(['message' => 'Bot deleted.', 'deleted_bot' => $name]);
     }
 
-    /**
-     * Duplicate an existing bot with its configuration.
-     */
     public function duplicate(Request $request, Bot $bot): JsonResponse
     {
         $validated = $request->validate([
@@ -222,81 +173,159 @@ class BotController extends Controller
             'whatsapp_account_id' => 'sometimes|exists:whatsapp_accounts,id',
         ]);
 
-        // Create new bot with same settings but new name
-        $newBotData = [
+        $newBot = Bot::create([
             'user_id' => Auth::guard('tenant')->id(),
             'whatsapp_account_id' => $validated['whatsapp_account_id'] ?? $bot->whatsapp_account_id,
             'name' => $validated['name'],
             'description' => $bot->description,
-            'is_active' => false, // New bot starts inactive
+            'is_active' => false,
             'default_language' => $bot->default_language,
             'supported_languages' => $bot->supported_languages,
             'settings' => $bot->settings,
-        ];
+        ]);
 
-        $newBot = Bot::create($newBotData);
-
-        // Copy configuration
-        $config = $bot->configuration;
-        if ($config) {
+        if ($config = $bot->configuration) {
             $newBot->getConfigOrCreate()->update($config->toArray());
         }
 
-        // Copy dialogs (system dialogs)
         foreach ($bot->dialogs as $dialog) {
             $newBot->dialogs()->create($dialog->toArray());
         }
 
-        activity()->causedBy(Auth::guard('tenant')->user())
-            ->performedOn($newBot)
-            ->log("Bot duplicated from: {$bot->name}");
+        activity()->causedBy(Auth::guard('tenant')->user())->performedOn($newBot)->log("Bot duplicated from: {$bot->name}");
 
         return response()->json([
-            'message' => 'Bot duplicated successfully.',
+            'message' => 'Bot duplicated.',
             'bot' => $newBot->load(['whatsappAccount', 'user']),
         ], 201);
     }
 
     /**
-     * Toggle bot active status.
+     * Activate a bot.
+     * Enforces the MAX_ACTIVE_BOTS limit — returns 422 if already at the cap.
      */
-    public function toggleActive(Bot $bot): JsonResponse
+    public function activate(Bot $bot): JsonResponse
     {
+        if ($bot->is_active) {
+            return response()->json(['message' => 'Bot is already active.', 'is_active' => true]);
+        }
+
+        $activeCount = Bot::where('is_active', true)->count();
+
+        if ($activeCount >= self::MAX_ACTIVE_BOTS) {
+            $activeBots = Bot::where('is_active', true)->get(['id', 'name']);
+
+            return response()->json([
+                'message' => 'You can only have '.self::MAX_ACTIVE_BOTS.' active bots at a time. Deactivate one of the following first:',
+                'active_bots' => $activeBots,
+            ], 422);
+        }
+
+        $bot->update(['is_active' => true]);
+
+        activity()->causedBy(Auth::guard('tenant')->user())->performedOn($bot)->log("Bot activated: {$bot->name}");
+
+        return response()->json(['message' => "{$bot->name} activated.", 'is_active' => true]);
+    }
+
+    /**
+     * Deactivate a bot.
+     */
+    public function deactivate(Bot $bot): JsonResponse
+    {
+        if (!$bot->is_active) {
+            return response()->json(['message' => 'Bot is already inactive.', 'is_active' => false]);
+        }
+
+        $bot->update(['is_active' => false]);
+
+        activity()->causedBy(Auth::guard('tenant')->user())->performedOn($bot)->log("Bot deactivated: {$bot->name}");
+
+        return response()->json(['message' => "{$bot->name} deactivated.", 'is_active' => false]);
+    }
+
+    /**
+     * Publish a bot version.
+     *
+     * If publishing would require the bot to be active and the limit is already
+     * reached, automatically deactivates the least-recently-published other bot
+     * and activates this one. The response includes which bot was displaced so
+     * the frontend can show a clear message.
+     */
+    public function publish(Request $request, Bot $bot): JsonResponse
+    {
+        $validated = $request->validate([
+            'version_id' => 'required|exists:bot_versions,id',
+        ]);
+
+        $version = $bot->versions()->findOrFail($validated['version_id']);
+
+        $displacedBot = null;
+
+        if (!$bot->is_active) {
+            $activeCount = Bot::where('is_active', true)->count();
+
+            if ($activeCount >= self::MAX_ACTIVE_BOTS) {
+                // Deactivate the least-recently-published active bot (not this one)
+                $displaced = Bot::where('is_active', true)
+                    ->where('id', '!=', $bot->id)
+                    ->orderBy('published_at', 'asc')
+                    ->first();
+
+                if ($displaced) {
+                    $displaced->update(['is_active' => false]);
+                    $displacedBot = ['id' => $displaced->id, 'name' => $displaced->name];
+
+                    activity()->causedBy(Auth::guard('tenant')->user())
+                        ->performedOn($displaced)
+                        ->log("Bot auto-deactivated to make room for: {$bot->name}");
+                }
+            }
+
+            $bot->update(['is_active' => true]);
+        }
+
+        // Lock all other versions and publish this one
+        $bot->versions()->where('id', '!=', $version->id)->where('status', 'published')->update(['status' => 'locked']);
+
+        $version->update(['status' => 'published', 'published_at' => now()]);
+
         $bot->update([
-            'is_active' => !$bot->is_active,
+            'current_published_version_id' => $version->id,
+            'published_at' => now(),
         ]);
 
         activity()->causedBy(Auth::guard('tenant')->user())
             ->performedOn($bot)
-            ->log(($bot->is_active ? 'Activated' : 'Deactivated')." bot: {$bot->name}");
+            ->withProperties(['version_id' => $version->id, 'version_number' => $version->version_number])
+            ->log("Bot version {$version->version_number} published");
 
-        return response()->json([
-            'message' => 'Bot '.($bot->is_active ? 'activated' : 'deactivated').' successfully.',
-            'is_active' => $bot->is_active,
-        ]);
+        $response = [
+            'message' => "Version {$version->version_number} published.",
+            'bot' => $bot->fresh()->load(['whatsappAccount', 'currentPublishedVersion']),
+            'version' => $version->fresh(),
+        ];
+
+        if ($displacedBot) {
+            $response['displaced_bot'] = $displacedBot;
+            $response['message'] = "Version {$version->version_number} published. {$displacedBot['name']} was deactivated to stay within the 2-bot limit.";
+        }
+
+        return response()->json($response);
     }
 
-    /**
-     * Get bot statistics.
-     */
     public function stats(Bot $bot): JsonResponse
     {
-        $stats = [
+        return response()->json([
             'total_versions' => $bot->versions()->count(),
             'published_versions' => $bot->versions()->where('status', 'published')->count(),
             'draft_versions' => $bot->versions()->where('status', 'draft')->count(),
             'locked_versions' => $bot->versions()->where('status', 'locked')->count(),
             'current_published_version' => $bot->currentPublishedVersion?->version_number,
             'total_conversations' => Conversation::where('bot_id', $bot->id)->count(),
-            'active_conversations' => Conversation::where('bot_id', $bot->id)
-                ->where('status', 'active')
-                ->count(),
-            'completed_conversations' => Conversation::where('bot_id', $bot->id)
-                ->where('status', 'completed')
-                ->count(),
-            'handed_off_conversations' => Conversation::where('bot_id', $bot->id)
-                ->where('status', 'handed_off')
-                ->count(),
+            'active_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'active')->count(),
+            'completed_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'completed')->count(),
+            'handed_off_conversations' => Conversation::where('bot_id', $bot->id)->where('status', 'handed_off')->count(),
             'media_files' => $bot->mediaFiles()->count(),
             'dialogs' => $bot->dialogs()->count(),
             'custom_variables' => $bot->customVariables()->count(),
@@ -305,34 +334,19 @@ class BotController extends Controller
             'created_at' => $bot->created_at,
             'updated_at' => $bot->updated_at,
             'published_at' => $bot->published_at,
-        ];
-
-        return response()->json($stats);
+        ]);
     }
 
-    /**
-     * Get bots for a specific WhatsApp account.
-     */
     public function byWhatsAppAccount(string $whatsappAccountId): JsonResponse
     {
-        $bots = Bot::where('whatsapp_account_id', $whatsappAccountId)
-            ->with(['user'])
-            ->orderBy('name')
-            ->get();
+        $bots = Bot::where('whatsapp_account_id', $whatsappAccountId)->with(['user'])->orderBy('name')->get();
 
         return response()->json($bots);
     }
 
-    /**
-     * Get active bots for a specific WhatsApp account.
-     */
     public function activeByWhatsAppAccount(string $whatsappAccountId): JsonResponse
     {
-        $bots = Bot::where('whatsapp_account_id', $whatsappAccountId)
-            ->where('is_active', true)
-            ->with(['user'])
-            ->orderBy('name')
-            ->get();
+        $bots = Bot::where('whatsapp_account_id', $whatsappAccountId)->where('is_active', true)->with(['user'])->orderBy('name')->get();
 
         return response()->json($bots);
     }

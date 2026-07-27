@@ -35,9 +35,7 @@ return new class extends Migration {
             $table->text('access_token')->nullable();
             $table->enum('quality_rating', ['GREEN', 'YELLOW', 'RED', 'UNKNOWN'])
                 ->default('UNKNOWN');
-            $table->enum('messaging_limit', [
-                'TIER_1K', 'TIER_10K', 'TIER_100K', 'TIER_UNLIMITED',
-            ])->default('TIER_1K');
+            $table->string('messaging_limit')->nullable()->default('TIER_250');
             $table->enum('onboarding_status', [
                 'pending',
                 'code_requested',
@@ -49,7 +47,7 @@ return new class extends Migration {
 
             $table->enum('verification_method', ['sms', 'voice'])->nullable();
             $table->string('phone_number_pin', 6)->nullable();
-            $table->enum('mode', ['managed_bot', 'connector'])->default('managed_bot');
+            $table->enum('mode', ['managed_bot', 'connector', 'undefined'])->default('undefined');
 
             $table->string('webhook_url')->nullable();
             $table->string('webhook_verify_token')->nullable();

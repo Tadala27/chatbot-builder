@@ -9,15 +9,38 @@ use App\Jobs\ProcessChatbotMessage;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\WhatsappAccount;
+use App\Services\Tenant\TenantStorageManager;
 use App\States\Active;
+use GuzzleHttp\Client;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class WhatsAppWebhookService
 {
     private string $apiVersion;
+
+    private const MEDIA_TYPES = ['image', 'video', 'audio', 'document', 'sticker'];
+
+    private const MIME_EXTENSIONS = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'video/mp4' => 'mp4',
+        'video/3gpp' => '3gp',
+        'audio/aac' => 'aac',
+        'audio/amr' => 'amr',
+        'audio/mpeg' => 'mp3',
+        'audio/mp4' => 'm4a',
+        'audio/ogg' => 'ogg',
+        'application/pdf' => 'pdf',
+        'application/msword' => 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+    ];
 
     public function __construct(private WhatsAppMessageService $messageService)
     {
@@ -25,7 +48,7 @@ class WhatsAppWebhookService
     }
 
     // =========================================================================
-    // WEBHOOK VERIFICATION (GET from Meta)
+    // WEBHOOK VERIFICATION
     // =========================================================================
 
     public function verifyWebhook(array $params): string|int
@@ -49,16 +72,13 @@ class WhatsAppWebhookService
             }
         }
 
-        Log::warning('[Webhook] Verification failed', [
-            'mode' => $mode,
-            'token_provided' => !empty($token),
-        ]);
+        Log::warning('[Webhook] Verification failed', ['mode' => $mode, 'token_provided' => !empty($token)]);
 
         return 403;
     }
 
     // =========================================================================
-    // WEBHOOK HANDLER (POST from Meta)
+    // WEBHOOK HANDLER
     // =========================================================================
 
     public function handleWebhook(array $payload): void
@@ -80,13 +100,10 @@ class WhatsAppWebhookService
                 if (($change['field'] ?? '') !== 'messages') {
                     continue;
                 }
-
                 $value = $change['value'];
-
                 if (isset($value['messages'])) {
                     $this->handleIncomingMessage($value);
                 }
-
                 if (isset($value['statuses'])) {
                     $this->handleMessageStatus($value);
                 }
@@ -106,31 +123,22 @@ class WhatsAppWebhookService
             $contact = $data['contacts'][0] ?? null;
             $replyToWamid = $message['context']['id'] ?? null;
 
-
             if (!$metadata || !$message) {
-                Log::warning('[Webhook] Missing metadata or message', [
-                    'has_metadata' => $metadata !== null,
-                    'has_message' => $message !== null,
-                ]);
+                Log::warning('[Webhook] Missing metadata or message');
 
                 return;
             }
 
-            // ── Find account ───────────────────────────────────────────────────
             $account = WhatsappAccount::where('phone_number_id', $metadata['phone_number_id'])->first();
 
             if (!$account) {
-                Log::warning('[Webhook] Account not found', [
-                    'phone_number_id' => $metadata['phone_number_id'],
-                ]);
+                Log::warning('[Webhook] Account not found', ['phone_number_id' => $metadata['phone_number_id']]);
 
                 return;
             }
 
             if (!$account->is_active) {
-                Log::info('[Webhook] Message received for inactive account', [
-                    'account_id' => $account->id,
-                ]);
+                Log::info('[Webhook] Message received for inactive account', ['account_id' => $account->id]);
 
                 return;
             }
@@ -138,22 +146,15 @@ class WhatsAppWebhookService
             try {
                 $this->messageService->markAsRead($account, $message['id']);
             } catch (\Exception $e) {
-                Log::debug('[Webhook] Immediate read receipt failed (non-fatal)', [
-                    'message_id' => $message['id'],
-                    'error' => $e->getMessage(),
-                ]);
+                Log::debug('[Webhook] Immediate read receipt failed (non-fatal)', ['error' => $e->getMessage()]);
             }
 
-            // ── Idempotency gate ───────────────────────────────────────────────
             if (Message::where('whatsapp_message_id', $message['id'])->exists()) {
-                Log::info('[Webhook] Duplicate — message already stored', [
-                    'whatsapp_message_id' => $message['id'],
-                ]);
+                Log::info('[Webhook] Duplicate — message already stored', ['whatsapp_message_id' => $message['id']]);
 
                 return;
             }
 
-            // ── Find active bot ────────────────────────────────────────────────
             $bot = $account->bots()
                 ->where('is_active', true)
                 ->whereNotNull('current_published_version_id')
@@ -163,21 +164,25 @@ class WhatsAppWebhookService
             $publishedVersion = $bot?->currentPublishedVersion;
 
             if (!$bot || !$publishedVersion) {
-                Log::warning('[Webhook] No active bot with published version', [
-                    'account_id' => $account->id,
-                ]);
+                Log::warning('[Webhook] No active bot with published version', ['account_id' => $account->id]);
 
                 return;
             }
 
-            // ── Atomic conversation create / message store ─────────────────────
+            // Extract content, then immediately download any media to S3
+            $content = $this->extractMessageContent($message);
+
+            if (in_array($message['type'], self::MEDIA_TYPES, true)) {
+                $content = $this->downloadAndStoreInboundMedia($account, $message, $content);
+            }
+
             $lockKey = "wa-conv:{$account->id}:{$message['from']}";
 
             $result = Cache::lock($lockKey, 10)->block(5, function () use (
-                $account, $message, $contact, $bot, $publishedVersion, $replyToWamid
+                $account, $message, $contact, $bot, $publishedVersion, $replyToWamid, $content
             ) {
                 return DB::transaction(function () use (
-                    $account, $message, $contact, $bot, $publishedVersion, $replyToWamid
+                    $account, $message, $contact, $bot, $publishedVersion, $replyToWamid, $content
                 ) {
                     $conversation = Conversation::where('whatsapp_account_id', $account->id)
                         ->where('whatsapp_user_phone', $message['from'])
@@ -186,7 +191,6 @@ class WhatsAppWebhookService
                         ->first();
 
                     if (!$conversation) {
-                        // ── New conversation ────────────────────────────────────
                         $conversation = Conversation::create([
                             'bot_id' => $bot->id,
                             'bot_version_id' => $publishedVersion->id,
@@ -198,35 +202,24 @@ class WhatsAppWebhookService
                             'last_message_at' => now(),
                         ]);
                     } else {
-                        // ── Existing conversation ──────────────────────────────
-
-                        // Check if the conversation is on an outdated version
-                        // and upgrade if needed
                         $wasUpgraded = false;
                         if ($conversation->bot_version_id !== $publishedVersion->id) {
                             $wasUpgraded = $conversation->upgradeToLatestVersion();
-
-                            // If upgraded, refresh to get the new version ID
                             if ($wasUpgraded) {
                                 $conversation->refresh();
                             }
                         }
 
-                        // Reactivate if needed
                         if (!$conversation->status->equals(Active::class)) {
                             $conversation->status->transitionTo(Active::class);
                             $conversation->update([
                                 'bot_id' => $bot->id,
-                                // If not upgraded, update to the latest version anyway
                                 'bot_version_id' => $wasUpgraded ? $conversation->bot_version_id : $publishedVersion->id,
                                 'started_at' => now(),
                                 'last_message_at' => now(),
                             ]);
                         } else {
-                            // Update last_message_at even if already active
-                            $conversation->update([
-                                'last_message_at' => now(),
-                            ]);
+                            $conversation->update(['last_message_at' => now()]);
                         }
                     }
 
@@ -237,7 +230,7 @@ class WhatsAppWebhookService
                             'reply_to_wamid' => $replyToWamid,
                             'direction' => 'inbound',
                             'message_type' => $message['type'],
-                            'content' => $this->extractMessageContent($message),
+                            'content' => $content,
                             'status' => 'delivered',
                             'sent_at' => now(),
                             'delivered_at' => now(),
@@ -257,9 +250,7 @@ class WhatsAppWebhookService
             });
 
             if (!$result) {
-                Log::info('[Webhook] Message stored by concurrent worker — skipping', [
-                    'whatsapp_message_id' => $message['id'],
-                ]);
+                Log::info('[Webhook] Message stored by concurrent worker — skipping');
 
                 return;
             }
@@ -267,33 +258,103 @@ class WhatsAppWebhookService
             $conversation = $result['conversation'];
             $storedMessage = $result['message'];
 
-            // ── Broadcast to agent inbox ───────────────────────────────────────
             try {
                 broadcast(new MessageSent($storedMessage, $conversation));
             } catch (\Exception $e) {
-                Log::warning('[Webhook] Failed to broadcast inbound MessageSent', [
-                    'message_id' => $storedMessage->id,
-                    'error' => $e->getMessage(),
-                ]);
+                Log::warning('[Webhook] Failed to broadcast inbound MessageSent', ['error' => $e->getMessage()]);
             }
-
-            // ── Dispatch to chatbot queue ──────────────────────────────────────
-            Log::info('[Webhook] Dispatching ProcessChatbotMessage', [
-                'conversation_id' => $conversation->id,
-                'message_id' => $storedMessage->id,
-                'status' => $conversation->status,
-                'bot_version_id' => $conversation->bot_version_id,
-            ]);
 
             if ($conversation->status->equals(Active::class) && $conversation->bot_id) {
                 ProcessChatbotMessage::dispatchFor($conversation, $storedMessage);
             }
         } catch (\Exception $e) {
-            Log::error('[Webhook] Error handling incoming message', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::error('[Webhook] Error handling incoming message', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
         }
+    }
+
+    // =========================================================================
+    // INBOUND MEDIA — download from Meta CDN and store on S3
+    // =========================================================================
+
+    private function downloadAndStoreInboundMedia(
+        WhatsappAccount $account,
+        array $message,
+        array $content
+    ): array {
+        $mediaId = $content['id'] ?? null;
+        $mimeType = $content['mime_type'] ?? 'application/octet-stream';
+
+        if (!$mediaId) {
+            return $content;
+        }
+
+        try {
+            $token = $this->resolveToken($account);
+            $client = new Client(['timeout' => 60]);
+
+            // Step 1: get the CDN download URL from Meta
+            $metaResponse = $client->get(
+                "https://graph.facebook.com/{$this->apiVersion}/{$mediaId}",
+                ['headers' => ['Authorization' => "Bearer {$token}"]]
+            );
+            $mediaData = json_decode($metaResponse->getBody()->getContents(), true);
+            $cdnUrl = $mediaData['url'] ?? null;
+
+            if (!$cdnUrl) {
+                Log::warning('[Webhook] Media CDN URL not found — skipping S3 upload', ['media_id' => $mediaId]);
+
+                return $content;
+            }
+
+            // Step 2: download the binary from Meta's CDN
+            $binary = $client->get($cdnUrl, [
+                'headers' => ['Authorization' => "Bearer {$token}"],
+            ])->getBody()->getContents();
+
+            // Step 3: store on the tenant's S3 path
+            $ext = self::MIME_EXTENSIONS[$mimeType] ?? 'bin';
+            $storedFilename = Str::uuid()->toString().'.'.$ext;
+            $storagePath = "inbound-media/{$account->id}/{$storedFilename}";
+
+            TenantStorageManager::putContent($storagePath, $binary);
+
+            // Step 4: generate a long-lived signed URL (7 days — same as Freshdesk)
+            $signedUrl = TenantStorageManager::temporaryUrl($storagePath, minutes: 60 * 24 * 7);
+
+            Log::info('[Webhook] Inbound media stored on S3', [
+                'meta_media_id' => $mediaId,
+                'mime_type' => $mimeType,
+                'stored_filename' => $storedFilename,
+                's3_key' => TenantStorageManager::fullKey($storagePath),
+                'size_bytes' => strlen($binary),
+            ]);
+
+            return array_merge($content, [
+                'stored_filename' => $storedFilename,
+                'storage_path' => $storagePath,
+                'storage_driver' => 'tenant',
+                'url' => $signedUrl,
+                'file_size' => strlen($binary),
+            ]);
+        } catch (\Exception $e) {
+            // Non-fatal: message is still stored with the Meta ID so the
+            // agent can fall back to the proxy endpoint
+            Log::warning('[Webhook] Failed to store inbound media on S3 (non-fatal — Meta ID preserved)', [
+                'media_id' => $mediaId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $content;
+        }
+    }
+
+    private function resolveToken(WhatsappAccount $account): string
+    {
+        if ($account->onboarding_method === 'registered_number') {
+            return config('services.meta.system_user_token');
+        }
+
+        return $account->access_token;
     }
 
     // =========================================================================
@@ -306,7 +367,6 @@ class WhatsAppWebhookService
             foreach ($data['statuses'] as $statusData) {
                 $newStatus = $statusData['status'];
 
-                // Meta sends typing as a status event on WABA business accounts
                 if ($newStatus === 'typing') {
                     $this->handleContactTyping($statusData, $data['metadata'] ?? []);
                     continue;
@@ -325,9 +385,24 @@ class WhatsAppWebhookService
                 if ($newStatus === 'read' && !$message->read_at) {
                     $updates['read_at'] = now();
                 }
+
                 if ($newStatus === 'failed') {
-                    $updates['error_message'] = $statusData['errors'][0]['title'] ?? 'Message failed';
+                    $errors = $statusData['errors'] ?? [];
+                    $updates['error_message'] = $errors[0]['title'] ?? 'Message failed';
+
+                    Log::error('[Webhook] Message delivery FAILED', [
+                        'wamid' => $statusData['id'],
+                        'message_id' => $message->id,
+                        'message_type' => $message->message_type,
+                        'direction' => $message->direction,
+                        'recipient' => $statusData['recipient_id'] ?? null,
+                        'errors' => $errors,
+                        'error_code' => $errors[0]['code'] ?? null,
+                        'error_title' => $errors[0]['title'] ?? null,
+                        'error_detail' => $errors[0]['error_data']['details'] ?? null,
+                    ]);
                 }
+
                 if ($newStatus === 'deleted') {
                     $updates['deleted_at'] = now();
                 }
@@ -337,22 +412,13 @@ class WhatsAppWebhookService
                 try {
                     broadcast(new MessageStatusUpdated($message->fresh()));
                 } catch (\Exception $e) {
-                    Log::warning('[Webhook] Failed to broadcast MessageStatusUpdated', [
-                        'message_id' => $message->id,
-                        'error' => $e->getMessage(),
-                    ]);
+                    Log::warning('[Webhook] Failed to broadcast MessageStatusUpdated', ['error' => $e->getMessage()]);
                 }
 
-                Log::debug('[Webhook] Message status updated', [
-                    'message_id' => $message->id,
-                    'status' => $newStatus,
-                ]);
+                Log::debug('[Webhook] Message status updated', ['message_id' => $message->id, 'status' => $newStatus]);
             }
         } catch (\Exception $e) {
-            Log::error('[Webhook] Error handling message status', [
-                'error' => $e->getMessage(),
-                'data' => $data,
-            ]);
+            Log::error('[Webhook] Error handling message status', ['error' => $e->getMessage(), 'data' => $data]);
         }
     }
 
@@ -386,15 +452,8 @@ class WhatsAppWebhookService
                 contactPhone: $contactPhone,
                 isTyping: true,
             ));
-
-            Log::debug('[Webhook] Contact typing indicator received', [
-                'conversation_id' => $conversation->id,
-                'contact_phone' => $contactPhone,
-            ]);
         } catch (\Exception $e) {
-            Log::warning('[Webhook] Failed to handle contact typing', [
-                'error' => $e->getMessage(),
-            ]);
+            Log::warning('[Webhook] Failed to handle contact typing', ['error' => $e->getMessage()]);
         }
     }
 
@@ -424,6 +483,13 @@ class WhatsAppWebhookService
                 'mime_type' => $message[$message['type']]['mime_type'],
                 'caption' => $message[$message['type']]['caption'] ?? null,
                 'sha256' => $message[$message['type']]['sha256'] ?? null,
+                'filename' => $message[$message['type']]['filename'] ?? null,
+            ],
+
+            'sticker' => [
+                'id' => $message['sticker']['id'],
+                'mime_type' => $message['sticker']['mime_type'],
+                'sha256' => $message['sticker']['sha256'] ?? null,
             ],
 
             'location' => [
@@ -435,11 +501,6 @@ class WhatsAppWebhookService
 
             'contacts' => ['contacts' => $message['contacts']],
 
-            'sticker' => [
-                'id' => $message['sticker']['id'],
-                'mime_type' => $message['sticker']['mime_type'],
-            ],
-
             'reaction' => [
                 'emoji' => $message['reaction']['emoji'] ?? null,
                 'message_id' => $message['reaction']['message_id'] ?? null,
@@ -449,15 +510,12 @@ class WhatsAppWebhookService
         };
     }
 
-    // =========================================================================
-    // MEDIA DOWNLOAD (for saving inbound media attachments)
-    // =========================================================================
-
+    // Legacy helper — used by MediaController::stream as last-resort fallback
     public function downloadMedia(WhatsappAccount $account, string $mediaId): ?array
     {
         try {
-            $client = new \GuzzleHttp\Client();
-            $token = $account->access_token;
+            $client = new Client(['timeout' => 30]);
+            $token = $this->resolveToken($account);
             $auth = ['Authorization' => "Bearer {$token}"];
 
             $metaResponse = $client->get(
@@ -480,10 +538,7 @@ class WhatsAppWebhookService
                 'file_size' => $mediaData['file_size'] ?? null,
             ];
         } catch (\Exception $e) {
-            Log::error('[Webhook] Error downloading media', [
-                'media_id' => $mediaId,
-                'error' => $e->getMessage(),
-            ]);
+            Log::error('[Webhook] Error downloading media', ['media_id' => $mediaId, 'error' => $e->getMessage()]);
 
             return null;
         }

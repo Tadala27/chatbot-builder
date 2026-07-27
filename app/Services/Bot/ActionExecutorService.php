@@ -70,14 +70,12 @@ class ActionExecutorService
 
     private function executeHandoff(Conversation $conversation, Dialog $dialog, array $action): ?string
     {
-        $resumeAt = $action['resumeAt'] ?? null;
-
         $conversation->handOff(
             sourceDialogId: $dialog->id,
-            resumeAt: $resumeAt,
+            resumeAt: $action['resumeAt'] ?? null,
         );
 
-        return '__system:handoff__';
+        return null;
     }
 
     // ── Condition ─────────────────────────────────────────────────────────────
@@ -92,11 +90,10 @@ class ActionExecutorService
 
         foreach ($action['branches'] ?? [] as $branchIndex => $branch) {
             $logic = $branch['conditionLogic'] ?? 'AND';
-            if ($dbConditions !== null && $branchIndex === 0) {
-                $conditions = $dbConditions;
-            } else {
-                $conditions = $branch['conditions'] ?? [];
-            }
+
+            $conditions = ($dbConditions !== null && $branchIndex === 0)
+                ? $dbConditions
+                : ($branch['conditions'] ?? []);
 
             if (empty($conditions)) {
                 continue;
@@ -126,11 +123,11 @@ class ActionExecutorService
                     }
                 }
 
-                return null; // matched but no navigation action in branch
+                return null;
             }
         }
 
-        // ── ELSE (defaultBranch) ──────────────────────────────────────────────
+        // ELSE / defaultBranch
         foreach ($action['defaultBranch']['actions'] ?? [] as $defaultAction) {
             $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
             if ($target) {
@@ -144,6 +141,13 @@ class ActionExecutorService
     /**
      * Evaluate a single condition against the current variable state.
      *
+     * Supported condition types:
+     *   - variable        : compare a conversation variable's value
+     *   - api_response    : compare a field from the last API response
+     *   - saved_response  : compare a dialog option the user selected
+     *   - option_selected : alias for saved_response
+     *   - user_input      : compare the raw text of the last inbound message
+     *
      * Accepts both camelCase (config-embedded) and snake_case (DB ActionCondition) keys.
      */
     private function evaluateSingleCondition(
@@ -154,10 +158,11 @@ class ActionExecutorService
         $type = $condition['type'] ?? $condition['condition_type'] ?? 'variable';
         $operator = $condition['operator'] ?? $condition['condition_operator'] ?? 'equals';
 
-        // For saved_response: if 'value' is null/empty, compare against 'source'
-        // (the option's external_id). This is the standard pattern when the builder
-        // sets up "did the user select THIS option?" conditions.
         $expectedValue = $condition['value'] ?? $condition['condition_value'] ?? '';
+
+        // For saved_response: if value is null/empty, fall back to 'source'
+        // (the option's external_id) — standard pattern when checking "did the
+        // user select THIS option?"
         if (
             in_array($type, ['saved_response', 'option_selected'], true)
             && ($expectedValue === null || $expectedValue === '')
@@ -166,19 +171,31 @@ class ActionExecutorService
         }
 
         $actualValue = match ($type) {
+            // Compare a conversation variable
             'variable' => $variables[$condition['source'] ?? $condition['variable_key'] ?? ''] ?? null,
 
+            // Compare a field from the last API call response
             'api_response' => $this->getNestedValue(
                 $conversation->metadata['last_api_response'] ?? [],
                 $condition['responsePath'] ?? $condition['response_path'] ?? ''
             ),
 
+            // Compare the option the user selected from a list or button set
             'saved_response',
             'option_selected' => $this->resolveOptionSelection(
                 $condition,
                 $variables,
                 $conversation
             ),
+
+            // Compare the raw text the user just typed.
+            // Prefer __current_user_input injected by ChatbotFlowExecutor from
+            // the actual in-flight Message object — this is always the message
+            // that triggered the current job, regardless of DB ordering.
+            // Falls back to querying the latest inbound message when the variable
+            // is not present (e.g. when called outside the flow executor context).
+            'user_input' => $variables['__current_user_input']
+                         ?? $this->getLastUserInput($conversation),
 
             default => null,
         };
@@ -198,27 +215,21 @@ class ActionExecutorService
      * Resolve the saved selection for a saved_response / option_selected condition.
      *
      * Resolution order:
-     * 1. If condition has option_id (DB ActionCondition row): find DialogOption by PK,
-     *    then read __dialog_{dialog_id}_selection from variables.
-     * 2. If condition has source (config-embedded external_id UUID): find DialogOption
-     *    by external_id, then read __dialog_{dialog_id}_selection from variables.
-     * 3. Fallback to last user input (least reliable).
-     *
-     * The returned value is the stored selection's external_id, which compareValues
-     * then checks against expectedValue (also the option's external_id).
+     * 1. option_id (DB ActionCondition row) → find DialogOption by PK
+     * 2. source (config-embedded external_id UUID) → find DialogOption by external_id
+     * 3. Fallback to last user input
      */
     private function resolveOptionSelection(
         array $condition,
         array $variables,
         Conversation $conversation
     ): ?string {
-        // ── 1. DB option_id reference ─────────────────────────────────────────
+        // 1. DB option_id reference
         $optionId = $condition['option_id'] ?? null;
         if ($optionId) {
             $option = \App\Models\DialogOption::find($optionId);
             if ($option) {
                 $selectedId = $variables["__dialog_{$option->dialog_id}_selection"] ?? null;
-
                 Log::info('saved_response resolved via option_id', [
                     'option_id' => $optionId,
                     'dialog_id' => $option->dialog_id,
@@ -229,13 +240,12 @@ class ActionExecutorService
             }
         }
 
-        // ── 2. Config source = option external_id UUID ────────────────────────
+        // 2. Config source = option external_id UUID
         $externalId = $condition['source'] ?? null;
         if ($externalId) {
             $option = \App\Models\DialogOption::where('external_id', $externalId)->first();
             if ($option) {
                 $selectedId = $variables["__dialog_{$option->dialog_id}_selection"] ?? null;
-
                 Log::info('saved_response resolved via external_id', [
                     'external_id' => $externalId,
                     'dialog_id' => $option->dialog_id,
@@ -247,7 +257,7 @@ class ActionExecutorService
             }
         }
 
-        // ── 3. Fallback ───────────────────────────────────────────────────────
+        // 3. Fallback
         Log::warning('saved_response: could not find DialogOption, falling back to last user input', [
             'option_id' => $optionId,
             'external_id' => $externalId,
@@ -273,10 +283,6 @@ class ActionExecutorService
             return null;
         }
 
-        // Priority:
-        // 1. _resolvedInput — injected by processUserInput with the current message text
-        // 2. action['value'] — configured expression e.g. "$otherVar" or "f(x) today"
-        // 3. getLastUserInput() — fallback
         if (isset($action['_resolvedInput'])) {
             $value = $action['_resolvedInput'];
         } elseif (isset($action['value']) && $action['value'] !== '') {
@@ -308,6 +314,8 @@ class ActionExecutorService
         return null;
     }
 
+    // ── API Call ──────────────────────────────────────────────────────────────
+
     private function executeApiCall(
         Conversation $conversation,
         Dialog $dialog,
@@ -331,16 +339,11 @@ class ActionExecutorService
             $endpoint = $this->variableResolver->resolve($apiConfig->url, $variables);
             $options = [];
 
-            // Cast-safe decoding — model casts headers/form_data/etc. to array,
-            // but request_body is a plain text column.
             $headers = $this->safeJsonDecode($apiConfig->headers);
             $formData = $this->safeJsonDecode($apiConfig->form_data);
             $urlEncodedFields = $this->safeJsonDecode($apiConfig->url_encoded_fields);
             $bodyParameters = $this->safeJsonDecode($apiConfig->body_parameters);
 
-            // ── Build headers ─────────────────────────────────────────────────────
-            // For multipart, do NOT set Content-Type — Guzzle sets it with the
-            // boundary automatically. For all other types, honour content_type.
             if (!empty($headers)) {
                 $options['headers'] = $headers;
             }
@@ -351,7 +354,6 @@ class ActionExecutorService
                 $options['headers']['Content-Type'] = $apiConfig->content_type;
             }
 
-            // ── Build body ────────────────────────────────────────────────────────
             if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
                 if ($isMultipart && !empty($formData)) {
                     $multipart = [];
@@ -370,11 +372,9 @@ class ActionExecutorService
                         $options['multipart'] = $multipart;
                     }
                 } elseif (!empty($apiConfig->request_body)) {
-                    // request_body is a text column — always a string from the DB.
                     $rawBody = (string) $apiConfig->request_body;
                     $resolvedBody = $this->variableResolver->resolve($rawBody, $variables);
 
-                    // resolve() should return string, but guard defensively.
                     if (is_array($resolvedBody)) {
                         $options['json'] = $resolvedBody;
                     } else {
@@ -404,9 +404,6 @@ class ActionExecutorService
                     }
                 }
             } else {
-                // ── GET / DELETE / HEAD: query string ─────────────────────────────
-                // Only send parameters explicitly declared in body_parameters.
-                // Sending ALL conversation variables as query params is a data-leak risk.
                 $queryParams = [];
                 foreach ($bodyParameters as $param) {
                     $key = is_array($param) ? ($param['key'] ?? reset($param)) : $param;
@@ -455,8 +452,6 @@ class ActionExecutorService
                 ]),
             ]);
 
-            // ── Store response fields as conversation variables ────────────────────
-            // Merge body_parameters and header_parameters — both can declare mappable keys.
             $allDeclaredParams = array_merge($bodyParameters, $this->safeJsonDecode($apiConfig->header_parameters));
             $this->storeResponseAsVariables(
                 $conversation,
@@ -464,7 +459,6 @@ class ActionExecutorService
                 is_array($responseBody) ? $responseBody : [],
                 $apiConfig->bot_id
             );
-            // ──────────────────────────────────────────────────────────────────────
 
             return $this->executeResponseHandlers(
                 $conversation,
@@ -475,11 +469,7 @@ class ActionExecutorService
                 $statusCode
             );
         } catch (\GuzzleHttp\Exception\RequestException $e) {
-            $responseBody = null;
-            $statusCode = null;
-
             if ($e->hasResponse()) {
-                // HTTP error path (RequestException with response)
                 $statusCode = $e->getResponse()->getStatusCode();
                 $responseBody = json_decode($e->getResponse()->getBody()->getContents(), true);
 
@@ -496,7 +486,7 @@ class ActionExecutorService
                     $action,
                     $responseBody,
                     $variables,
-                    $statusCode    // ← pass it
+                    $statusCode
                 );
             }
 
@@ -518,200 +508,6 @@ class ActionExecutorService
         }
     }
 
-    /**
-     * Safely decode JSON data that could be either string or array.
-     */
-    private function safeJsonDecode($data): array
-    {
-        if (is_string($data) && !empty($data)) {
-            $decoded = json_decode($data, true);
-
-            return json_last_error() === JSON_ERROR_NONE ? ($decoded ?? []) : [];
-        }
-
-        return is_array($data) ? $data : [];
-    }
-
-    /**
-     * Sanitize options array for logging (remove sensitive data).
-     */
-    private function sanitizeOptionsForLog(array $options): array
-    {
-        $sanitized = $options;
-
-        // Remove sensitive headers
-        if (isset($sanitized['headers']['Authorization'])) {
-            $sanitized['headers']['Authorization'] = '[REDACTED]';
-        }
-        if (isset($sanitized['headers']['api-key'])) {
-            $sanitized['headers']['api-key'] = '[REDACTED]';
-        }
-
-        // Remove sensitive form data
-        if (isset($sanitized['multipart'])) {
-            foreach ($sanitized['multipart'] as &$part) {
-                if (in_array($part['name'], ['password', 'token', 'secret', 'api_key'])) {
-                    $part['contents'] = '[REDACTED]';
-                }
-            }
-        }
-
-        if (isset($sanitized['form_params'])) {
-            foreach (['password', 'token', 'secret', 'api_key'] as $sensitive) {
-                if (isset($sanitized['form_params'][$sensitive])) {
-                    $sanitized['form_params'][$sensitive] = '[REDACTED]';
-                }
-            }
-        }
-
-        return $sanitized;
-    }
-
-    private function storeResponseAsVariables(
-        Conversation $conversation,
-        array $declaredParams,
-        array $responseBody,
-        string $botId
-    ): void {
-        if (empty($declaredParams) || empty($responseBody)) {
-            return;
-        }
-
-        // Extract declared keys, stripping any {{ }} wrappers the builder adds.
-        $paramKeys = [];
-        foreach ($declaredParams as $param) {
-            $raw = is_array($param) ? ($param['key'] ?? reset($param)) : (string) $param;
-            $key = trim((string) $raw, '{}');
-            if ($key !== '') {
-                $paramKeys[] = $key;
-            }
-        }
-
-        if (empty($paramKeys)) {
-            return;
-        }
-
-        // Lookup custom variable IDs in one query
-        $customVars = CustomVariable::where('bot_id', $botId)
-            ->whereIn('key', $paramKeys)
-            ->pluck('id', 'key'); // ['memberName' => 5, 'DoJ' => 7]
-
-        // Build batch upsert rows
-        $rows = [];
-        $now = now();
-        foreach ($paramKeys as $key) {
-            if (!array_key_exists($key, $responseBody)) {
-                continue;
-            }
-
-            $value = $responseBody[$key];
-            $scalarValue = is_array($value) || is_object($value)
-                ? json_encode($value)
-                : (string) $value;
-
-            $rows[] = [
-                'conversation_id' => $conversation->id,
-                'key' => $key,
-                'value' => $scalarValue,
-                'custom_variable_id' => $customVars->get($key),
-                'created_at' => $now,
-                'updated_at' => $now,
-            ];
-        }
-
-        if (empty($rows)) {
-            return;
-        }
-
-        // Single upsert — requires the unique index (conversation_id, key) from
-        // the migration in file 04.
-        ConversationVariable::upsert(
-            $rows,
-            uniqueBy: ['conversation_id', 'key'],
-            update: ['value', 'custom_variable_id', 'updated_at']
-        );
-
-        Log::info('API response variables batched', [
-            'conversation_id' => $conversation->id,
-            'count' => count($rows),
-            'keys' => array_column($rows, 'key'),
-        ]);
-    }
-
-    private function executeResponseHandlers(
-        Conversation $conversation,
-        Dialog $dialog,
-        array $action,
-        mixed $responseBody,
-        array $variables,
-        ?int $httpStatusCode = null    // ← add this
-    ): ?string {
-        $body = is_array($responseBody) ? $responseBody : [];
-
-        foreach ($action['responseHandlers'] ?? [] as $handler) {
-            $allMatch = true;
-            foreach ($handler['conditions'] ?? [] as $condition) {
-                if (!$this->evaluateResponseCondition($condition, $body, $httpStatusCode)) {
-                    $allMatch = false;
-                    break;
-                }
-            }
-            if ($allMatch) {
-                foreach ($handler['actions'] ?? [] as $handlerAction) {
-                    $target = $this->execute($conversation, $dialog, $handlerAction, $variables);
-                    if ($target) {
-                        return $target;
-                    }
-                }
-
-                return null;
-            }
-        }
-
-        return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
-    }
-
-    private function executeDefaultActions(
-        Conversation $conversation,
-        Dialog $dialog,
-        array $action,
-        array $variables
-    ): ?string {
-        foreach ($action['defaultActions'] ?? [] as $defaultAction) {
-            $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
-            if ($target) {
-                return $target;
-            }
-        }
-
-        return null;
-    }
-
-    private function evaluateResponseCondition(
-        array $condition,
-        array $responseBody,
-        ?int $httpStatusCode = null     // ← add this
-    ): bool {
-        $field = $condition['responseField'] ?? 'status';
-        $path = $condition['responsePath'] ?? '';
-
-        $actualValue = match ($field) {
-            // Prefer the real HTTP status code; fall back to body fields
-            'status' => $httpStatusCode
-                ?? $responseBody['status']
-                ?? $responseBody['statusCode']
-                ?? null,
-            'body' => $this->getNestedValue($responseBody, $path),
-            default => $this->getNestedValue($responseBody, $path),
-        };
-
-        return $this->compareValues(
-            // Cast to string so "404" == 404 works with strict-ish comparison
-            $actualValue !== null ? (string) $actualValue : null,
-            $condition['value'] ?? '',
-            $condition['operator'] ?? 'equals'
-        );
-    }
     // ── Function ──────────────────────────────────────────────────────────────
 
     private function executeFunction(
@@ -764,7 +560,7 @@ class ActionExecutorService
                 ->first();
 
             if ($nextDialog) {
-                ContinueChatbotFlow::dispatchFor($conversation, $nextDialog, $delaySeconds);
+                ContinueChatbotFlow::dispatchFor($conversation, $nextDialog, $seconds);
             }
         }
 
@@ -775,24 +571,51 @@ class ActionExecutorService
     // HELPERS
     // =========================================================================
 
+    /**
+     * Get the raw text value from the last inbound message.
+     *
+     * Handles all relevant WhatsApp message types:
+     *   - text           : plain text the user typed
+     *   - interactive    : button_reply or list_reply selection title
+     *   - button         : quick-reply button tap (legacy Cloud API format)
+     *
+     * Returns null when there is no inbound message or the type is unrecognised.
+     * Result is trimmed so leading/trailing whitespace never breaks comparisons.
+     */
     private function getLastUserInput(Conversation $conversation): ?string
     {
         $lastMessage = $conversation->messages()
             ->where('direction', 'inbound')
-            ->latest()
+            ->latest('sent_at')
             ->first();
 
         if (!$lastMessage) {
             return null;
         }
 
-        return match ($lastMessage->message_type) {
-            'text' => $lastMessage->content['text'] ?? null,
-            'interactive' => $lastMessage->content['response']['title']
-                ?? $lastMessage->content['response']['id']
+        $content = $lastMessage->content;
+        if (!is_array($content)) {
+            $content = json_decode((string) $content, true) ?? [];
+        }
+
+        $raw = match ($lastMessage->message_type) {
+            'text' => $content['text'] ?? null,
+
+            'interactive' => $content['response']['title']
+                ?? $content['response']['id']
+                ?? $content['button_reply']['title']
+                ?? $content['list_reply']['title']
                 ?? null,
+
+            // Legacy WhatsApp quick-reply button tap
+            'button' => $content['button']['text']
+                ?? $content['text']
+                ?? null,
+
             default => null,
         };
+
+        return $raw !== null ? trim((string) $raw) : null;
     }
 
     private function getNestedValue(array $data, string $path): mixed
@@ -812,25 +635,222 @@ class ActionExecutorService
         return $value;
     }
 
+    /**
+     * Compare two values with the given operator.
+     *
+     * String comparisons for equals/not_equals/contains/starts_with/ends_with
+     * are case-insensitive and trim-safe. This is intentional for user_input
+     * conditions — "YES", "Yes", and "yes" should all match "yes".
+     *
+     * Numeric comparisons cast both sides to float via is_numeric() guard.
+     */
     public function compareValues(mixed $left, mixed $right, string $operator): bool
     {
         return match ($operator) {
-            'equals',                '==' => $left == $right,
-            'not_equals',            '!=' => $left != $right,
-            'greater_than', '>' => is_numeric($left) && is_numeric($right) ? ((float) $left) > ((float) $right) : false,
-            'less_than',             '<' => $left < $right,
-            'greater_than_or_equal', '>=' => $left >= $right,
-            'less_than_or_equal',    '<=' => $left <= $right,
-            'contains' => is_string($left) && str_contains($left, (string) $right),
-            'not_contains' => is_string($left) && !str_contains($left, (string) $right),
-            'starts_with' => is_string($left) && str_starts_with($left, (string) $right),
-            'ends_with' => is_string($left) && str_ends_with($left, (string) $right),
-            'is_empty' => empty($left),
-            'is_not_empty',
-            'not_empty' => !empty($left),
+            'equals', '==' => is_string($left) && is_string($right)
+                ? mb_strtolower(trim($left)) === mb_strtolower(trim($right))
+                : $left == $right,
+
+            'not_equals', '!=' => is_string($left) && is_string($right)
+                ? mb_strtolower(trim($left)) !== mb_strtolower(trim($right))
+                : $left != $right,
+
+            'greater_than',          '>' => is_numeric($left) && is_numeric($right) ? (float) $left > (float) $right : false,
+            'less_than',             '<' => is_numeric($left) && is_numeric($right) ? (float) $left < (float) $right : false,
+            'greater_than_or_equal', '>=' => is_numeric($left) && is_numeric($right) ? (float) $left >= (float) $right : false,
+            'less_than_or_equal',    '<=' => is_numeric($left) && is_numeric($right) ? (float) $left <= (float) $right : false,
+
+            'contains' => is_string($left) && str_contains(mb_strtolower($left), mb_strtolower((string) $right)),
+            'not_contains' => is_string($left) && !str_contains(mb_strtolower($left), mb_strtolower((string) $right)),
+            'starts_with' => is_string($left) && str_starts_with(mb_strtolower($left), mb_strtolower((string) $right)),
+            'ends_with' => is_string($left) && str_ends_with(mb_strtolower($left), mb_strtolower((string) $right)),
+
+            'is_empty' => $left === null || $left === '' || $left === [],
+            'is_not_empty', 'not_empty' => $left !== null && $left !== '' && $left !== [],
+
             'in_array' => is_array($left) && in_array($right, $left),
             'not_in_array' => is_array($left) && !in_array($right, $left),
+
             default => false,
         };
+    }
+
+    private function executeResponseHandlers(
+        Conversation $conversation,
+        Dialog $dialog,
+        array $action,
+        mixed $responseBody,
+        array $variables,
+        ?int $httpStatusCode = null
+    ): ?string {
+        $body = is_array($responseBody) ? $responseBody : [];
+
+        foreach ($action['responseHandlers'] ?? [] as $handler) {
+            $allMatch = true;
+            foreach ($handler['conditions'] ?? [] as $condition) {
+                if (!$this->evaluateResponseCondition($condition, $body, $httpStatusCode)) {
+                    $allMatch = false;
+                    break;
+                }
+            }
+            if ($allMatch) {
+                foreach ($handler['actions'] ?? [] as $handlerAction) {
+                    $target = $this->execute($conversation, $dialog, $handlerAction, $variables);
+                    if ($target) {
+                        return $target;
+                    }
+                }
+
+                return null;
+            }
+        }
+
+        return $this->executeDefaultActions($conversation, $dialog, $action, $variables);
+    }
+
+    private function executeDefaultActions(
+        Conversation $conversation,
+        Dialog $dialog,
+        array $action,
+        array $variables
+    ): ?string {
+        foreach ($action['defaultActions'] ?? [] as $defaultAction) {
+            $target = $this->execute($conversation, $dialog, $defaultAction, $variables);
+            if ($target) {
+                return $target;
+            }
+        }
+
+        return null;
+    }
+
+    private function evaluateResponseCondition(
+        array $condition,
+        array $responseBody,
+        ?int $httpStatusCode = null
+    ): bool {
+        $field = $condition['responseField'] ?? 'status';
+        $path = $condition['responsePath'] ?? '';
+
+        $actualValue = match ($field) {
+            'status' => $httpStatusCode
+                ?? $responseBody['status']
+                ?? $responseBody['statusCode']
+                ?? null,
+            'body' => $this->getNestedValue($responseBody, $path),
+            default => $this->getNestedValue($responseBody, $path),
+        };
+
+        return $this->compareValues(
+            $actualValue !== null ? (string) $actualValue : null,
+            $condition['value'] ?? '',
+            $condition['operator'] ?? 'equals'
+        );
+    }
+
+    private function storeResponseAsVariables(
+        Conversation $conversation,
+        array $declaredParams,
+        array $responseBody,
+        string $botId
+    ): void {
+        if (empty($declaredParams) || empty($responseBody)) {
+            return;
+        }
+
+        $paramKeys = [];
+        foreach ($declaredParams as $param) {
+            $raw = is_array($param) ? ($param['key'] ?? reset($param)) : (string) $param;
+            $key = trim((string) $raw, '{}');
+            if ($key !== '') {
+                $paramKeys[] = $key;
+            }
+        }
+
+        if (empty($paramKeys)) {
+            return;
+        }
+
+        $customVars = CustomVariable::where('bot_id', $botId)
+            ->whereIn('key', $paramKeys)
+            ->pluck('id', 'key');
+
+        $rows = [];
+        $now = now();
+
+        foreach ($paramKeys as $key) {
+            if (!array_key_exists($key, $responseBody)) {
+                continue;
+            }
+
+            $value = $responseBody[$key];
+            $scalarValue = is_array($value) || is_object($value)
+                ? json_encode($value)
+                : (string) $value;
+
+            $rows[] = [
+                'conversation_id' => $conversation->id,
+                'key' => $key,
+                'value' => $scalarValue,
+                'custom_variable_id' => $customVars->get($key),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (empty($rows)) {
+            return;
+        }
+
+        ConversationVariable::upsert(
+            $rows,
+            uniqueBy: ['conversation_id', 'key'],
+            update: ['value', 'custom_variable_id', 'updated_at']
+        );
+
+        Log::info('API response variables batched', [
+            'conversation_id' => $conversation->id,
+            'count' => count($rows),
+            'keys' => array_column($rows, 'key'),
+        ]);
+    }
+
+    private function safeJsonDecode(mixed $data): array
+    {
+        if (is_string($data) && !empty($data)) {
+            $decoded = json_decode($data, true);
+
+            return json_last_error() === JSON_ERROR_NONE ? ($decoded ?? []) : [];
+        }
+
+        return is_array($data) ? $data : [];
+    }
+
+    private function sanitizeOptionsForLog(array $options): array
+    {
+        $sanitized = $options;
+
+        if (isset($sanitized['headers']['Authorization'])) {
+            $sanitized['headers']['Authorization'] = '[REDACTED]';
+        }
+        if (isset($sanitized['headers']['api-key'])) {
+            $sanitized['headers']['api-key'] = '[REDACTED]';
+        }
+        if (isset($sanitized['multipart'])) {
+            foreach ($sanitized['multipart'] as &$part) {
+                if (in_array($part['name'], ['password', 'token', 'secret', 'api_key'])) {
+                    $part['contents'] = '[REDACTED]';
+                }
+            }
+        }
+        if (isset($sanitized['form_params'])) {
+            foreach (['password', 'token', 'secret', 'api_key'] as $sensitive) {
+                if (isset($sanitized['form_params'][$sensitive])) {
+                    $sanitized['form_params'][$sensitive] = '[REDACTED]';
+                }
+            }
+        }
+
+        return $sanitized;
     }
 }

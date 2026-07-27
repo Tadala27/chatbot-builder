@@ -95,10 +95,10 @@ class WhatsAppSenderService
     private function resolveToken(WhatsappAccount $account): string
     {
         if ($account->isConnectorMode()) {
-            $token = config('services.meta.tech_provider_token');
+            $token = $account->access_token ?? config('services.whatsapp.system_user_token');
 
             if (empty($token)) {
-                throw new \RuntimeException('services.meta.tech_provider_token is not configured — required to send on behalf of connector-mode accounts.');
+                throw new \RuntimeException('services.whatsapp.system_user_token is not configured — required to send on behalf of connector-mode accounts.');
             }
 
             return $token;

@@ -1,4 +1,5 @@
 <?php
+
 // routes/tenant.php
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiIntegrationController;
@@ -39,9 +40,9 @@ Route::prefix('auth')->group(function () {
 // PROTECTED — Tenant users
 // =============================================================================
 
-Broadcast::routes(['middleware' => ['auth:tenant']]);
+Broadcast::routes(['middleware' => ['auth.tenant']]);
 
-Route::middleware(['auth:tenant'])->group(function () {
+Route::middleware(['auth.tenant'])->group(function () {
     // ── Auth / Session ────────────────────────────────────────────────────────
     Route::prefix('auth')->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
@@ -74,7 +75,7 @@ Route::middleware(['auth:tenant'])->group(function () {
             ->middleware('permission:delete users');
     });
 
-    // ── WhatsApp registration ─────────────────────────────────────────────────
+    // ── WhatsApp registration & Meta sync (WhatsappRegistrationController) ────
     Route::prefix('whatsapp')->group(function () {
         Route::prefix('register')->group(function () {
             Route::post('add-number', [WhatsappRegistrationController::class, 'addNumber']);
@@ -84,50 +85,54 @@ Route::middleware(['auth:tenant'])->group(function () {
         });
         Route::get('accounts/{account}/health', [WhatsappRegistrationController::class, 'health']);
         Route::post('accounts/{account}/sync', [WhatsappRegistrationController::class, 'sync']);
+
+        // Debug tools that hit Meta directly
+        Route::get('accounts/{account}/test-token', [WhatsappRegistrationController::class, 'testToken']);
+        Route::get('accounts/{account}/test-phone', [WhatsappRegistrationController::class, 'testPhoneNumber']);
     });
 
-    // ── WhatsApp accounts ─────────────────────────────────────────────────────
+    // ── WhatsApp accounts — local management (WhatsAppAccountController) ──────
     Route::prefix('whatsapp-accounts')->group(function () {
         Route::get('/', [WhatsAppAccountController::class, 'index'])
             ->middleware('permission:view whatsapp-accounts');
-        Route::post('/embedded-signup/callback', [WhatsAppAccountController::class, 'embeddedSignupCallback']);
-        Route::get('connector', [WhatsAppAccountController::class, 'connectorAccount'])
-            ->middleware('permission:view whatsapp-accounts');
-        Route::post('connect-connector', [WhatsAppAccountController::class, 'connectConnector'])
-            ->middleware('permission:connect whatsapp-accounts');
-        Route::get('signup-url', [WhatsAppAccountController::class, 'getSignupUrl'])
-            ->middleware('permission:connect whatsapp-accounts');
-        Route::post('callback', [WhatsAppAccountController::class, 'handleCallback'])
-            ->middleware('permission:connect whatsapp-accounts');
+        Route::post('/embedded-signup/callback', [WhatsappRegistrationController::class, 'embeddedSignupCallback']);
+
         Route::get('{account}', [WhatsAppAccountController::class, 'show'])
             ->middleware('permission:view whatsapp-accounts');
         Route::put('{account}', [WhatsAppAccountController::class, 'update'])
             ->middleware('permission:manage whatsapp-accounts');
-        Route::post('/{account}/choose-mode', [WhatsAppAccountController::class, 'chooseMode']);
+
+        Route::post('/{account}/choose-mode', [WhatsappRegistrationController::class, 'chooseMode']);
+
         Route::get('/{account}/connector-info', [WhatsAppAccountController::class, 'connectorInfo']);
         Route::post('{account}/disconnect', [WhatsAppAccountController::class, 'disconnect'])
             ->middleware('permission:disconnect whatsapp-accounts');
         Route::post('{account}/reconnect', [WhatsAppAccountController::class, 'reconnect'])
             ->middleware('permission:connect whatsapp-accounts');
-        Route::post('{account}/sync', [WhatsAppAccountController::class, 'sync'])
-            ->middleware('permission:manage whatsapp-accounts');
+
+        // Local health summary derived from stored data. For a live pull
+        // from Meta, see /whatsapp/accounts/{account}/health above.
         Route::get('{account}/health', [WhatsAppAccountController::class, 'health'])
             ->middleware('permission:view whatsapp-accounts');
+        Route::get('{account}/sync', [WhatsAppAccountController::class, 'syncData'])
+            ->middleware('permission:view whatsapp-accounts');
+
         Route::post('{account}/rotate-connector-key', [WhatsAppAccountController::class, 'rotateConnectorKey'])
             ->middleware('permission:manage whatsapp-accounts');
     });
 
-    // ── Bots ──────────────────────────────────────────────────────────────────
-    Route::get('bots', [BotController::class, 'index'])
-        ->middleware('permission:view bots');
-    Route::post('bots', [BotController::class, 'store'])
-        ->middleware('permission:create bots');
-    Route::get('bots/{bot}', [BotController::class, 'show'])
-        ->middleware('permission:view bots');
-    Route::put('bots/{bot}', [BotController::class, 'update'])
-        ->middleware('permission:edit bots');
-    Route::delete('bots/{bot}', [BotController::class, 'destroy'])
-        ->middleware('permission:delete bots');
+    Route::prefix('bots')->group(function () {
+        Route::get('/', [BotController::class, 'index']);
+        Route::post('/', [BotController::class, 'store']);
+        Route::get('{bot}', [BotController::class, 'show']);
+        Route::put('{bot}', [BotController::class, 'update']);
+        Route::delete('{bot}', [BotController::class, 'destroy']);
+        Route::post('{bot}/duplicate', [BotController::class, 'duplicate']);
+        Route::get('{bot}/stats', [BotController::class, 'stats']);
+        Route::post('{bot}/activate', [BotController::class, 'activate']);
+        Route::post('{bot}/deactivate', [BotController::class, 'deactivate']);
+        Route::post('{bot}/publish', [BotController::class, 'publish']);
+    });
 
     // ── Bot sub-resources ─────────────────────────────────────────────────────
     Route::prefix('bots/{bot}')->group(function () {
@@ -239,10 +244,10 @@ Route::middleware(['auth:tenant'])->group(function () {
     Route::get('media/{media}/serve/stream', [MediaController::class, 'serveStream'])
         ->middleware('permission:view bots')
         ->name('tenant.media.serve.stream');
-        
-Route::get('media/by-filename/{filename}', [MediaController::class, 'serveByFilename'])
-    ->middleware('permission:view bots')
-    ->name('tenant.media.serve-by-filename');
+
+    Route::get('media/file/{filename}', [MediaController::class, 'serveFile'])
+        ->middleware('permission:view bots')
+        ->name('tenant.media.serve-file');
     // Upload a stored BotMediaFile to Meta's media API → returns a media_id.
     Route::post('media/{media}/meta-upload', [MediaController::class, 'uploadToMeta'])
         ->middleware('permission:edit bots')
@@ -271,6 +276,9 @@ Route::get('media/by-filename/{filename}', [MediaController::class, 'serveByFile
             ->middleware('permission:view conversation-details');
         Route::post('{conversation}/handoff', [ConversationController::class, 'handoff'])
             ->middleware('permission:handoff conversations');
+        Route::post('{conversation}/resolve', [ConversationController::class, 'resolve'])
+    ->middleware('permission:handoff conversations');
+
         Route::post('{conversation}/messages', [ConversationController::class, 'store']);
         Route::post('{conversation}/end', [ConversationController::class, 'end'])
             ->middleware('permission:handoff conversations');
@@ -284,12 +292,12 @@ Route::get('media/by-filename/{filename}', [MediaController::class, 'serveByFile
             ->middleware('permission:view conversations');
         Route::get('conversations/{conversation}', [InboxController::class, 'show'])
             ->middleware('permission:view conversation-details');
-        Route::post('conversations/{conversation}/media', [InboxController::class, 'sendMedia'])
-            ->middleware('permission:handoff conversations');
+
+        Route::post('{conversation}/send', [InboxController::class, 'send']);
+        Route::post('{conversation}/typing', [InboxController::class, 'typing']);
+
         Route::post('conversations/{conversation}/read', [InboxController::class, 'markRead'])
             ->middleware('permission:view conversations');
-        Route::post('conversations/{conversation}/typing', [InboxController::class, 'typing'])
-            ->middleware('permission:handoff conversations');
         Route::get('accounts', [InboxController::class, 'accounts'])
             ->middleware('permission:view whatsapp-accounts');
     });

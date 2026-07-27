@@ -38,9 +38,9 @@ const AdminTenants = () => import("@/pages/administration/tenants/index.vue");
 const AdminTenantCreate = () =>
   import("@/pages/administration/tenants/create.vue");
 const AdminTenantDetail = () =>
-  import("@/pages/administration/tenants/[id].vue");
+  import("@/pages/administration/tenants/show.vue");
 const AdminTenantEdit = () =>
-  import("@/pages/administration/tenants/[id]-edit.vue");
+  import("@/pages/administration/tenants/create.vue");
 
 // Chatbots
 const Chatbots = () => import("@/pages/chatbots/index.vue");
@@ -183,6 +183,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: "administration/tenants/:id",
         name: "admin-tenant-detail",
+        props: (route) => ({ id: route.params.id }),
         component: AdminTenantDetail,
         meta: { roles: ["super-admin"] },
       },

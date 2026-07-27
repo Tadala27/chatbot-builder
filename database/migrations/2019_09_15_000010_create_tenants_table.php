@@ -14,12 +14,15 @@ return new class extends Migration {
             $table->enum('deployment_mode', ['shared', 'dedicated', 'self_hosted'])->default('shared');
             $table->string('slug')->unique();
             $table->boolean('is_active')->default(true);
+            $table->timestamp('provisioned_at')->nullable();
             $table->enum('subscription_tier', ['free', 'starter', 'professional', 'enterprise'])
                 ->default('free');
             $table->timestamp('subscription_expires_at')->nullable();
             $table->integer('max_bots')->default(3);
             $table->integer('max_conversations_per_month')->default(1000);
             $table->json('settings')->nullable();
+            $table->json('storage_config')->nullable();  // per-tenant disk config
+            $table->json('mailer_config')->nullable();   // per-tenant SMTP config
             $table->timestamps();
             $table->json('data')->nullable();
         });
@@ -27,6 +30,7 @@ return new class extends Migration {
         Schema::create('domains', function (Blueprint $table) {
             $table->increments('id');
             $table->string('domain', 255)->unique();
+            $table->string('url', 255)->unique();
             $table->boolean('is_primary')->default(false);
             $table->string('tenant_id');
             $table->timestamps();
@@ -40,6 +44,7 @@ return new class extends Migration {
         Schema::create('whatsapp_phone_index', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->string('phone_number_id')->unique();
+            $table->string('phone_number')->unique();
 
             $table->string('tenant_id');
             $table->foreign('tenant_id')
